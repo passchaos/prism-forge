@@ -23,15 +23,27 @@ pub fn add(a: i32, b: i32) i32 {
 }
 
 test "tensor creation" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+
+    const allocator = gpa.allocator();
+
     const TensorF32x3x2 = Tensor(DType.f32, &.{ 3, 2 });
 
-    const t1 = TensorF32x3x2.init(0.1);
+    const t1 = TensorF32x3x2.init(&allocator, 0.1, .{});
+    defer t1.deinit(&allocator);
     std.debug.print("t1: {f}\n", .{t1});
 
-    const TensorU32x4x4x8 = Tensor(DType.u32, &.{ 4, 4, 8 });
-    const t2 = TensorU32x4x4x8.init(77);
+    const Tensor3U32x4x4x8 = Tensor(DType.u32, &.{ 4, 4, 8 });
+    const t2 = Tensor3U32x4x4x8.init(&allocator, 77, .{});
+    defer t2.deinit(&allocator);
     std.debug.print("t2: {f}\n", .{t2});
     // _ = t1;
+
+    const Tensor3U32 = Tensor(DType.u32, &.{ null, null, null });
+    const t3 = Tensor3U32.init(&allocator, 21, .{ .shape = &.{ 4, 4, 8 } });
+    defer t3.deinit(&allocator);
+    std.debug.print("t3: {f}\n", .{t3});
 }
 
 test "basic add functionality" {
