@@ -30,37 +30,40 @@ fn product(comptime arr: []const usize) usize {
     return result;
 }
 
-fn allStatic(comptime dims: []const ?usize) bool {
-    inline for (dims) |dim| {
+fn allStatic(comptime dims: ?[]const ?usize) bool {
+    if (dims == null) return false;
+
+    inline for (dims.?) |dim| {
         if (dim == null) return false;
     }
     return true;
 }
 
-pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: []const ?usize) type {
+pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type {
     const T = dtype.toType();
+
+    const is_static_rank = DimsTmpl != null;
     const is_all_static = allStatic(DimsTmpl);
 
-    const rank = DimsTmpl.len;
-    const static_shape: [rank]usize = if (is_all_static) blk: {
+    const rank = if (is_static_rank) DimsTmpl.?.len else 0;
+    const static_shape = if (is_all_static) blk: {
         var arr: [rank]usize = undefined;
-        inline for (DimsTmpl, 0..) |dim, i| {
+        inline for (DimsTmpl.?, 0..) |dim, i| {
             arr[i] = dim.?;
         }
         break :blk arr;
+    } else if (is_static_rank) bmk: {
+        break :bmk DimsTmpl.?;
     } else undefined;
 
     return struct {
         const Self = @This();
 
-        // pub const Rank = DimsTmpl.len;
-        // pub const Shape = DimsTmpl;
-        _shape: [rank]usize,
+        _shape: if (is_static_rank) [rank]usize else []const usize,
         data: []T,
 
-        pub fn init(allocator: *const std.mem.Allocator, value: T, opts: if (is_all_static) struct {} else struct { shape: ?[rank]usize = null }) Self {
+        pub fn init(allocator: *const std.mem.Allocator, value: T, opts: if (is_all_static) struct {} else if (is_static_rank) struct { shape: [rank]?usize } else struct { shape: []const usize }) if (is_static_rank and !is_all_static) anyerror!Self else Self {
             if (is_all_static) {
-                // if (opts.shape != null) @compileError("static tensor cannot have shape");
                 var arr = [_]T{value} ** product(&static_shape);
 
                 const a: []T = arr[0..];
@@ -68,11 +71,25 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: []const ?usize) type 
                     ._shape = undefined,
                     .data = a,
                 };
-            } else {
-                if (opts.shape == null) @panic("no shape gotten");
+            } else if (is_static_rank) {
+                var dyn_shape: [rank]usize = undefined;
 
-                const dyn_shape = opts.shape.?;
-                if (dyn_shape.len != rank) @panic("shape mismatch");
+                var len: usize = 1;
+                for (static_shape, 0..) |dim, i| {
+                    const i_v = if (opts.shape[i]) |v| v else return error.ValueIsNull;
+                    const v = if (dim) |val| val else i_v;
+
+                    dyn_shape[i] = v;
+                    len *= v;
+                }
+
+                const buf = allocator.alloc(T, len) catch unreachable;
+                return Self{
+                    ._shape = dyn_shape,
+                    .data = buf,
+                };
+            } else {
+                const dyn_shape = opts.shape;
 
                 var len: usize = 1;
                 for (dyn_shape) |dim| {
@@ -93,7 +110,7 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: []const ?usize) type 
             }
         }
 
-        pub fn shape(self: *const Self) [rank]usize {
+        pub fn shape(self: *const Self) if (is_static_rank) [rank]usize else []const usize {
             if (is_all_static) {
                 return static_shape;
             } else {
@@ -109,10 +126,10 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: []const ?usize) type 
                 \\Tensor{{
                 \\  .TypeName = {s}
                 \\  .Dtype = {any},
-                \\  .Shape = {any},
+                \\  .Shape = ({any}, {any}),
                 \\  .DataLen = {}
                 \\}}
-            , .{ @typeName(@TypeOf(self)), T, @TypeOf(self.shape()), self.data.len });
+            , .{ @typeName(@TypeOf(self)), T, @TypeOf(self.shape()), self.shape(), self.data.len });
         }
     };
 }

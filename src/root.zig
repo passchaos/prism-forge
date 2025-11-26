@@ -41,9 +41,23 @@ test "tensor creation" {
     // _ = t1;
 
     const Tensor3U32 = Tensor(DType.u32, &.{ null, null, null });
-    const t3 = Tensor3U32.init(&allocator, 21, .{ .shape = .{ 4, 4, 8 } });
+    const t3 = try Tensor3U32.init(&allocator, 21, .{ .shape = .{ 4, 4, 8 } });
     defer t3.deinit(&allocator);
     std.debug.print("t3: {f}\n", .{t3});
+
+    const Tensor3U32_1 = Tensor(DType.u32, &.{ 3, null, 5 });
+    const t3_1 = try Tensor3U32_1.init(&allocator, 21, .{ .shape = .{ 4, 4, 8 } });
+    defer t3_1.deinit(&allocator);
+    std.debug.print("t3_1: {f}\n", .{t3_1});
+
+    const TensorU32 = Tensor(DType.u32, null);
+    const t4 = TensorU32.init(&allocator, 24, .{ .shape = &.{ 1, 2, 3, 4 } });
+    defer t4.deinit(&allocator);
+    std.debug.print("t4: {f}\n", .{t4});
+
+    const t5 = TensorU32.init(&allocator, 24, .{ .shape = &.{ 1, 2, 3, 4, 5 } });
+    defer t5.deinit(&allocator);
+    std.debug.print("t5: {f}\n", .{t5});
 }
 
 test "basic add functionality" {
