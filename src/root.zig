@@ -23,11 +23,6 @@ pub fn add(a: i32, b: i32) i32 {
 }
 
 test "tensor creation" {
-    const a_1: [2]usize = .{ 2, 3 };
-    std.debug.print("type info: {any} {any} {any}\n", .{ @typeInfo(@TypeOf(a_1)), @typeInfo(@TypeOf(a_1)).array.child, a_1[0..] });
-    const b_a = tensor.asSlice(&a_1);
-    std.debug.print("a_1: {any} {} b_a: {any} {}\n", .{ a_1, @TypeOf(a_1), b_a, @TypeOf(b_a) });
-
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
 
@@ -35,12 +30,12 @@ test "tensor creation" {
 
     const TensorF32x3x2 = Tensor(DType.f32, &.{ 3, 2 });
 
-    const t1 = TensorF32x3x2.init(allocator, 0.1, .{});
+    const t1 = try TensorF32x3x2.init(allocator, 0.1, .{});
     defer t1.deinit(&allocator);
-    std.debug.print("t1: {f}\n", .{t1});
+    std.debug.print("t1: {f} data= {any}\n", .{ t1, t1.data });
 
     const Tensor3U32x4x4x8 = Tensor(DType.u32, &.{ 4, 4, 8 });
-    const t2 = Tensor3U32x4x4x8.init(allocator, 77, .{});
+    const t2 = try Tensor3U32x4x4x8.init(allocator, 77, .{});
     defer t2.deinit(&allocator);
     std.debug.print("t2: {f}\n", .{t2});
     // _ = t1;
@@ -60,12 +55,9 @@ test "tensor creation" {
     defer t4.deinit(&allocator);
     std.debug.print("t4: {f}\n", .{t4});
 
-    const t5 = try TensorU32.init(allocator, 24, .{ .shape = &.{ 1, 2, 3, 4, 5 } });
+    const t5 = try TensorU32.init(allocator, 24, .{ .shape = &.{ 2, 3, 3, 14, 15 } });
     defer t5.deinit(&allocator);
     std.debug.print("t5: {f} {any}\n", .{ t5, t5._shape });
-
-    const v1 = try t1.getIndices(.{ 0, 1 });
-    std.debug.print("v1: {}\n", .{v1});
 }
 
 test "basic add functionality" {

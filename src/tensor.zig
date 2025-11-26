@@ -24,12 +24,14 @@ fn toArray(comptime slice: []const usize) [slice.len]usize {
 
 fn ElemOf(comptime V: type) type {
     return switch (@typeInfo(V)) {
-        .pointer => |info| switch (info.size) {
-            .slice => info.child,
-            .one => switch (@typeInfo(info.child)) {
+        .pointer => |p| switch (p.size) {
+            .one => switch (@typeInfo(p.child)) {
                 .array => |arr| arr.child,
-                .pointer => |p| p.child,
-                else => |v| @compileError(std.fmt.comptimePrint("Unsupported pointer type: info= {} info_child= {}\n", .{ info, v })),
+                .pointer => |pp| switch (pp.size) {
+                    .slice => pp.child,
+                    else => @compileError("Unsupported pointer type"),
+                },
+                else => |v| @compileError(std.fmt.comptimePrint("Unsupported pointer type: info= {} info_child= {}\n", .{ p, v })),
             },
             else => @compileError("Unsupported pointer type"),
         },
@@ -39,21 +41,19 @@ fn ElemOf(comptime V: type) type {
 }
 
 pub fn asSlice(value: anytype) []const ElemOf(@TypeOf(value)) {
-    const tito = @typeInfo(@TypeOf(value));
-    std.debug.print("Type info: {any}\n", .{tito});
-
     return switch (@typeInfo(@TypeOf(value))) {
-        .array => @compileError("asSlice: use array will get a copy of argument, so can't get valid value"),
         .pointer => |p| switch (p.size) {
             .one => switch (@typeInfo(p.child)) {
-                .array => value,
-                .slice => *value,
+                .array => &value.*,
+                .pointer => |pp| switch (pp.size) {
+                    .slice => value.*,
+                    else => @compileError("Unsupported pointer type"),
+                },
                 else => |v| @compileError(std.fmt.comptimePrint("unsupported pointer to non-array: {}", .{v})),
             },
-            .slice => value,
             else => @compileError("Unsupported pointer type"),
         },
-        else => @compileError("Unsupported type"),
+        else => @compileError("Unsupported type, must be pointer"),
     };
 }
 
@@ -79,7 +79,6 @@ fn indices_to_flat(indices: []const usize, shape: []const usize, strides: []cons
         return error.EmptyIndices;
     }
 
-    std.debug.print("indices= {any} shape= {any} strides= {any}\n", .{ indices, shape, strides });
     var flat_index: usize = 0;
     for (indices, shape, 0..) |index, dim, idx| {
         if (index >= dim) {
@@ -137,16 +136,16 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
         allocator: std.mem.Allocator,
         data: []T,
 
-        pub fn init(allocator: std.mem.Allocator, value: T, opts: if (is_all_static) struct {} else if (is_static_rank) struct { shape: [Rank]?usize } else struct { shape: []const usize }) if (!is_all_static) anyerror!Self else Self {
+        pub fn init(allocator: std.mem.Allocator, value: T, opts: if (is_all_static) struct {} else if (is_static_rank) struct { shape: [Rank]?usize } else struct { shape: []const usize }) anyerror!Self {
             if (is_all_static) {
-                var arr = [_]T{value} ** product(&static_shape);
+                const buf = try allocator.alloc(T, product(&static_shape));
+                @memset(buf, value);
 
-                const a: []T = arr[0..];
                 return Self{
                     ._shape = undefined,
                     ._strides = undefined,
                     .allocator = allocator,
-                    .data = a,
+                    .data = buf,
                 };
             } else if (is_static_rank) {
                 var dyn_shape: [Rank]usize = undefined;
@@ -170,7 +169,9 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
                 }
                 dyn_strides[0] = acc;
 
-                const buf = allocator.alloc(T, len) catch unreachable;
+                const buf = try allocator.alloc(T, len);
+                @memset(buf, value);
+
                 return Self{
                     ._shape = dyn_shape,
                     ._strides = dyn_strides,
@@ -196,6 +197,8 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
                 dyn_strides[0] = acc;
 
                 const buf = try allocator.alloc(T, len);
+                @memset(buf, value);
+
                 return Self{
                     ._shape = dyn_shape,
                     ._strides = dyn_strides,
@@ -206,9 +209,7 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
         }
 
         pub fn deinit(self: *const Self, allocator: *const std.mem.Allocator) void {
-            if (!is_all_static) {
-                allocator.free(self.data);
-            }
+            allocator.free(self.data);
 
             if (!is_static_rank) {
                 allocator.free(self._strides);
@@ -245,6 +246,8 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
                 \\  .Data =
             , .{ @typeName(@TypeOf(self)), T, @TypeOf(self.shape()), self.shape(), @TypeOf(self.strides()), self.strides(), self.data.len });
 
+            _ = try writer.write("\n");
+
             self.fmt_recursive(writer, 0, &.{}) catch |err| {
                 std.debug.print("meet failure: {}", .{err});
                 return std.Io.Writer.Error.WriteFailed;
@@ -271,14 +274,17 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
         }
 
         fn fmt_nd_slice(self: *const Self, writer: *std.Io.Writer, depth: usize, base_indices: []const usize) anyerror!void {
-            const pad_show_count = 8;
+            const pad_show_count = 4;
 
             const current_dim_size = self.shape()[depth];
             const ndim = self.shape().len;
 
+            _ = try writer.write("[");
+
             const show_all = current_dim_size <= 2 * pad_show_count;
 
             var slice_indices = try std.ArrayList(usize).initCapacity(self.allocator, 4);
+            defer slice_indices.deinit(self.allocator);
 
             if (show_all) {
                 for (0..current_dim_size) |i| {
@@ -307,7 +313,7 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
                     }
                 }
 
-                if (show_all and idx == pad_show_count) {
+                if (!show_all and idx == pad_show_count) {
                     if (depth == ndim - 2) {
                         _ = try writer.write("\n ");
 
@@ -326,6 +332,8 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
                 }
 
                 var indices = try std.ArrayList(usize).initCapacity(self.allocator, 4);
+                defer indices.deinit(self.allocator);
+
                 try indices.appendSlice(self.allocator, base_indices);
                 try indices.append(self.allocator, slice_idx);
 
@@ -338,7 +346,7 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
         fn fmt_1d_slice(self: *const Self, writer: *std.Io.Writer, base_indices: []const usize) anyerror!void {
             const pad_show_count = 5;
 
-            const max_items: usize = if (base_indices.len == 0) 1000 else 2 * pad_show_count;
+            const max_items: usize = if (base_indices.len == 0) 10 else 2 * pad_show_count;
             const current_dim_size = self.shape()[base_indices.len];
 
             const line_size = 18;
@@ -356,6 +364,8 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
 
                     const allocator = self.allocator;
                     var indices = try std.ArrayList(usize).initCapacity(allocator, 4);
+                    defer indices.deinit(allocator);
+
                     try indices.appendSlice(allocator, base_indices);
                     try indices.append(allocator, i);
 
@@ -369,6 +379,8 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
                     }
 
                     var indices = try std.ArrayList(usize).initCapacity(self.allocator, 4);
+                    defer indices.deinit(self.allocator);
+
                     try indices.appendSlice(self.allocator, base_indices);
                     try indices.append(self.allocator, i);
 
@@ -379,6 +391,8 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
 
                 for (current_dim_size - pad_show_count..current_dim_size) |i| {
                     var indices = try std.ArrayList(usize).initCapacity(self.allocator, 4);
+                    defer indices.deinit(self.allocator);
+
                     try indices.appendSlice(self.allocator, base_indices);
                     try indices.append(self.allocator, i);
 
