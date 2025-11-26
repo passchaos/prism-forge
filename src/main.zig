@@ -1,7 +1,20 @@
 const std = @import("std");
 const prism_forge = @import("prism_forge");
 
+pub fn isStruct(comptime T: type) bool {
+    return @typeInfo(T) == .@"struct";
+}
+
 pub fn main() !void {
+    const a = .{ .a = 10, .b = 20 };
+
+    const T = @TypeOf(a);
+    inline for (std.meta.fields(T)) |field| {
+        std.debug.print("field: {s} type: {any}\n", .{ field.name, field.type });
+    }
+
+    // const type_info = comptime @typeInfo(T);
+    std.debug.print("a: {} t: {}-{}\n", .{ a, comptime isStruct(T), T });
     // Prints to stderr, ignoring potential errors.
     std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
     try prism_forge.bufferedPrint();

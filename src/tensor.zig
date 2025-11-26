@@ -55,20 +55,35 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
     } else if (is_static_rank) bmk: {
         break :bmk DimsTmpl.?;
     } else undefined;
+    const static_strides = if (is_all_static) blk: {
+        var strides: [rank]usize = undefined;
+
+        var acc: usize = 1;
+        var i: usize = rank - 1;
+        while (i != 0) : (i -= 1) {
+            strides[i] = acc;
+            acc *= static_shape[i];
+        }
+        strides[0] = acc;
+
+        break :blk strides;
+    } else undefined;
 
     return struct {
         const Self = @This();
 
         _shape: if (is_static_rank) [rank]usize else []const usize,
+        _strides: if (is_static_rank) [rank]usize else []const usize,
         data: []T,
 
-        pub fn init(allocator: *const std.mem.Allocator, value: T, opts: if (is_all_static) struct {} else if (is_static_rank) struct { shape: [rank]?usize } else struct { shape: []const usize }) if (is_static_rank and !is_all_static) anyerror!Self else Self {
+        pub fn init(allocator: *const std.mem.Allocator, value: T, opts: if (is_all_static) struct {} else if (is_static_rank) struct { shape: [rank]?usize } else struct { shape: []const usize }) if (!is_all_static) anyerror!Self else Self {
             if (is_all_static) {
                 var arr = [_]T{value} ** product(&static_shape);
 
                 const a: []T = arr[0..];
                 return Self{
                     ._shape = undefined,
+                    ._strides = undefined,
                     .data = a,
                 };
             } else if (is_static_rank) {
@@ -83,9 +98,20 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
                     len *= v;
                 }
 
+                var dyn_strides: [rank]usize = undefined;
+
+                var acc: usize = 1;
+                var i: usize = rank - 1;
+                while (i != 0) : (i -= 1) {
+                    dyn_strides[i] = acc;
+                    acc *= dyn_shape[i];
+                }
+                dyn_strides[0] = acc;
+
                 const buf = allocator.alloc(T, len) catch unreachable;
                 return Self{
                     ._shape = dyn_shape,
+                    ._strides = dyn_strides,
                     .data = buf,
                 };
             } else {
@@ -96,9 +122,20 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
                     len *= dim;
                 }
 
-                const buf = allocator.alloc(T, len) catch unreachable;
+                var dyn_strides: []usize = try allocator.alloc(usize, dyn_shape.len);
+
+                var acc: usize = 1;
+                var i: usize = dyn_shape.len - 1;
+                while (i != 0) : (i -= 1) {
+                    dyn_strides[i] = acc;
+                    acc *= dyn_shape[i];
+                }
+                dyn_strides[0] = acc;
+
+                const buf = try allocator.alloc(T, len);
                 return Self{
                     ._shape = dyn_shape,
+                    ._strides = dyn_strides,
                     .data = buf,
                 };
             }
@@ -108,6 +145,10 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
             if (!is_all_static) {
                 allocator.free(self.data);
             }
+
+            if (!is_static_rank) {
+                allocator.free(self._strides);
+            }
         }
 
         pub fn shape(self: *const Self) if (is_static_rank) [rank]usize else []const usize {
@@ -115,6 +156,14 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
                 return static_shape;
             } else {
                 return self._shape;
+            }
+        }
+
+        pub fn strides(self: *const Self) if (is_static_rank) [rank]usize else []const usize {
+            if (is_all_static) {
+                return static_strides;
+            } else {
+                return self._strides;
             }
         }
 
@@ -127,9 +176,10 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
                 \\  .TypeName = {s}
                 \\  .Dtype = {any},
                 \\  .Shape = ({any}, {any}),
+                \\  .Strides = ({any}, {any}),
                 \\  .DataLen = {}
                 \\}}
-            , .{ @typeName(@TypeOf(self)), T, @TypeOf(self.shape()), self.shape(), self.data.len });
+            , .{ @typeName(@TypeOf(self)), T, @TypeOf(self.shape()), self.shape(), @TypeOf(self.strides()), self.strides(), self.data.len });
         }
     };
 }
