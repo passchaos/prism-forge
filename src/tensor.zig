@@ -55,10 +55,10 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: []const ?usize) type 
 
         // pub const Rank = DimsTmpl.len;
         // pub const Shape = DimsTmpl;
-        _shape: if (is_all_static) void else []const usize,
+        _shape: [rank]usize,
         data: []T,
 
-        pub fn init(allocator: *const std.mem.Allocator, value: T, opts: if (is_all_static) struct {} else struct { shape: ?[]const usize = null }) Self {
+        pub fn init(allocator: *const std.mem.Allocator, value: T, opts: if (is_all_static) struct {} else struct { shape: ?[rank]usize = null }) Self {
             if (is_all_static) {
                 // if (opts.shape != null) @compileError("static tensor cannot have shape");
                 var arr = [_]T{value} ** product(&static_shape);
@@ -93,7 +93,7 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: []const ?usize) type 
             }
         }
 
-        pub fn shape(self: *const Self) if (is_all_static) [rank]usize else []const usize {
+        pub fn shape(self: *const Self) [rank]usize {
             if (is_all_static) {
                 return static_shape;
             } else {

@@ -41,7 +41,7 @@ test "tensor creation" {
     // _ = t1;
 
     const Tensor3U32 = Tensor(DType.u32, &.{ null, null, null });
-    const t3 = Tensor3U32.init(&allocator, 21, .{ .shape = &.{ 4, 4, 8 } });
+    const t3 = Tensor3U32.init(&allocator, 21, .{ .shape = .{ 4, 4, 8 } });
     defer t3.deinit(&allocator);
     std.debug.print("t3: {f}\n", .{t3});
 }
