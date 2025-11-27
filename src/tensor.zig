@@ -1,4 +1,7 @@
 const std = @import("std");
+const utils = @import("utils.zig");
+
+const asSlice = utils.asSlice;
 
 pub const DataType = enum {
     f32,
@@ -13,66 +16,6 @@ pub const DataType = enum {
         };
     }
 };
-
-fn toArray(comptime slice: []const usize) [slice.len]usize {
-    var result: [slice.len]usize = undefined;
-    inline for (slice, 0..) |dim, i| {
-        result[i] = dim;
-    }
-    return result;
-}
-
-fn ElemOf(comptime V: type) type {
-    return switch (@typeInfo(V)) {
-        .pointer => |p| switch (p.size) {
-            .one => switch (@typeInfo(p.child)) {
-                .array => |arr| arr.child,
-                .pointer => |pp| switch (pp.size) {
-                    .slice => pp.child,
-                    else => @compileError("Unsupported pointer type"),
-                },
-                else => |v| @compileError(std.fmt.comptimePrint("Unsupported pointer type: info= {} info_child= {}\n", .{ p, v })),
-            },
-            else => @compileError("Unsupported pointer type"),
-        },
-        .array => @compileError("ElementOf: use array will get a copy of argument, so can't get valid value"),
-        else => @compileError("Unsupported type"),
-    };
-}
-
-pub fn asSlice(value: anytype) []const ElemOf(@TypeOf(value)) {
-    return switch (@typeInfo(@TypeOf(value))) {
-        .pointer => |p| switch (p.size) {
-            .one => switch (@typeInfo(p.child)) {
-                .array => &value.*,
-                .pointer => |pp| switch (pp.size) {
-                    .slice => value.*,
-                    else => @compileError("Unsupported pointer type"),
-                },
-                else => |v| @compileError(std.fmt.comptimePrint("unsupported pointer to non-array: {}", .{v})),
-            },
-            else => @compileError("Unsupported pointer type"),
-        },
-        else => @compileError("Unsupported type, must be pointer"),
-    };
-}
-
-fn product(comptime arr: []const usize) usize {
-    var result: usize = 1;
-    inline for (arr) |dim| {
-        result *= dim;
-    }
-    return result;
-}
-
-fn allStatic(comptime dims: ?[]const ?usize) bool {
-    if (dims == null) return false;
-
-    inline for (dims.?) |dim| {
-        if (dim == null) return false;
-    }
-    return true;
-}
 
 fn indices_to_flat(indices: []const usize, shape: []const usize, strides: []const usize) anyerror!usize {
     if (indices.len == 0) {
@@ -102,7 +45,7 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
     const T = dtype.toType();
 
     const is_static_rank = DimsTmpl != null;
-    const is_all_static = allStatic(DimsTmpl);
+    const is_all_static = utils.allStatic(DimsTmpl);
 
     const Rank = if (is_static_rank) DimsTmpl.?.len else 0;
     const static_shape = if (is_all_static) blk: {
@@ -136,10 +79,43 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
         allocator: std.mem.Allocator,
         data: []T,
 
-        pub fn init(allocator: std.mem.Allocator, value: T, opts: if (is_all_static) struct {} else if (is_static_rank) struct { shape: [Rank]?usize } else struct { shape: []const usize }) anyerror!Self {
+        pub fn from_data(allocator: std.mem.Allocator, opts: Opts, arr: anytype) anyerror!Self {
+            const info = @typeInfo(@TypeOf(arr));
+
+            const buf: []T = switch (info) {
+                .pointer => |ptr| switch (ptr.size) {
+                    .one => switch (@typeInfo(ptr.child)) {
+                        .array => @as([]T, @ptrCast(@constCast(arr)))[0..],
+                        else => @compileError("only support pointer to one"),
+                    },
+                    else => @compileError("only support pointer to one"),
+                },
+                else => @compileError("only support pointer to one"),
+            };
+
+            var tensor = try Self.init(allocator, opts, null);
+
+            const arr_dims = utils.getDims(@TypeOf(arr));
+
+            if (!std.mem.eql(usize, asSlice(&tensor.shape()), arr_dims)) {
+                return anyerror.WrongDimensions;
+            }
+
+            tensor.data = buf;
+
+            return tensor;
+        }
+
+        const Opts =
+            if (is_all_static) struct {} else if (is_static_rank) struct { shape: [Rank]?usize } else struct { shape: []const usize };
+
+        pub fn init(allocator: std.mem.Allocator, opts: Opts, value: ?T) anyerror!Self {
             if (is_all_static) {
-                const buf = try allocator.alloc(T, product(&static_shape));
-                @memset(buf, value);
+                const buf = if (value) |v| blk: {
+                    const buf_i = try allocator.alloc(T, utils.product(&static_shape));
+                    @memset(buf_i, v);
+                    break :blk buf_i;
+                } else undefined;
 
                 return Self{
                     ._shape = undefined,
@@ -169,8 +145,11 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
                 }
                 dyn_strides[0] = acc;
 
-                const buf = try allocator.alloc(T, len);
-                @memset(buf, value);
+                const buf = if (value) |v| blk: {
+                    const buf_i = try allocator.alloc(T, len);
+                    @memset(buf_i, v);
+                    break :blk buf_i;
+                } else undefined;
 
                 return Self{
                     ._shape = dyn_shape,
@@ -196,8 +175,11 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
                 }
                 dyn_strides[0] = acc;
 
-                const buf = try allocator.alloc(T, len);
-                @memset(buf, value);
+                const buf = if (value) |v| blk: {
+                    const buf_i = try allocator.alloc(T, len);
+                    @memset(buf_i, v);
+                    break :blk buf_i;
+                } else undefined;
 
                 return Self{
                     ._shape = dyn_shape,

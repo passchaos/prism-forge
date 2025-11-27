@@ -1,0 +1,84 @@
+const std = @import("std");
+
+pub fn toArray(comptime slice: []const usize) [slice.len]usize {
+    var result: [slice.len]usize = undefined;
+    inline for (slice, 0..) |dim, i| {
+        result[i] = dim;
+    }
+    return result;
+}
+
+fn dimsHelper(comptime T: type) []const usize {
+    const info = @typeInfo(T);
+
+    if (info == .array) {
+        return &[_]usize{info.array.len} ++ dimsHelper(info.array.child);
+    } else {
+        return &[_]usize{};
+    }
+}
+
+pub fn getDims(comptime T: type) []const usize {
+    switch (@typeInfo(T)) {
+        .pointer => |p| switch (p.size) {
+            .one => switch (@typeInfo(p.child)) {
+                .array => return comptime dimsHelper(p.child),
+                else => @compileError("support only array pointer"),
+            },
+            else => @compileError("support only array pointer"),
+        },
+        else => @compileError("support only array pointer"),
+    }
+}
+
+fn ElemOf(comptime V: type) type {
+    return switch (@typeInfo(V)) {
+        .pointer => |p| switch (p.size) {
+            .one => switch (@typeInfo(p.child)) {
+                .array => |arr| arr.child,
+                .pointer => |pp| switch (pp.size) {
+                    .slice => pp.child,
+                    else => @compileError("Unsupported pointer type"),
+                },
+                else => |v| @compileError(std.fmt.comptimePrint("Unsupported pointer type: info= {} info_child= {}\n", .{ p, v })),
+            },
+            else => @compileError("Unsupported pointer type"),
+        },
+        .array => @compileError("ElementOf: use array will get a copy of argument, so can't get valid value"),
+        else => @compileError("Unsupported type"),
+    };
+}
+
+pub fn asSlice(value: anytype) []const ElemOf(@TypeOf(value)) {
+    return switch (@typeInfo(@TypeOf(value))) {
+        .pointer => |p| switch (p.size) {
+            .one => switch (@typeInfo(p.child)) {
+                .array => &value.*,
+                .pointer => |pp| switch (pp.size) {
+                    .slice => value.*,
+                    else => @compileError("Unsupported pointer type"),
+                },
+                else => |v| @compileError(std.fmt.comptimePrint("unsupported pointer to non-array: {}", .{v})),
+            },
+            else => @compileError("Unsupported pointer type"),
+        },
+        else => @compileError("Unsupported type, must be pointer"),
+    };
+}
+
+pub fn product(comptime arr: []const usize) usize {
+    var result: usize = 1;
+    inline for (arr) |dim| {
+        result *= dim;
+    }
+    return result;
+}
+
+pub fn allStatic(comptime dims: ?[]const ?usize) bool {
+    if (dims == null) return false;
+
+    inline for (dims.?) |dim| {
+        if (dim == null) return false;
+    }
+    return true;
+}
