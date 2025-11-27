@@ -1,23 +1,42 @@
 const std = @import("std");
-const prism_forge = @import("prism_forge");
+const tensor = @import("tensor.zig");
+
+const Tensor = tensor.Tensor;
+const DType = tensor.DataType;
 
 pub fn isStruct(comptime T: type) bool {
     return @typeInfo(T) == .@"struct";
 }
 
 pub fn main() !void {
-    const a = .{ .a = 10, .b = 20 };
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
 
-    const T = @TypeOf(a);
-    inline for (std.meta.fields(T)) |field| {
-        std.debug.print("field: {s} type: {any}\n", .{ field.name, field.type });
-    }
+    const allocator = gpa.allocator();
 
-    // const type_info = comptime @typeInfo(T);
-    std.debug.print("a: {} t: {}-{}\n", .{ a, comptime isStruct(T), T });
-    // Prints to stderr, ignoring potential errors.
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
-    try prism_forge.bufferedPrint();
+    const TensorF32x3x2 = Tensor(DType.f32, &.{ 3, 2 });
+
+    const arr1 = [3][2]f32{
+        [2]f32{ 1.0, 2.0 },
+        [2]f32{ 3.0, 4.0 },
+        [2]f32{ 5.0, 6.0 },
+    };
+    const t11 = try TensorF32x3x2.from_data(allocator, .{}, &arr1);
+    std.debug.print("t11: {f}\n", .{t11});
+
+    const Tensor3U32_1 = Tensor(DType.u32, &.{ 3, null, 5 });
+    const t3_1 = try Tensor3U32_1.init(allocator, .{ .shape = .{ 4, null, 8 } }, 21);
+    defer t3_1.deinit(&allocator);
+    std.debug.print("t3_1: {f}\n", .{t3_1});
+
+    const TensorU32 = Tensor(DType.u32, null);
+    const t4 = try TensorU32.init(allocator, .{ .shape = &.{ 1, 2, 3, 4 } }, 24);
+    defer t4.deinit(&allocator);
+    std.debug.print("t4: {f}\n", .{t4});
+
+    const t5 = try TensorU32.init(allocator, .{ .shape = &.{ 2, 3, 3, 14, 15 } }, 24);
+    defer t5.deinit(&allocator);
+    std.debug.print("t5: {f} {any}\n", .{ t5, t5._shape });
 }
 
 test "simple test" {

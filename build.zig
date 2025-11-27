@@ -89,6 +89,14 @@ pub fn build(b: *std.Build) void {
     // by passing `--prefix` or `-p`.
     b.installArtifact(exe);
 
+    const exe_mod = b.addModule("check", .{ .root_source_file = b.path("src/main.zig"), .target = target, .optimize = optimize });
+    const check_exe = b.addExecutable(.{ .name = "check_exe", .root_module = exe_mod });
+    b.installArtifact(check_exe);
+
+    const exe_check = b.addExecutable(.{ .name = "exe_check", .root_module = exe_mod });
+    const check = b.step("check", "Check if exe_check compiles");
+    check.dependOn(&exe_check.step);
+
     // This creates a top level step. Top level steps have a name and can be
     // invoked by name when running `zig build` (e.g. `zig build run`).
     // This will evaluate the `run` step rather than the default step.
