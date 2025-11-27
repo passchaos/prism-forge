@@ -5,9 +5,20 @@ pub fn approxEqual(comptime T: type, a: T, b: T, relEps: T, absEps: T) bool {
     return diff <= absEps or diff <= relEps * @max(@abs(a), @abs(b));
 }
 
+pub fn isNumber(comptime T: type) bool {
+    return comptime isFloat(T) or isInt(T);
+}
+
 pub fn isFloat(comptime T: type) bool {
     return switch (@typeInfo(T)) {
         .float => true,
+        else => false,
+    };
+}
+
+pub fn isInt(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .int => true,
         else => false,
     };
 }

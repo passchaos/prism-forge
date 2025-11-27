@@ -39,13 +39,36 @@ fn fromDataDemo(allocator: std.mem.Allocator) !void {
     std.debug.print("t6: {f}\n", .{t6});
 }
 
+fn shapeDemo(allocator: std.mem.Allocator) !void {
+    // const Tensor112 = Tensor(DType.u32, &.{ 3, 4 });
+    // const Tensor122 = Tensor(DType.u32, &.{ 3, 3 });
+
+    // const t112 = try Tensor112.eye(allocator, 5);
+    // _ = t112;
+    // const t122 = try Tensor122.eye(allocator, 5);
+    // _ = t122;
+
+    const Tensor22 = Tensor(DType.f32, &.{ null, 3 });
+    var t22 = try Tensor22.eye(allocator, 5);
+    defer t22.deinit(&allocator);
+
+    std.debug.print("t22: {f}\n", .{t22});
+    try t22.transpose();
+    std.debug.print("t22 transpose: {f}\n", .{t22});
+
+    const Tensor32 = Tensor(DType.f32, null);
+    const t32 = try Tensor32.eye(allocator, 5);
+    defer t32.deinit(&allocator);
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
 
     const allocator = gpa.allocator();
 
-    try fromDataDemo(allocator);
+    // try fromDataDemo(allocator);
+    try shapeDemo(allocator);
 }
 
 test "simple test" {

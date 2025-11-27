@@ -57,41 +57,30 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
     } else if (is_static_rank) bmk: {
         break :bmk DimsTmpl.?;
     } else undefined;
-    const static_strides = if (is_all_static) blk: {
-        var strides: [Rank]usize = undefined;
-
-        var acc: usize = 1;
-        var i: usize = Rank - 1;
-        while (i != 0) : (i -= 1) {
-            strides[i] = acc;
-            acc *= static_shape[i];
-        }
-        strides[0] = acc;
-
-        break :blk strides;
-    } else undefined;
 
     return struct {
         const Self = @This();
 
-        _shape: if (is_static_rank) [Rank]usize else []const usize,
-        _strides: if (is_static_rank) [Rank]usize else []const usize,
+        const InnerSlice = if (is_static_rank) [Rank]usize else []const usize;
+        _shape: InnerSlice,
+        _strides: InnerSlice,
         allocator: std.mem.Allocator,
         data: []T,
 
         // construction method
+        // only for 2d tensor
         pub fn eye(allocator: std.mem.Allocator, n: usize) anyerror!Self {
             if (is_all_static) {
                 @compileError("eye method don't support static shape tensor");
             }
 
-            if (!is_static_rank) {
+            if (is_static_rank and Rank != 2) {
                 @compileError("eye method can only work with 2-d tensor");
             }
 
-            if (comptime !utils.isFloat(T)) {
-                @compileError(std.fmt.comptimePrint("eye method can only work with float type, you use: {any}", .{@typeInfo(T)}));
-            }
+            // if (comptime !utils.isNumber(T)) {
+            //     @compileError(std.fmt.comptimePrint("eye method can only work with float type, you use: {any}", .{@typeInfo(T)}));
+            // }
 
             var arr = try allocator.alloc(T, n * n);
             errdefer allocator.free(arr);
@@ -103,7 +92,32 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
                 arr[i * n + i] = 1;
             }
 
-            return try Self.from_data(allocator, .{ .shape = .{ n, n } }, arr);
+            const shape_inner = if (is_static_rank) [2]?usize{ n, n } else &[2]usize{ n, n };
+            return try Self.from_data(allocator, .{ .shape = shape_inner }, arr);
+        }
+
+        // change shape
+        pub fn transpose(self: *Self) anyerror!void {
+            if (is_all_static) {
+                @compileError("transpose method don't support static shape tensor");
+            }
+            if (is_static_rank) {
+                if (Rank != 2) {
+                    @compileError("transpose method can only work with 2-d tensor");
+                } else {}
+            } else {
+                if (self._shape.len != 2) {
+                    return error.Non2D;
+                }
+            }
+
+            if (!is_all_static) {
+                const shape0, const shape1 = self._shape;
+                self._shape = .{ shape1, shape0 };
+            }
+
+            const stride0, const stride1 = self._strides;
+            self._strides = .{ stride1, stride0 };
         }
 
         pub fn from_data(allocator: std.mem.Allocator, opts: Opts, arr: []T) anyerror!Self {
@@ -167,9 +181,19 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
                     break :blk buf_i;
                 } else undefined;
 
+                var strides_inner: [Rank]usize = undefined;
+
+                var acc: usize = 1;
+                var i: usize = Rank - 1;
+                while (i != 0) : (i -= 1) {
+                    strides_inner[i] = acc;
+                    acc *= static_shape[i];
+                }
+                strides_inner[0] = acc;
+
                 return Self{
                     ._shape = undefined,
-                    ._strides = undefined,
+                    ._strides = strides_inner,
                     .allocator = allocator,
                     .data = buf,
                 };
@@ -251,6 +275,7 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
 
         pub fn shape(self: *const Self) if (is_static_rank) [Rank]usize else []const usize {
             if (is_all_static) {
+                // use this to prevent shape change
                 return static_shape;
             } else {
                 return self._shape;
@@ -258,11 +283,7 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
         }
 
         pub fn strides(self: *const Self) if (is_static_rank) [Rank]usize else []const usize {
-            if (is_all_static) {
-                return static_strides;
-            } else {
-                return self._strides;
-            }
+            return self._strides;
         }
 
         pub fn format(
