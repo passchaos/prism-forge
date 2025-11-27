@@ -8,12 +8,7 @@ pub fn isStruct(comptime T: type) bool {
     return @typeInfo(T) == .@"struct";
 }
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-
-    const allocator = gpa.allocator();
-
+fn fromDataDemo(allocator: std.mem.Allocator) !void {
     const TensorF32x3x2 = Tensor(DType.f32, &.{ 3, 2 });
 
     const arr1 = [3][2]f32{
@@ -21,11 +16,11 @@ pub fn main() !void {
         [2]f32{ 3.0, 4.0 },
         [2]f32{ 5.0, 6.0 },
     };
-    const t11 = try TensorF32x3x2.from_data(allocator, .{}, &arr1);
+    const t11 = try TensorF32x3x2.from_shaped_data(allocator, .{}, &arr1);
     std.debug.print("t11: {f}\n", .{t11});
 
     const Tensor3U32_1 = Tensor(DType.u32, &.{ 3, null, 5 });
-    const t3_1 = try Tensor3U32_1.init(allocator, .{ .shape = .{ 4, null, 8 } }, 21);
+    const t3_1 = try Tensor3U32_1.init(allocator, .{ .shape = .{ 3, 4, 5 } }, 21);
     defer t3_1.deinit(&allocator);
     std.debug.print("t3_1: {f}\n", .{t3_1});
 
@@ -34,9 +29,23 @@ pub fn main() !void {
     defer t4.deinit(&allocator);
     std.debug.print("t4: {f}\n", .{t4});
 
-    const t5 = try TensorU32.init(allocator, .{ .shape = &.{ 2, 3, 3, 14, 15 } }, 24);
+    const t5 = try TensorU32.init(allocator, .{ .shape = &.{ 2, 3, 3, 1, 5 } }, 24);
     defer t5.deinit(&allocator);
     std.debug.print("t5: {f} {any}\n", .{ t5, t5._shape });
+
+    const Tensor2 = Tensor(DType.f32, &.{ null, null });
+    const t6 = try Tensor2.eye(allocator, 10);
+    defer t6.deinit(&allocator);
+    std.debug.print("t6: {f}\n", .{t6});
+}
+
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+
+    const allocator = gpa.allocator();
+
+    try fromDataDemo(allocator);
 }
 
 test "simple test" {

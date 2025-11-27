@@ -1,5 +1,23 @@
 const std = @import("std");
 
+pub fn approxEqual(comptime T: type, a: T, b: T, relEps: T, absEps: T) bool {
+    const diff = @abs(a - b);
+    return diff <= absEps or diff <= relEps * @max(@abs(a), @abs(b));
+}
+
+pub fn isFloat(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .float => true,
+        else => false,
+    };
+}
+
+pub fn sliceEqual(a: []const usize, b: []const usize) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| if (x != y) return false;
+    return true;
+}
+
 pub fn toArray(comptime slice: []const usize) [slice.len]usize {
     var result: [slice.len]usize = undefined;
     inline for (slice, 0..) |dim, i| {
@@ -23,6 +41,10 @@ pub fn getDims(comptime T: type) []const usize {
         .pointer => |p| switch (p.size) {
             .one => switch (@typeInfo(p.child)) {
                 .array => return comptime dimsHelper(p.child),
+                .pointer => |pp| switch (pp.size) {
+                    .slice => return comptime dimsHelper(pp.child),
+                    else => @compileError("Unsupported pointer type"),
+                },
                 else => @compileError("support only array pointer"),
             },
             else => @compileError("support only array pointer"),

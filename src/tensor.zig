@@ -79,24 +79,74 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
         allocator: std.mem.Allocator,
         data: []T,
 
-        pub fn from_data(allocator: std.mem.Allocator, opts: Opts, arr: anytype) anyerror!Self {
+        // construction method
+        pub fn eye(allocator: std.mem.Allocator, n: usize) anyerror!Self {
+            if (is_all_static) {
+                @compileError("eye method don't support static shape tensor");
+            }
+
+            if (!is_static_rank) {
+                @compileError("eye method can only work with 2-d tensor");
+            }
+
+            if (comptime !utils.isFloat(T)) {
+                @compileError(std.fmt.comptimePrint("eye method can only work with float type, you use: {any}", .{@typeInfo(T)}));
+            }
+
+            var arr = try allocator.alloc(T, n * n);
+            errdefer allocator.free(arr);
+
+            for (arr) |*elem| elem.* = 0;
+
+            var i: usize = 0;
+            while (i < n) : (i += 1) {
+                arr[i * n + i] = 1;
+            }
+
+            return try Self.from_data(allocator, .{ .shape = .{ n, n } }, arr);
+        }
+
+        pub fn from_data(allocator: std.mem.Allocator, opts: Opts, arr: []T) anyerror!Self {
+            var tensor = try Self.init(allocator, opts, null);
+
+            tensor.data = arr;
+
+            return tensor;
+        }
+
+        pub fn from_shaped_data(allocator: std.mem.Allocator, opts: Opts, arr: anytype) anyerror!Self {
             const info = @typeInfo(@TypeOf(arr));
 
             const buf: []T = switch (info) {
                 .pointer => |ptr| switch (ptr.size) {
                     .one => switch (@typeInfo(ptr.child)) {
                         .array => @as([]T, @ptrCast(@constCast(arr)))[0..],
-                        else => @compileError("only support pointer to one"),
+                        .pointer => |pp| switch (pp.size) {
+                            .slice => arr.*,
+                            else => @compileError("only support pointer to one"),
+                        },
+                        else => @compileError(std.fmt.comptimePrint("only support pointer to one: data_type= {any}", .{info})),
                     },
                     else => @compileError("only support pointer to one"),
                 },
                 else => @compileError("only support pointer to one"),
             };
 
+            if (is_all_static) {
+                if (comptime !utils.sliceEqual(&static_shape, utils.getDims(@TypeOf(arr)))) {
+                    @compileError(std.fmt.comptimePrint("data shape is mismatched with type: type_shape= {any} data_shape= {any}", .{ static_shape, utils.getDims(@TypeOf(arr)) }));
+                }
+            }
+
+            if (is_static_rank) {
+                if (comptime static_shape.len != utils.getDims(@TypeOf(arr)).len) {
+                    @compileError(std.fmt.comptimePrint("data shape len is mismatched with type: type_shape_len= {} data_shape_len= {any}", .{ static_shape.len, utils.getDims(@TypeOf(arr)).len }));
+                }
+            }
+
             var tensor = try Self.init(allocator, opts, null);
 
             const arr_dims = utils.getDims(@TypeOf(arr));
-
             if (!std.mem.eql(usize, asSlice(&tensor.shape()), arr_dims)) {
                 return anyerror.WrongDimensions;
             }
@@ -128,7 +178,7 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
 
                 var len: usize = 1;
                 for (static_shape, 0..) |dim, i| {
-                    const i_v = if (opts.shape[i]) |v| v else return error.ValueIsNull;
+                    const i_v = if (opts.shape[i]) |v| v else return error.MismatchShape;
                     const v = if (dim) |val| val else i_v;
 
                     dyn_shape[i] = v;
@@ -190,6 +240,7 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
             }
         }
 
+        // core method
         pub fn deinit(self: *const Self, allocator: *const std.mem.Allocator) void {
             allocator.free(self.data);
 
