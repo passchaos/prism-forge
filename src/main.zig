@@ -8,68 +8,7 @@ pub fn isStruct(comptime T: type) bool {
     return @typeInfo(T) == .@"struct";
 }
 
-fn fromDataDemo(allocator: std.mem.Allocator) !void {
-    const TensorF32x3x2 = Tensor(DType.f32, &.{ 3, 2 });
-
-    const arr1 = [3][2]f32{
-        [2]f32{ 1.0, 2.0 },
-        [2]f32{ 3.0, 4.0 },
-        [2]f32{ 5.0, 6.0 },
-    };
-    const t11 = try TensorF32x3x2.from_shaped_data(allocator, .{}, &arr1);
-    std.debug.print("t11: {f}\n", .{t11});
-
-    const Tensor3U32_1 = Tensor(DType.u32, &.{ 3, null, 5 });
-    const t3_1 = try Tensor3U32_1.init(allocator, .{ .shape = .{ 3, 4, 5 } }, 21);
-    defer t3_1.deinit(&allocator);
-    std.debug.print("t3_1: {f}\n", .{t3_1});
-
-    const TensorU32 = Tensor(DType.u32, null);
-    const t4 = try TensorU32.init(allocator, .{ .shape = &.{ 1, 2, 3, 4 } }, 24);
-    defer t4.deinit(&allocator);
-    std.debug.print("t4: {f}\n", .{t4});
-
-    const t5 = try TensorU32.init(allocator, .{ .shape = &.{ 2, 3, 3, 1, 5 } }, 24);
-    defer t5.deinit(&allocator);
-    std.debug.print("t5: {f} {any}\n", .{ t5, t5._shape });
-
-    const Tensor2 = Tensor(DType.f32, &.{ null, null });
-    const t6 = try Tensor2.eye(allocator, 10);
-    defer t6.deinit(&allocator);
-    std.debug.print("t6: {f}\n", .{t6});
-}
-
-fn shapeDemo(allocator: std.mem.Allocator) !void {
-    // const Tensor112 = Tensor(DType.u32, &.{ 3, 4 });
-    // const Tensor122 = Tensor(DType.u32, &.{ 3, 3 });
-
-    // const t112 = try Tensor112.eye(allocator, 5);
-    // _ = t112;
-    // const t122 = try Tensor122.eye(allocator, 5);
-    // _ = t122;
-
-    const Tensor22 = Tensor(DType.f32, &.{ null, 3 });
-    var t22 = try Tensor22.eye(allocator, 5);
-    defer t22.deinit(&allocator);
-
-    std.debug.print("t22: {f}\n", .{t22});
-    try t22.transpose();
-    std.debug.print("t22 transpose: {f}\n", .{t22});
-
-    const Tensor32 = Tensor(DType.f32, null);
-    const t32 = try Tensor32.eye(allocator, 5);
-    defer t32.deinit(&allocator);
-}
-
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-
-    const allocator = gpa.allocator();
-
-    // try fromDataDemo(allocator);
-    try shapeDemo(allocator);
-}
+pub fn main() !void {}
 
 test "simple test" {
     const gpa = std.testing.allocator;
