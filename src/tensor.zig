@@ -229,6 +229,46 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
             return obj;
         }
 
+        pub fn arange_count(allocator: std.mem.Allocator, start: T, step: T, count: usize) anyerror!Self {
+            if (is_all_static) {
+                @compileError("don't support static shape");
+            }
+            var arr = try std.ArrayList(T).initCapacity(allocator, count);
+
+            var tmp = start;
+            for (0..count) |_| {
+                try arr.append(allocator, tmp);
+                tmp += step;
+            }
+
+            // const opts = if (is_static_rank) .{ .shape = [count]} else .{.shape = }
+            const opts: Opts = .{ .shape = .{count} };
+            var tensor = try Self.declare(allocator, opts);
+            tensor.data = arr;
+
+            return tensor;
+        }
+        pub fn arange_step(allocator: std.mem.Allocator, start: T, end: T, step: T) anyerror!Self {
+            if (is_all_static) {
+                @compileError("don't support static shape");
+            }
+
+            var arr = try std.ArrayList(T).initCapacity(allocator, (end - start) / step);
+
+            var tmp = start;
+            while (tmp < end) {
+                try arr.append(allocator, tmp);
+                tmp += step;
+            }
+
+            // const opts = if (is_static_rank) .{ .shape = [count]} else .{.shape = }
+            const opts: Opts = .{ .shape = .{arr.items.len} };
+            var tensor = try Self.declare(allocator, opts);
+            tensor.data = arr;
+
+            return tensor;
+        }
+
         fn declare(allocator: std.mem.Allocator, opts: Opts) anyerror!Self {
             if (is_all_static) {
                 var strides_inner: [Rank]usize = undefined;
@@ -574,6 +614,28 @@ test "construction test" {
     const t6 = try Tensor2.eye(allocator, 10);
     defer t6.deinit(allocator);
     std.debug.print("t6: {f}\n", .{t6});
+}
+
+test "arange" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+
+    const allocator = gpa.allocator();
+
+    const Tensor3 = Tensor(DataType.u32, &.{null});
+
+    const t1 = try Tensor3.arange_count(allocator, 1, 2, 20);
+    defer t1.deinit(allocator);
+    std.debug.print("t1: {f}\n", .{t1});
+
+    const t2 = try Tensor3.arange_step(
+        allocator,
+        1,
+        40,
+        2,
+    );
+    defer t2.deinit(allocator);
+    std.debug.print("t2: {f}\n", .{t2});
 }
 
 test "shape transform" {
