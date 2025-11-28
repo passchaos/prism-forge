@@ -61,11 +61,67 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
     return struct {
         const Self = @This();
 
-        const InnerSlice = if (is_static_rank) [Rank]usize else []const usize;
+        const InnerSlice = if (is_static_rank) [Rank]usize else std.ArrayList(usize);
+        const DataSlice = std.ArrayList(T);
+
         _shape: InnerSlice,
         _strides: InnerSlice,
         allocator: std.mem.Allocator,
-        data: []T,
+        data: DataSlice,
+
+        // change shape
+        pub fn transpose(self: *Self) anyerror!void {
+            if (is_static_rank) {
+                if (Rank != 2) {
+                    @compileError("transpose method can only work with 2-d tensor");
+                } else {
+                    if (is_all_static) {
+                        if (comptime static_shape[0] != static_shape[1]) {
+                            @compileError("static shape tensor can only run transpose method with square matrix shape");
+                        }
+                    }
+                }
+            } else {
+                if (self._shape.items.len != 2) {
+                    return error.Non2D;
+                }
+            }
+
+            if (!is_all_static) {
+                if (is_static_rank) {
+                    const shape0 = self._shape[0];
+                    const shape1 = self._shape[1];
+
+                    self._shape[0] = shape1;
+                    self._shape[1] = shape0;
+                } else {
+                    const shape0 = self._shape.items[0];
+                    const shape1 = self._shape.items[1];
+
+                    self._shape.items[0] = shape1;
+                    self._shape.items[1] = shape0;
+                }
+            }
+
+            if (is_static_rank) {
+                const stride0 = self._strides[0];
+                const stride1 = self._strides[1];
+                self._strides[0] = stride1;
+                self._strides[1] = stride0;
+            } else {
+                const stride0 = self._strides.items[0];
+                const stride1 = self._strides.items[1];
+                self._strides.items[0] = stride1;
+                self._strides.items[1] = stride0;
+            }
+        }
+
+        pub fn from_data(allocator: std.mem.Allocator, opts: Opts, arr: std.ArrayList(T)) anyerror!Self {
+            var tensor = try Self.declare(allocator, opts);
+            tensor.data = arr;
+
+            return tensor;
+        }
 
         // construction method
         // only for 2d tensor
@@ -82,53 +138,27 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
             //     @compileError(std.fmt.comptimePrint("eye method can only work with float type, you use: {any}", .{@typeInfo(T)}));
             // }
 
-            var arr = try allocator.alloc(T, n * n);
-            errdefer allocator.free(arr);
+            const data_len = n * n;
+            var arr = try std.ArrayList(T).initCapacity(allocator, data_len);
+            try arr.appendNTimes(allocator, 0, data_len);
 
-            for (arr) |*elem| elem.* = 0;
+            for (arr.items) |*elem| elem.* = 0;
 
             var i: usize = 0;
             while (i < n) : (i += 1) {
-                arr[i * n + i] = 1;
+                arr.items[i * n + i] = 1;
             }
 
-            const shape_inner = if (is_static_rank) [2]?usize{ n, n } else &[2]usize{ n, n };
-            return try Self.from_data(allocator, .{ .shape = shape_inner }, arr);
-        }
-
-        // change shape
-        pub fn transpose(self: *Self) anyerror!void {
-            if (is_all_static) {
-                @compileError("transpose method don't support static shape tensor");
-            }
             if (is_static_rank) {
-                if (Rank != 2) {
-                    @compileError("transpose method can only work with 2-d tensor");
-                } else {}
+                return try Self.from_data(allocator, .{ .shape = .{ n, n } }, arr);
             } else {
-                if (self._shape.len != 2) {
-                    return error.Non2D;
-                }
+                var arr_list = try std.ArrayList(usize).initCapacity(allocator, 2);
+                try arr_list.appendSlice(allocator, &[2]usize{ n, n });
+                return try Self.from_data(allocator, .{ .shape = arr_list }, arr);
             }
-
-            if (!is_all_static) {
-                const shape0, const shape1 = self._shape;
-                self._shape = .{ shape1, shape0 };
-            }
-
-            const stride0, const stride1 = self._strides;
-            self._strides = .{ stride1, stride0 };
         }
 
-        pub fn from_data(allocator: std.mem.Allocator, opts: Opts, arr: []T) anyerror!Self {
-            var tensor = try Self.init(allocator, opts, null);
-
-            tensor.data = arr;
-
-            return tensor;
-        }
-
-        pub fn from_shaped_data(allocator: std.mem.Allocator, opts: Opts, arr: anytype) anyerror!Self {
+        pub fn from_shaped_data(allocator: std.mem.Allocator, arr: anytype) anyerror!Self {
             const info = @typeInfo(@TypeOf(arr));
 
             const buf: []T = switch (info) {
@@ -158,29 +188,49 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
                 }
             }
 
-            var tensor = try Self.init(allocator, opts, null);
+            const dims = utils.getDims(@TypeOf(arr));
+
+            const opts: Opts = if (is_all_static) .{} else if (is_static_rank) .{ .shape = dims } else blk: {
+                var arr_list = try std.ArrayList(usize).initCapacity(allocator, dims.len);
+                try arr_list.appendSlice(allocator, dims);
+
+                break :blk .{ .shape = arr_list };
+            };
+            var tensor = try Self.declare(allocator, opts);
 
             const arr_dims = utils.getDims(@TypeOf(arr));
             if (!std.mem.eql(usize, asSlice(&tensor.shape()), arr_dims)) {
                 return anyerror.WrongDimensions;
             }
 
-            tensor.data = buf;
+            var tmp_buf = try std.ArrayList(T).initCapacity(allocator, tensor.len());
+            try tmp_buf.appendSlice(allocator, buf);
+            tensor.data = tmp_buf;
 
             return tensor;
         }
 
         const Opts =
-            if (is_all_static) struct {} else if (is_static_rank) struct { shape: [Rank]?usize } else struct { shape: []const usize };
+            if (is_all_static) struct {} else if (is_static_rank) struct { shape: [Rank]?usize } else struct { shape: std.ArrayList(usize) };
 
-        pub fn init(allocator: std.mem.Allocator, opts: Opts, value: ?T) anyerror!Self {
+        pub fn full(allocator: std.mem.Allocator, opts: Opts, value: ?T) anyerror!Self {
+            var obj = try Self.declare(allocator, opts);
+
+            const data_len = obj.len();
+
+            var buf = try std.ArrayList(T).initCapacity(allocator, data_len);
+
+            if (value) |v| {
+                try buf.appendNTimes(allocator, v, data_len);
+            }
+
+            obj.data = buf;
+
+            return obj;
+        }
+
+        fn declare(allocator: std.mem.Allocator, opts: Opts) anyerror!Self {
             if (is_all_static) {
-                const buf = if (value) |v| blk: {
-                    const buf_i = try allocator.alloc(T, utils.product(&static_shape));
-                    @memset(buf_i, v);
-                    break :blk buf_i;
-                } else undefined;
-
                 var strides_inner: [Rank]usize = undefined;
 
                 var acc: usize = 1;
@@ -195,18 +245,25 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
                     ._shape = undefined,
                     ._strides = strides_inner,
                     .allocator = allocator,
-                    .data = buf,
+                    .data = undefined,
                 };
             } else if (is_static_rank) {
                 var dyn_shape: [Rank]usize = undefined;
 
-                var len: usize = 1;
-                for (static_shape, 0..) |dim, i| {
-                    const i_v = if (opts.shape[i]) |v| v else return error.MismatchShape;
-                    const v = if (dim) |val| val else i_v;
+                for (static_shape, opts.shape, 0..) |dim, dim_i, i| {
+                    if (dim) |v| {
+                        if (dim_i) |v_i| {
+                            if (v != v_i) return error.DimNotMatch;
+                        }
 
-                    dyn_shape[i] = v;
-                    len *= v;
+                        dyn_shape[i] = v;
+                    } else {
+                        if (dim_i) |v_i| {
+                            dyn_shape[i] = v_i;
+                        } else {
+                            return error.MustSpecifyNullDimSize;
+                        }
+                    }
                 }
 
                 var dyn_strides: [Rank]usize = undefined;
@@ -219,71 +276,85 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
                 }
                 dyn_strides[0] = acc;
 
-                const buf = if (value) |v| blk: {
-                    const buf_i = try allocator.alloc(T, len);
-                    @memset(buf_i, v);
-                    break :blk buf_i;
-                } else undefined;
-
                 return Self{
                     ._shape = dyn_shape,
                     ._strides = dyn_strides,
                     .allocator = allocator,
-                    .data = buf,
+                    .data = undefined,
                 };
             } else {
                 const dyn_shape = opts.shape;
 
-                var len: usize = 1;
-                for (dyn_shape) |dim| {
-                    len *= dim;
-                }
-
-                var dyn_strides: []usize = try allocator.alloc(usize, dyn_shape.len);
+                var dyn_strides = try std.ArrayList(usize).initCapacity(allocator, dyn_shape.items.len);
+                try dyn_strides.appendNTimes(allocator, 0, dyn_shape.items.len);
 
                 var acc: usize = 1;
-                var i: usize = dyn_shape.len - 1;
+                var i: usize = dyn_shape.items.len - 1;
                 while (i != 0) : (i -= 1) {
-                    dyn_strides[i] = acc;
-                    acc *= dyn_shape[i];
+                    dyn_strides.items[i] = acc;
+                    acc *= dyn_shape.items[i];
                 }
-                dyn_strides[0] = acc;
-
-                const buf = if (value) |v| blk: {
-                    const buf_i = try allocator.alloc(T, len);
-                    @memset(buf_i, v);
-                    break :blk buf_i;
-                } else undefined;
+                dyn_strides.items[0] = acc;
 
                 return Self{
                     ._shape = dyn_shape,
                     ._strides = dyn_strides,
                     .allocator = allocator,
-                    .data = buf,
+                    .data = undefined,
                 };
             }
         }
 
         // core method
-        pub fn deinit(self: *const Self, allocator: *const std.mem.Allocator) void {
-            allocator.free(self.data);
+        pub fn deinit(self: *const Self, allocator: std.mem.Allocator) void {
+            @constCast(&self.data).deinit(allocator);
 
             if (!is_static_rank) {
-                allocator.free(self._strides);
+                @constCast(&self._shape).deinit(allocator);
+                @constCast(&self._strides).deinit(allocator);
+            }
+        }
+
+        fn get_data_idx(self: *const Self, idx: usize) T {
+            return self.data.items[idx];
+        }
+
+        pub fn len(self: *const Self) usize {
+            var data_len: usize = 1;
+            for (self.shape()) |v| {
+                data_len *= v;
+            }
+
+            return data_len;
+        }
+
+        pub fn ndim(self: *const Self) usize {
+            if (is_static_rank) {
+                return Rank;
+            } else {
+                return self._shape.items.len;
             }
         }
 
         pub fn shape(self: *const Self) if (is_static_rank) [Rank]usize else []const usize {
-            if (is_all_static) {
-                // use this to prevent shape change
-                return static_shape;
+            if (is_static_rank) {
+                if (is_all_static) {
+                    // use this to prevent shape change
+                    return static_shape;
+                } else {
+                    return self._shape;
+                }
             } else {
-                return self._shape;
+                return self._shape.items;
             }
         }
 
         pub fn strides(self: *const Self) if (is_static_rank) [Rank]usize else []const usize {
-            return self._strides;
+            if (is_static_rank) {
+                return self._strides;
+            } else {
+                return self._strides.items;
+            }
         }
 
         pub fn format(
@@ -298,7 +369,7 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
                 \\  .Strides = ({any}, {any}),
                 \\  .DataLen = {}
                 \\  .Data =
-            , .{ @typeName(@TypeOf(self)), T, @TypeOf(self.shape()), self.shape(), @TypeOf(self.strides()), self.strides(), self.data.len });
+            , .{ @typeName(@TypeOf(self)), T, @TypeOf(self.shape()), self.shape(), @TypeOf(self.strides()), self.strides(), self.len() });
 
             _ = try writer.write("\n");
 
@@ -315,12 +386,12 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
         }
 
         fn fmt_recursive(self: *const Self, writer: *std.Io.Writer, depth: usize, indices: []const usize) anyerror!void {
-            const ndim = self.shape().len;
+            const dims = self.ndim();
 
-            if (depth == ndim) {
+            if (depth == dims) {
                 const flat_index = try indices_to_flat(indices, asSlice(&self.shape()), asSlice(&self.strides()));
-                try writer.print("{d}", .{self.data[flat_index]});
-            } else if (depth == ndim - 1) {
+                try writer.print("{d}", .{self.get_data_idx(flat_index)});
+            } else if (depth == dims - 1) {
                 try self.fmt_1d_slice(writer, indices);
             } else {
                 try self.fmt_nd_slice(writer, depth, indices);
@@ -331,7 +402,7 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
             const pad_show_count = 4;
 
             const current_dim_size = self.shape()[depth];
-            const ndim = self.shape().len;
+            const dims = self.ndim();
 
             _ = try writer.write("[");
 
@@ -356,7 +427,7 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
 
             for (slice_indices.items, 0..) |slice_idx, idx| {
                 if (idx > 0) {
-                    if (depth == ndim - 2) {
+                    if (depth == dims - 2) {
                         _ = try writer.write("\n ");
                     } else {
                         _ = try writer.write("\n\n ");
@@ -368,7 +439,7 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
                 }
 
                 if (!show_all and idx == pad_show_count) {
-                    if (depth == ndim - 2) {
+                    if (depth == dims - 2) {
                         _ = try writer.write("\n ");
 
                         for (0..depth) |_| {
@@ -424,7 +495,7 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
                     try indices.append(allocator, i);
 
                     const flat_idx = try indices_to_flat(indices.items, asSlice(&self.shape()), asSlice(&self.strides()));
-                    try writer.print("{}", .{self.data[flat_idx]});
+                    try writer.print("{}", .{self.get_data_idx(flat_idx)});
                 }
             } else {
                 for (0..pad_show_count) |i| {
@@ -439,7 +510,7 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
                     try indices.append(self.allocator, i);
 
                     const flat_idx = try indices_to_flat(indices.items, asSlice(&self.shape()), asSlice(&self.strides()));
-                    try writer.print("{}", .{self.data[flat_idx]});
+                    try writer.print("{}", .{self.get_data_idx(flat_idx)});
                 }
                 _ = try writer.write(" ... ");
 
@@ -451,7 +522,7 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
                     try indices.append(self.allocator, i);
 
                     const flat_idx = try indices_to_flat(indices.items, asSlice(&self.shape()), asSlice(&self.strides()));
-                    try writer.print("{}", .{self.data[flat_idx]});
+                    try writer.print("{}", .{self.get_data_idx(flat_idx)});
                     if (i < current_dim_size - 1) {
                         _ = try writer.write(" ");
                     }
@@ -477,26 +548,31 @@ test "construction test" {
         [2]f32{ 3.0, 4.0 },
         [2]f32{ 5.0, 6.0 },
     };
-    const t11 = try TensorF32x3x2.from_shaped_data(allocator, .{}, &arr1);
+    const t11 = try TensorF32x3x2.from_shaped_data(allocator, &arr1);
+    defer t11.deinit(allocator);
     std.debug.print("t11: {f}\n", .{t11});
 
     const Tensor3U32_1 = Tensor(DType.u32, &.{ 3, null, 5 });
-    const t3_1 = try Tensor3U32_1.init(allocator, .{ .shape = .{ 3, 4, 5 } }, 21);
-    defer t3_1.deinit(&allocator);
+    const t3_1 = try Tensor3U32_1.full(allocator, .{ .shape = .{ 3, 4, 5 } }, 21);
+    defer t3_1.deinit(allocator);
     std.debug.print("t3_1: {f}\n", .{t3_1});
 
     const TensorU32 = Tensor(DType.u32, null);
-    const t4 = try TensorU32.init(allocator, .{ .shape = &.{ 1, 2, 3, 4 } }, 24);
-    defer t4.deinit(&allocator);
+
+    var shape4 = try std.ArrayList(usize).initCapacity(allocator, 4);
+    try shape4.appendSlice(allocator, &.{ 2, 3, 3, 1, 5 });
+
+    const t4 = try TensorU32.full(allocator, .{ .shape = try shape4.clone(allocator) }, 24);
+    defer t4.deinit(allocator);
     std.debug.print("t4: {f}\n", .{t4});
 
-    const t5 = try TensorU32.init(allocator, .{ .shape = &.{ 2, 3, 3, 1, 5 } }, 24);
-    defer t5.deinit(&allocator);
+    const t5 = try TensorU32.full(allocator, .{ .shape = shape4 }, 24);
+    defer t5.deinit(allocator);
     std.debug.print("t5: {f} {any}\n", .{ t5, t5._shape });
 
     const Tensor2 = Tensor(DType.f32, &.{ null, null });
     const t6 = try Tensor2.eye(allocator, 10);
-    defer t6.deinit(&allocator);
+    defer t6.deinit(allocator);
     std.debug.print("t6: {f}\n", .{t6});
 }
 
@@ -506,17 +582,26 @@ test "shape transform" {
 
     const allocator = gpa.allocator();
 
-    // const Tensor112 = Tensor(DType.u32, &.{ 3, 4 });
-    // const Tensor122 = Tensor(DType.u32, &.{ 3, 3 });
+    const Tensor112 = Tensor(DataType.u32, &.{ 2, 2 });
+    const Tensor122 = Tensor(DataType.u32, &.{ 3, 3 });
 
-    // const t112 = try Tensor112.eye(allocator, 5);
-    // _ = t112;
-    // const t122 = try Tensor122.eye(allocator, 5);
-    // _ = t122;
+    var arr1 = try std.ArrayList(u32).initCapacity(allocator, 5);
+    try arr1.appendSlice(allocator, &[_]u32{ 1, 2, 3, 4, 5 });
+    var t112 = try Tensor112.from_data(allocator, .{}, arr1);
+    defer t112.deinit(allocator);
 
-    const Tensor22 = Tensor(DataType.f32, &.{ null, 3 });
+    try t112.transpose();
+
+    var arr2 = try std.ArrayList(u32).initCapacity(allocator, 6);
+    try arr2.appendSlice(allocator, &[_]u32{ 1, 2, 3, 4, 5, 6 });
+    var t122 = try Tensor122.from_data(allocator, .{}, arr2);
+    defer t122.deinit(allocator);
+
+    try t122.transpose();
+
+    const Tensor22 = Tensor(DataType.f32, &.{ null, 5 });
     var t22 = try Tensor22.eye(allocator, 5);
-    defer t22.deinit(&allocator);
+    defer t22.deinit(allocator);
 
     std.debug.print("t22: {f}\n", .{t22});
     try t22.transpose();
@@ -524,5 +609,15 @@ test "shape transform" {
 
     const Tensor32 = Tensor(DataType.f32, null);
     const t32 = try Tensor32.eye(allocator, 5);
-    defer t32.deinit(&allocator);
+    defer t32.deinit(allocator);
+
+    const arr = [4][5]f32{ [_]f32{ 1, 2, 3, 4, 5 }, [_]f32{ 6, 7, 8, 9, 10 }, [_]f32{ 11, 12, 13, 14, 15 }, [_]f32{ 16, 17, 18, 19, 20 } };
+    var t312 = try Tensor32.from_shaped_data(allocator, &arr);
+    defer t312.deinit(allocator);
+
+    std.debug.print("t312: {f}\n", .{t312});
+
+    try t312.transpose();
+
+    std.debug.print("t312 transpose: {f}\n", .{t312});
 }

@@ -71,7 +71,7 @@ fn ElemOf(comptime V: type) type {
                 .array => |arr| arr.child,
                 .pointer => |pp| switch (pp.size) {
                     .slice => pp.child,
-                    else => @compileError("Unsupported pointer type"),
+                    else => @compileError("Unsupported pointer type" ++ std.fmt.comptimePrint(" get type: {}", .{@typeInfo(@TypeOf(pp))})),
                 },
                 else => |v| @compileError(std.fmt.comptimePrint("Unsupported pointer type: info= {} info_child= {}\n", .{ p, v })),
             },
