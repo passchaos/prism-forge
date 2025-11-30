@@ -67,7 +67,7 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
         _shape: InnerSlice,
         _strides: InnerSlice,
         allocator: std.mem.Allocator,
-        data: DataSlice,
+        data: ?DataSlice,
 
         // change shape
         pub fn transpose(self: *Self) anyerror!void {
@@ -116,6 +116,18 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
             }
         }
 
+        pub fn reshape(self: *Self, comptime new_shape: []const usize) anyerror!Tensor(dtype, utils.toOptionalShape(new_shape)) {
+            const Typ = Tensor(dtype, utils.toOptionalShape(new_shape));
+            var tensor = try Typ.declare(self.allocator, .{});
+            tensor.data = self.data;
+
+            // take self data
+            self.data = null;
+
+            return tensor;
+        }
+
+        // create method
         pub fn from_data(allocator: std.mem.Allocator, opts: Opts, arr: std.ArrayList(T)) anyerror!Self {
             var tensor = try Self.declare(allocator, opts);
             tensor.data = arr;
@@ -347,7 +359,9 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
 
         // core method
         pub fn deinit(self: *const Self, allocator: std.mem.Allocator) void {
-            @constCast(&self.data).deinit(allocator);
+            if (self.data) |data| {
+                @constCast(&data).deinit(allocator);
+            }
 
             if (!is_static_rank) {
                 @constCast(&self._shape).deinit(allocator);
@@ -355,8 +369,8 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
             }
         }
 
-        fn get_data_idx(self: *const Self, idx: usize) T {
-            return self.data.items[idx];
+        fn get_data_idx(self: *const Self, idx: usize) ?T {
+            return if (self.data) |data| data.items[idx] else null;
         }
 
         pub fn len(self: *const Self) usize {
@@ -430,7 +444,8 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
 
             if (depth == dims) {
                 const flat_index = try indices_to_flat(indices, asSlice(&self.shape()), asSlice(&self.strides()));
-                try writer.print("{d}", .{self.get_data_idx(flat_index)});
+
+                try utils.printOptional(writer, "{}", self.get_data_idx(flat_index));
             } else if (depth == dims - 1) {
                 try self.fmt_1d_slice(writer, indices);
             } else {
@@ -535,7 +550,8 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
                     try indices.append(allocator, i);
 
                     const flat_idx = try indices_to_flat(indices.items, asSlice(&self.shape()), asSlice(&self.strides()));
-                    try writer.print("{}", .{self.get_data_idx(flat_idx)});
+
+                    try utils.printOptional(writer, "{}", self.get_data_idx(flat_idx));
                 }
             } else {
                 for (0..pad_show_count) |i| {
@@ -550,7 +566,8 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
                     try indices.append(self.allocator, i);
 
                     const flat_idx = try indices_to_flat(indices.items, asSlice(&self.shape()), asSlice(&self.strides()));
-                    try writer.print("{}", .{self.get_data_idx(flat_idx)});
+
+                    try utils.printOptional(writer, "{}", self.get_data_idx(flat_idx));
                 }
                 _ = try writer.write(" ... ");
 
@@ -562,7 +579,9 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
                     try indices.append(self.allocator, i);
 
                     const flat_idx = try indices_to_flat(indices.items, asSlice(&self.shape()), asSlice(&self.strides()));
-                    try writer.print("{}", .{self.get_data_idx(flat_idx)});
+
+                    try utils.printOptional(writer, "{}", self.get_data_idx(flat_idx));
+
                     if (i < current_dim_size - 1) {
                         _ = try writer.write(" ");
                     }
@@ -653,6 +672,10 @@ test "shape transform" {
     defer t112.deinit(allocator);
 
     try t112.transpose();
+
+    const t112_reshaped = try t112.reshape(&.{ 4, 1 });
+    std.debug.print("t112 reshaped: {f}\n", .{t112_reshaped});
+    defer t112_reshaped.deinit(allocator);
 
     var arr2 = try std.ArrayList(u32).initCapacity(allocator, 6);
     try arr2.appendSlice(allocator, &[_]u32{ 1, 2, 3, 4, 5, 6 });

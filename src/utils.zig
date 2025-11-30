@@ -29,6 +29,22 @@ pub fn sliceEqual(a: []const usize, b: []const usize) bool {
     return true;
 }
 
+pub fn toOptionalShape(comptime shape: []const usize) ?[]const ?usize {
+    comptime var tmp: [shape.len]?usize = undefined;
+    inline for (shape, 0..) |val, i| {
+        tmp[i] = val; // 自动提升为 ?usize
+    }
+    return &tmp;
+}
+
+pub fn printOptional(writer: anytype, comptime fmt: []const u8, value: anytype) !void {
+    if (value) |v| {
+        try writer.print(fmt, .{v});
+    } else {
+        try writer.print("null", .{});
+    }
+}
+
 pub fn toArray(comptime slice: []const usize) [slice.len]usize {
     var result: [slice.len]usize = undefined;
     inline for (slice, 0..) |dim, i| {
