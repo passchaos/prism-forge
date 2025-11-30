@@ -675,6 +675,21 @@ test "shape transform" {
 
     const t112_reshaped = try t112.reshape(&.{ 4, 1 });
     std.debug.print("t112 reshaped: {f}\n", .{t112_reshaped});
+
+    const Tensor41 = Tensor(DataType.u32, &.{ 4, 1 });
+
+    var arr1_normal = try std.ArrayList(u32).initCapacity(allocator, 5);
+    try arr1_normal.appendSlice(allocator, &[_]u32{ 6, 7, 8, 9, 10 });
+    const t112_normal = try Tensor41.from_data(allocator, .{}, arr1_normal);
+    defer t112_normal.deinit(allocator);
+    std.debug.print("t112 normal: {f}\n", .{t112_normal});
+
+    if (@TypeOf(t112_reshaped) == @TypeOf(t112_normal)) {
+        std.debug.print("same type\n", .{});
+    } else {
+        std.debug.print("different type\n", .{});
+    }
+
     defer t112_reshaped.deinit(allocator);
 
     var arr2 = try std.ArrayList(u32).initCapacity(allocator, 6);
