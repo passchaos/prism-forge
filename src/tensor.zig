@@ -41,6 +41,10 @@ fn flat_to_indices(flat_index: usize, strides: []const usize) []const usize {
     return indices;
 }
 
+fn testFloat2Int(v: f32) i32 {
+    return @as(i32, @intFromFloat(v));
+}
+
 pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type {
     const T = dtype.toType();
 
@@ -68,6 +72,37 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
         _strides: InnerSlice,
         allocator: std.mem.Allocator,
         data: ?DataSlice,
+
+        // data transform
+        pub fn map_i(self: *Self, f: fn (T) T) void {
+            if (self.data) |d| {
+                for (d.items) |*val| {
+                    val.* = f(val.*);
+                }
+            }
+        }
+
+        pub fn map(self: *const Self, allocator: std.mem.Allocator, comptime dtype1: DataType, f: fn (T) dtype1.toType()) anyerror!Tensor(dtype1, DimsTmpl) {
+            const data = if (self.data) |d| d else return error.DataIsNull;
+
+            var new_data = try std.ArrayList(dtype1.toType()).initCapacity(allocator, data.items.len);
+            try new_data.appendNTimes(allocator, undefined, data.items.len);
+            for (data.items, 0..) |val, i| {
+                new_data.items[i] = f(val);
+            }
+
+            const CopyFn = struct {
+                pub inline fn copy(allocator_i: std.mem.Allocator, is: InnerSlice) anyerror!InnerSlice {
+                    if (is_static_rank) {
+                        return is;
+                    } else {
+                        return try is.clone(allocator_i);
+                    }
+                }
+            };
+
+            return Tensor(dtype1, DimsTmpl){ ._shape = try CopyFn.copy(allocator, self._shape), ._strides = try CopyFn.copy(allocator, self._strides), .allocator = allocator, .data = new_data };
+        }
 
         // change shape
         pub fn transpose(self: *Self) anyerror!void {
@@ -215,7 +250,7 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
                 return anyerror.WrongDimensions;
             }
 
-            var tmp_buf = try std.ArrayList(T).initCapacity(allocator, tensor.len());
+            var tmp_buf = try std.ArrayList(T).initCapacity(allocator, tensor.size());
             try tmp_buf.appendSlice(allocator, buf);
             tensor.data = tmp_buf;
 
@@ -228,7 +263,7 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
         pub fn full(allocator: std.mem.Allocator, opts: Opts, value: ?T) anyerror!Self {
             var obj = try Self.declare(allocator, opts);
 
-            const data_len = obj.len();
+            const data_len = obj.size();
 
             var buf = try std.ArrayList(T).initCapacity(allocator, data_len);
 
@@ -373,7 +408,7 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
             return if (self.data) |data| data.items[idx] else null;
         }
 
-        pub fn len(self: *const Self) usize {
+        pub fn size(self: *const Self) usize {
             var data_len: usize = 1;
             for (self.shape()) |v| {
                 data_len *= v;
@@ -423,7 +458,7 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
                 \\  .Strides = ({any}, {any}),
                 \\  .DataLen = {}
                 \\  .Data =
-            , .{ @typeName(@TypeOf(self)), T, @TypeOf(self.shape()), self.shape(), @TypeOf(self.strides()), self.strides(), self.len() });
+            , .{ @typeName(@TypeOf(self)), T, @TypeOf(self.shape()), self.shape(), @TypeOf(self.strides()), self.strides(), self.size() });
 
             _ = try writer.write("\n");
 
@@ -722,4 +757,39 @@ test "shape transform" {
     try t312.transpose();
 
     std.debug.print("t312 transpose: {f}\n", .{t312});
+}
+
+test "map related methods" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    // const allocator = gpa.allocator();
+
+    const TensorF32x3x2 = Tensor(DataType.f32, &.{ 3, 2 });
+
+    const arr1 = [3][2]f32{
+        [2]f32{ 1.1, 2.2 },
+        [2]f32{ 3.3, 4.01 },
+        [2]f32{ 5.9, 6.1 },
+    };
+    var t11 = try TensorF32x3x2.from_shaped_data(allocator, &arr1);
+    std.debug.print("t11: {f}\n", .{t11});
+
+    const FnWithCtx = struct {
+        pub fn double(x: f32) f32 {
+            return 2.0 * x;
+        }
+        pub fn call(x: f32) i32 {
+            return @as(i32, @intFromFloat(x));
+        }
+    };
+
+    const t11_1 = try t11.map(allocator, DataType.i32, FnWithCtx.call);
+    std.debug.print("t11_1: {f}\n", .{t11_1});
+
+    t11.map_i(FnWithCtx.double);
+    std.debug.print("t11: {f}\n", .{t11});
 }
