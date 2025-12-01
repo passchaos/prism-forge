@@ -101,7 +101,8 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
                 }
             };
 
-            return Tensor(dtype1, DimsTmpl){ ._shape = try CopyFn.copy(allocator, self._shape), ._strides = try CopyFn.copy(allocator, self._strides), .allocator = allocator, .data = new_data };
+            const NewTensorTyp = Tensor(dtype1, DimsTmpl);
+            return NewTensorTyp{ ._shape = try CopyFn.copy(allocator, self._shape), ._strides = try CopyFn.copy(allocator, self._strides), .allocator = allocator, .data = new_data };
         }
 
         // change shape
@@ -151,8 +152,8 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
             }
         }
 
-        pub fn reshape(self: *Self, comptime new_shape: []const usize) anyerror!Tensor(dtype, utils.toOptionalShape(new_shape)) {
-            const Typ = Tensor(dtype, utils.toOptionalShape(new_shape));
+        pub fn reshape(self: *Self, comptime new_shape: []const usize) anyerror!Tensor(dtype, &utils.toOptionalShape(new_shape)) {
+            const Typ = Tensor(dtype, &utils.toOptionalShape(new_shape));
             var tensor = try Typ.declare(self.allocator, .{});
             tensor.data = self.data;
 

@@ -29,12 +29,12 @@ pub fn sliceEqual(a: []const usize, b: []const usize) bool {
     return true;
 }
 
-pub fn toOptionalShape(comptime shape: []const usize) ?[]const ?usize {
-    comptime var tmp: [shape.len]?usize = undefined;
+pub fn toOptionalShape(comptime shape: []const usize) [shape.len]?usize {
+    var tmp: [shape.len]?usize = undefined;
     inline for (shape, 0..) |val, i| {
         tmp[i] = val; // 自动提升为 ?usize
     }
-    return &tmp;
+    return tmp;
 }
 
 pub fn printOptional(writer: anytype, comptime fmt: []const u8, value: anytype) !void {
