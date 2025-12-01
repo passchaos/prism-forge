@@ -676,6 +676,8 @@ test "shape transform" {
     const t112_reshaped = try t112.reshape(&.{ 4, 1 });
     std.debug.print("t112 reshaped: {f}\n", .{t112_reshaped});
 
+    std.debug.print("t112: {f}\n", .{t112});
+
     const Tensor41 = Tensor(DataType.u32, &.{ 4, 1 });
 
     var arr1_normal = try std.ArrayList(u32).initCapacity(allocator, 5);
