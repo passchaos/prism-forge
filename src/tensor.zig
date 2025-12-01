@@ -163,6 +163,14 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
             return tensor;
         }
 
+        fn signed_axis_to_unsigned(self: *const Self, axis: isize) usize {
+            if (axis < 0) {
+                return @intCast(axis + self.ndim());
+            }
+
+            return @intCast(axis);
+        }
+
         // create method
         pub fn from_data(allocator: std.mem.Allocator, opts: Opts, arr: std.ArrayList(T)) anyerror!Self {
             var tensor = try Self.declare(allocator, opts);
