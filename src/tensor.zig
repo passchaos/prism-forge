@@ -233,7 +233,7 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
             };
 
             if (is_all_static) {
-                if (comptime !utils.sliceEqual(&static_shape, utils.getDims(@TypeOf(arr)))) {
+                if (comptime !utils.sliceEqual(usize, &static_shape, utils.getDims(@TypeOf(arr)))) {
                     @compileError(std.fmt.comptimePrint("data shape is mismatched with type: type_shape= {any} data_shape= {any}", .{ static_shape, utils.getDims(@TypeOf(arr)) }));
                 }
             }
@@ -452,6 +452,39 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
                 return self._strides;
             } else {
                 return self._strides.items;
+            }
+        }
+
+        pub fn equal(self: *const Self, other: *const Self) bool {
+            if (!utils.sliceEqual(usize, asSlice(&self._shape), asSlice(&other._shape))) return false;
+            if (!utils.sliceEqual(usize, asSlice(&self._strides), asSlice(&other._strides))) return false;
+
+            if (self.size() != other.size()) return false;
+
+            if (self.data) |sd| {
+                if (other.data) |od| {
+                    return utils.sliceEqual(T, sd.items, od.items);
+                } else {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+
+        pub fn approxEqual(self: *const Self, other: *const Self, relEps: T, absEps: T) bool {
+            if (!utils.sliceEqual(usize, asSlice(&self._shape), asSlice(&other._shape))) return false;
+            if (!utils.sliceEqual(usize, asSlice(&self._strides), asSlice(&other._strides))) return false;
+            if (self.size() != other.size()) return false;
+
+            if (self.data) |sd| {
+                if (other.data) |od| {
+                    return utils.sliceApproxEqual(T, sd.items, od.items, relEps, absEps);
+                } else {
+                    return false;
+                }
+            } else {
+                return false;
             }
         }
 
@@ -801,4 +834,38 @@ test "map related methods" {
 
     t11.map_i(FnWithCtx.double);
     std.debug.print("t11: {f}\n", .{t11});
+}
+
+test "equal judge" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const TensorF32x3x2 = Tensor(DataType.f32, &.{ 3, 2 });
+
+    const arr1 = [3][2]f32{
+        [2]f32{ 1.1, 2.2 },
+        [2]f32{ 3.3, 4.01 },
+        [2]f32{ 5.9, 6.1 },
+    };
+
+    const t11 = try TensorF32x3x2.from_shaped_data(allocator, &arr1);
+
+    const arr2 = [3][2]f32{
+        [2]f32{ 1.1, 2.2 },
+        [2]f32{ 3.3, 4.01 },
+        [2]f32{ 5.9, 6.1000005 },
+    };
+
+    const a: []const f32 = &.{ 5.9, 6.1000001 };
+    const b: []const f32 = &.{ 5.9, 6.1 };
+
+    try std.testing.expect(utils.sliceEqual(f32, a, b));
+
+    const t11_1 = try TensorF32x3x2.from_shaped_data(allocator, &arr2);
+    try std.testing.expect(!t11.equal(&t11_1));
+    try std.testing.expect(t11.approxEqual(&t11_1, 0.0000001, 0.00001));
 }

@@ -1,8 +1,19 @@
 const std = @import("std");
 
 pub fn approxEqual(comptime T: type, a: T, b: T, relEps: T, absEps: T) bool {
-    const diff = @abs(a - b);
-    return diff <= absEps or diff <= relEps * @max(@abs(a), @abs(b));
+    return std.math.approxEqAbs(T, a, b, absEps) or
+        std.math.approxEqRel(T, a, b, relEps);
+}
+
+pub fn sliceApproxEqual(comptime T: type, a: []const T, b: []const T, relEps: T, absEps: T) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| if (!approxEqual(T, x, y, relEps, absEps)) return false;
+    return true;
+}
+
+test "approx equal" {
+    try std.testing.expect(approxEqual(f32, 2.0001, 2.0000999999, 0.000001, 0.0001));
+    try std.testing.expect(sliceApproxEqual(f64, &.{ 10.000001, 2.99999999 }, &.{ 10.0, 3.0 }, 0.0003, 0.00001));
 }
 
 pub fn isNumber(comptime T: type) bool {
@@ -23,9 +34,17 @@ pub fn isInt(comptime T: type) bool {
     };
 }
 
-pub fn sliceEqual(a: []const usize, b: []const usize) bool {
+pub fn sliceEqual(comptime T: type, a: []const T, b: []const T) bool {
     if (a.len != b.len) return false;
-    for (a, b) |x, y| if (x != y) return false;
+    for (a, b) |x, y| {
+        const res = x != y;
+        // @compileLog("x: {} y: {}\n", .{ x, y });
+
+        if (res) {
+            return false;
+        }
+    }
+
     return true;
 }
 
