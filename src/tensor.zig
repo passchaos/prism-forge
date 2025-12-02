@@ -56,7 +56,7 @@ pub const Storage = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, device: Device, buf: ?[*]u8, bytes_size: usize) Self {
+    pub fn init(allocator: std.mem.Allocator, device: Device, buf: [*]u8, bytes_size: usize) Self {
         return Self{
             .allocator = allocator,
             .device = device,
@@ -127,19 +127,23 @@ pub const Tensor = struct {
         return Self{ .storage = storage, .layout = layout };
     }
 
-    pub fn from_shaped_data(allocator: std.mem.Allocator, dtype: DataType, arr: anytype) anyerror!Self {
+    pub fn from_shaped_data(allocator: std.mem.Allocator, dtype: DataType, comptime arr: anytype) anyerror!Self {
         const shapes = utils.getArrayRefShapes(@TypeOf(arr));
-        const buf = utils.getArrayRefBuf(dtype.toType(), arr);
-        const bytes_size = buf.len * dtype.dtypeSize();
+        const buf, const data_len = getArrayRefBuf(dtype, arr);
 
-        const storage = Storage.init(allocator, Device.Cpu, buf.ptr, bytes_size);
+        const bytes_size = data_len * dtype.dtypeSize();
+
+        var arr_list = try std.ArrayList(usize).initCapacity(allocator, shapes.len);
+        try arr_list.appendSlice(allocator, shapes);
+
+        var storage = Storage.init(allocator, Device.Cpu, buf, bytes_size);
         storage.retain();
 
-        const layout = Layout.init(allocator, dtype, shapes);
+        var layout = Layout.init(allocator, dtype, arr_list);
 
         return Self{
-            .storage = Storage,
-            .layout = layout,
+            .storage = &storage,
+            .layout = &layout,
         };
     }
 
@@ -386,11 +390,11 @@ pub const Tensor = struct {
     }
 
     pub fn shape(self: *const Self) []const usize {
-        return &self.layout._shapes;
+        return self.layout._shapes.items;
     }
 
     pub fn strides(self: *const Self) []const usize {
-        return &self.layout._strides;
+        return self.layout._strides.items;
     }
 
     pub fn equal(self: *const Self, other: *const Self) bool {
@@ -444,7 +448,7 @@ pub const Tensor = struct {
         if (depth == dims) {
             const flat_index = try indices_to_flat(indices, asSlice(&self.shape()), asSlice(&self.strides()));
 
-            try utils.printOptional(writer, "{}", self.get_data_idx(flat_index));
+            try utils.printOptional(writer, "{}", self.get_data_idx(self.layout._dtype, flat_index));
         } else if (depth == dims - 1) {
             try self.fmt_1d_slice(writer, indices);
         } else {
@@ -590,6 +594,29 @@ pub const Tensor = struct {
         _ = try writer.write("]");
     }
 };
+
+fn getArrayRefBuf(dtype: DataType, arr: anytype) struct { [*]u8, usize } {
+    const info = @typeInfo(@TypeOf(arr));
+
+    const T = dtype.toType();
+
+    const buf: []T = switch (info) {
+        .pointer => |ptr| switch (ptr.size) {
+            .one => switch (@typeInfo(ptr.child)) {
+                .array => @as([]T, @ptrCast(@constCast(arr)))[0..],
+                .pointer => |pp| switch (pp.size) {
+                    .slice => arr.*,
+                    else => @compileError("only support pointer to one"),
+                },
+                else => @compileError(std.fmt.comptimePrint("only support pointer to one: data_type= {any}", .{info})),
+            },
+            else => @compileError("only support pointer to one"),
+        },
+        else => @compileError("only support pointer to one"),
+    };
+
+    return .{ buf.ptr, buf.len };
+}
 
 test "dyn tensor create" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};

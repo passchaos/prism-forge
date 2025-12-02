@@ -134,27 +134,6 @@ pub fn getArrayRefShapes(comptime T: type) []const usize {
     }
 }
 
-pub fn getArrayRefBuf(T: type, arr: anytype) struct { [*]u8, usize } {
-    const info = @typeInfo(@TypeOf(arr));
-
-    const buf: []T = switch (info) {
-        .pointer => |ptr| switch (ptr.size) {
-            .one => switch (@typeInfo(ptr.child)) {
-                .array => @as([]T, @ptrCast(@constCast(arr)))[0..],
-                .pointer => |pp| switch (pp.size) {
-                    .slice => arr.*,
-                    else => @compileError("only support pointer to one"),
-                },
-                else => @compileError(std.fmt.comptimePrint("only support pointer to one: data_type= {any}", .{info})),
-            },
-            else => @compileError("only support pointer to one"),
-        },
-        else => @compileError("only support pointer to one"),
-    };
-
-    return .{ buf.ptr, buf.len };
-}
-
 fn ElemOf(comptime V: type) type {
     return switch (@typeInfo(V)) {
         .pointer => |p| switch (p.size) {
