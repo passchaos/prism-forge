@@ -152,9 +152,25 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
             }
         }
 
-        pub fn reshape(self: *Self, comptime new_shape: []const usize) anyerror!Tensor(dtype, &utils.toOptionalShape(new_shape)) {
+        pub fn reshapeComp(self: *Self, comptime new_shape: []const usize) anyerror!Tensor(dtype, &utils.toOptionalShape(new_shape)) {
             const Typ = Tensor(dtype, &utils.toOptionalShape(new_shape));
             var tensor = try Typ.declare(self.allocator, .{});
+            tensor.data = self.data;
+
+            // take self data
+            self.data = null;
+
+            return tensor;
+        }
+
+        pub fn reshape(self: *Self, new_shape: []const usize) anyerror!Tensor(dtype, null) {
+            const Typ = Tensor(dtype, null);
+
+            var shape_n = try std.ArrayList(usize).initCapacity(self.allocator, new_shape.len);
+            try shape_n.appendSlice(self.allocator, new_shape);
+            errdefer shape_n.deinit(self.allocator);
+
+            var tensor = try Typ.declare(self.allocator, .{ .shape = shape_n });
             tensor.data = self.data;
 
             // take self data
@@ -173,8 +189,16 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
 
         // create method
         pub fn from_data(allocator: std.mem.Allocator, opts: Opts, arr: std.ArrayList(T)) anyerror!Self {
+            var arr_i = arr;
+            errdefer arr_i.deinit(allocator);
+
             var tensor = try Self.declare(allocator, opts);
-            tensor.data = arr;
+
+            if (tensor.size() != arr_i.items.len) {
+                return error.DataSizeMismatch;
+            }
+
+            tensor.data = arr_i;
 
             return tensor;
         }
@@ -408,6 +432,7 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
             }
 
             if (!is_static_rank) {
+                // std.debug.print("deinit: {f} shape= {any}\n", .{ self, self.shape() });
                 @constCast(&self._shape).deinit(allocator);
                 @constCast(&self._strides).deinit(allocator);
             }
@@ -743,22 +768,27 @@ test "shape transform" {
     const Tensor112 = Tensor(DataType.u32, &.{ 2, 2 });
     const Tensor122 = Tensor(DataType.u32, &.{ 3, 3 });
 
-    var arr1 = try std.ArrayList(u32).initCapacity(allocator, 5);
-    try arr1.appendSlice(allocator, &[_]u32{ 1, 2, 3, 4, 5 });
+    var arr1 = try std.ArrayList(u32).initCapacity(allocator, 4);
+    try arr1.appendSlice(allocator, &[_]u32{ 1, 2, 3, 4 });
     var t112 = try Tensor112.from_data(allocator, .{}, arr1);
     defer t112.deinit(allocator);
 
     try t112.transpose();
 
-    const t112_reshaped = try t112.reshape(&.{ 4, 1 });
+    var t112_reshaped = try t112.reshape(&.{ 4, 1 });
+    defer t112_reshaped.deinit(allocator);
     std.debug.print("t112 reshaped: {f}\n", .{t112_reshaped});
+
+    const t112_comp_reshaped = try t112_reshaped.reshapeComp(&.{ 4, 1 });
+    defer t112_comp_reshaped.deinit(allocator);
+    std.debug.print("t112 comp reshaped: {f}\n", .{t112_comp_reshaped});
 
     std.debug.print("t112: {f}\n", .{t112});
 
     const Tensor41 = Tensor(DataType.u32, &.{ 4, 1 });
 
-    var arr1_normal = try std.ArrayList(u32).initCapacity(allocator, 5);
-    try arr1_normal.appendSlice(allocator, &[_]u32{ 6, 7, 8, 9, 10 });
+    var arr1_normal = try std.ArrayList(u32).initCapacity(allocator, 4);
+    try arr1_normal.appendSlice(allocator, &[_]u32{ 6, 7, 8, 9 });
     const t112_normal = try Tensor41.from_data(allocator, .{}, arr1_normal);
     defer t112_normal.deinit(allocator);
     std.debug.print("t112 normal: {f}\n", .{t112_normal});
@@ -769,14 +799,16 @@ test "shape transform" {
         std.debug.print("different type\n", .{});
     }
 
-    defer t112_reshaped.deinit(allocator);
+    // defer t112_reshaped.deinit(allocator);
 
     var arr2 = try std.ArrayList(u32).initCapacity(allocator, 6);
-    try arr2.appendSlice(allocator, &[_]u32{ 1, 2, 3, 4, 5, 6 });
+    try arr2.appendSlice(allocator, &[_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9 });
     var t122 = try Tensor122.from_data(allocator, .{}, arr2);
     defer t122.deinit(allocator);
 
+    std.debug.print("t122: {f}\n", .{t122});
     try t122.transpose();
+    std.debug.print("transposed t122: {f}\n", .{t122});
 
     const Tensor22 = Tensor(DataType.f32, &.{ null, 5 });
     var t22 = try Tensor22.eye(allocator, 5);
