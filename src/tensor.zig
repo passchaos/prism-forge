@@ -179,6 +179,34 @@ pub fn Tensor(comptime dtype: DataType, comptime DimsTmpl: ?[]const ?usize) type
             return tensor;
         }
 
+        pub fn unsqueeze(self: *Self, comptime dim: usize) if (DimsTmpl) |dims_tmpl| anyerror!Tensor(dtype, utils.insertDim(dims_tmpl, dim)) else anyerror!void {
+            if (DimsTmpl) |dims_tmpl| {
+                const new_shape = utils.insertDim(dims_tmpl, dim);
+
+                const Typ = Tensor(dtype, new_shape);
+                var tensor = if (is_all_static) try Typ.declare(self.allocator, .{}) else try Typ.declare(self.allocator, .{ .shape = new_shape });
+                tensor.data = self.data;
+
+                // take self data
+                self.data = null;
+
+                return tensor;
+            } else {
+                try self._shape.insert(self.allocator, dim, 1);
+
+                var dyn_strides = try std.ArrayList(usize).initCapacity(allocator, dyn_shape.items.len);
+                try dyn_strides.appendNTimes(allocator, 0, dyn_shape.items.len);
+
+                var acc: usize = 1;
+                var i: usize = dyn_shape.items.len - 1;
+                while (i != 0) : (i -= 1) {
+                    dyn_strides.items[i] = acc;
+                    acc *= dyn_shape.items[i];
+                }
+                dyn_strides.items[0] = acc;
+            }
+        }
+
         fn signed_axis_to_unsigned(self: *const Self, axis: isize) usize {
             if (axis < 0) {
                 return @intCast(axis + self.ndim());
