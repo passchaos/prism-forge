@@ -11,6 +11,22 @@ pub fn sliceApproxEqual(comptime T: type, a: []const T, b: []const T, relEps: T,
     return true;
 }
 
+pub fn computeStrides(allocator: std.mem.Allocator, dims: std.ArrayList(usize)) std.ArrayList(usize) {
+    const rank = dims.items.len;
+    var dyn_strides = try std.ArrayList(usize).initCapacity(allocator, rank);
+    try dyn_strides.appendNTimes(allocator, 0, rank);
+
+    var acc: usize = 1;
+    var i: usize = rank - 1;
+    while (i != 0) : (i -= 1) {
+        dyn_strides.items[i] = acc;
+        acc *= dims.items[i];
+    }
+    dyn_strides.items[0] = acc;
+
+    return dyn_strides;
+}
+
 test "approx equal" {
     try std.testing.expect(approxEqual(f32, 2.0001, 2.0000999999, 0.000001, 0.0001));
     try std.testing.expect(sliceApproxEqual(f64, &.{ 10.000001, 2.99999999 }, &.{ 10.0, 3.0 }, 0.0003, 0.00001));
@@ -101,7 +117,7 @@ fn dimsHelper(comptime T: type) []const usize {
     }
 }
 
-pub fn getDims(comptime T: type) []const usize {
+pub fn getArrayRefShapes(comptime T: type) []const usize {
     switch (@typeInfo(T)) {
         .pointer => |p| switch (p.size) {
             .one => switch (@typeInfo(p.child)) {
@@ -116,6 +132,27 @@ pub fn getDims(comptime T: type) []const usize {
         },
         else => @compileError("support only array pointer"),
     }
+}
+
+pub fn getArrayRefBuf(T: type, arr: anytype) struct { [*]u8, usize } {
+    const info = @typeInfo(@TypeOf(arr));
+
+    const buf: []T = switch (info) {
+        .pointer => |ptr| switch (ptr.size) {
+            .one => switch (@typeInfo(ptr.child)) {
+                .array => @as([]T, @ptrCast(@constCast(arr)))[0..],
+                .pointer => |pp| switch (pp.size) {
+                    .slice => arr.*,
+                    else => @compileError("only support pointer to one"),
+                },
+                else => @compileError(std.fmt.comptimePrint("only support pointer to one: data_type= {any}", .{info})),
+            },
+            else => @compileError("only support pointer to one"),
+        },
+        else => @compileError("only support pointer to one"),
+    };
+
+    return .{ buf.ptr, buf.len };
 }
 
 fn ElemOf(comptime V: type) type {
