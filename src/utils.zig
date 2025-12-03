@@ -11,7 +11,7 @@ pub fn sliceApproxEqual(comptime T: type, a: []const T, b: []const T, relEps: T,
     return true;
 }
 
-pub fn computeStrides(allocator: std.mem.Allocator, dims: std.ArrayList(usize)) std.ArrayList(usize) {
+pub fn computeStrides(allocator: std.mem.Allocator, dims: std.ArrayList(usize)) !std.ArrayList(usize) {
     const rank = dims.items.len;
     var dyn_strides = try std.ArrayList(usize).initCapacity(allocator, rank);
     try dyn_strides.appendNTimes(allocator, 0, rank);
@@ -92,11 +92,7 @@ pub fn toOptionalShape(comptime shape: []const usize) [shape.len]?usize {
 }
 
 pub fn printOptional(writer: anytype, comptime fmt: []const u8, value: anytype) !void {
-    if (value) |v| {
-        try writer.print(fmt, .{v});
-    } else {
-        try writer.print("null", .{});
-    }
+    try writer.print(fmt, .{value});
 }
 
 pub fn toArray(comptime slice: []const usize) [slice.len]usize {
@@ -114,6 +110,41 @@ fn dimsHelper(comptime T: type) []const usize {
         return &[_]usize{info.array.len} ++ dimsHelper(info.array.child);
     } else {
         return &[_]usize{};
+    }
+}
+
+fn elementType(comptime T: type) type {
+    // @compileLog("type: " ++ @typeName(T));
+    return switch (@typeInfo(T)) {
+        .array => |info| elementType(info.child),
+        else => T,
+    };
+}
+
+pub fn getArrayRefItemType(comptime Ptr: type) type {
+    const Deref = @typeInfo(Ptr).pointer.child;
+    return elementType(Deref);
+}
+
+pub fn flattenAsBytes(comptime T: type, arr: T) []const u8 {
+    const info = @typeInfo(T);
+    switch (info) {
+        .pointer => |ptr| switch (@typeInfo(ptr.child)) {
+            .array => |a| {
+                const child = a.child;
+                if (@typeInfo(child) == .array) {
+                    // 多维数组，递归展开
+                    const flat: [*]child = @ptrCast(@constCast(arr));
+                    @compileLog("flat info: child= {} flat= {}\n", .{ @typeInfo(child), @TypeOf(flat) });
+                    return flattenAsBytes(child, flat[0..a.len]);
+                } else {
+                    // 一维数组，直接转
+                    return std.mem.asBytes(arr);
+                }
+            },
+            else => @compileError("Expected array type" ++ std.fmt.comptimePrint("{}", .{info})),
+        },
+        else => @compileError("Expected pointer type" ++ std.fmt.comptimePrint("{}", .{info})),
     }
 }
 

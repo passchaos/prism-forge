@@ -11,6 +11,16 @@ pub const DataType = enum {
     i32,
     u32,
 
+    pub fn typeToDataType(comptime T: type) DataType {
+        return switch (T) {
+            f16 => .f16,
+            f32 => .f32,
+            i32 => .i32,
+            u32 => .u32,
+            else => @compileError("Unsupported type: " ++ @typeName(T)),
+        };
+    }
+
     pub fn toType(self: DataType) type {
         return switch (self) {
             .f16 => f16,
@@ -20,26 +30,50 @@ pub const DataType = enum {
         };
     }
     pub fn dtypeSize(self: DataType) usize {
-        return @sizeOf(self.toType());
+        return switch (self) {
+            .f16 => 2,
+            .f32 => 4,
+            .i32 => 4,
+            .u32 => 4,
+        };
+    }
+};
+
+const Scalar = union(enum) {
+    f16: f16,
+    f32: f32,
+    i32: i32,
+    u32: u32,
+
+    pub fn format(self: @This(), writer: *std.io.Writer) std.Io.Writer.Error!void {
+        return switch (self) {
+            .f16 => writer.print("{d}", .{self.f16}),
+            .f32 => writer.print("{d}", .{self.f32}),
+            .i32 => writer.print("{d}", .{self.i32}),
+            .u32 => writer.print("{d}", .{self.u32}),
+        };
     }
 };
 
 pub const Layout = struct {
-    allocator: std.mem.Allocator,
+    allocator: *const std.mem.Allocator,
     _dtype: DataType,
     _shapes: std.ArrayList(usize),
     _strides: std.ArrayList(usize),
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, dt: DataType, shapes: std.ArrayList(usize)) Self {
-        const strides = utils.computeStrides(allocator, shapes);
-        return Self{
+    pub fn init(allocator: *const std.mem.Allocator, dt: DataType, shapes: std.ArrayList(usize)) !Self {
+        const strides = try utils.computeStrides(allocator.*, shapes);
+
+        const layout = Self{
             ._dtype = dt,
             ._shapes = shapes,
             ._strides = strides,
             .allocator = allocator,
         };
+
+        return layout;
     }
 
     pub fn equal(self: *const Self, other: *const Self) bool {
@@ -48,7 +82,7 @@ pub const Layout = struct {
 };
 
 pub const Storage = struct {
-    allocator: std.mem.Allocator,
+    allocator: *const std.mem.Allocator,
     device: Device,
     buf: [*]u8,
     bytes_size: usize,
@@ -56,7 +90,7 @@ pub const Storage = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, device: Device, buf: [*]u8, bytes_size: usize) Self {
+    pub fn init(allocator: *const std.mem.Allocator, device: Device, buf: [*]u8, bytes_size: usize) Self {
         return Self{
             .allocator = allocator,
             .device = device,
@@ -112,56 +146,62 @@ fn flat_to_indices(flat_index: usize, strides: []const usize) []const usize {
 pub const Tensor = struct {
     const Self = @This();
 
-    storage: *Storage,
-    layout: *Layout,
+    allocator: *const std.mem.Allocator,
+    storage: Storage,
+    layout: Layout,
 
     // create method
-    pub fn from_data(allocator: std.mem.Allocator, dtype: DataType, shapes: []const usize, data: std.ArrayList(dtype.toType())) anyerror!Self {
-        const bytes_size = data.items.len * dtype.dtypeSize();
+    pub fn fromData(allocator: *const std.mem.Allocator, dtype_i: DataType, shapes: []const usize, data: std.ArrayList(dtype.toType())) anyerror!Self {
+        const bytes_size = data.items.len * dtype_i.dtypeSize();
 
         const storage = Storage.init(allocator, Device.Cpu, data.items.ptr, bytes_size);
         storage.retain();
 
-        const layout = Layout.init(allocator, dtype, shapes);
+        const layout = Layout.init(allocator, dtype_i, shapes);
 
-        return Self{ .storage = storage, .layout = layout };
+        return Self{ .allocator = allocator, .storage = storage, .layout = layout };
     }
 
-    pub fn from_shaped_data(allocator: std.mem.Allocator, dtype: DataType, comptime arr: anytype) anyerror!Self {
+    pub fn fromShapedData(allocator: *const std.mem.Allocator, comptime arr: anytype) anyerror!Self {
+        const T = utils.getArrayRefItemType(@TypeOf(arr));
+        const dtype_i = DataType.typeToDataType(T);
+
         const shapes = utils.getArrayRefShapes(@TypeOf(arr));
-        const buf, const data_len = getArrayRefBuf(dtype, arr);
 
-        const bytes_size = data_len * dtype.dtypeSize();
+        const buf_r: []u8 = @ptrCast(@constCast(arr));
 
-        var arr_list = try std.ArrayList(usize).initCapacity(allocator, shapes.len);
-        try arr_list.appendSlice(allocator, shapes);
+        const bytes_size = buf_r.len;
 
-        var storage = Storage.init(allocator, Device.Cpu, buf, bytes_size);
+        var arr_list = try std.ArrayList(usize).initCapacity(allocator.*, shapes.len);
+        try arr_list.appendSlice(allocator.*, shapes);
+
+        var storage = Storage.init(allocator, Device.Cpu, buf_r.ptr, bytes_size);
         storage.retain();
 
-        var layout = Layout.init(allocator, dtype, arr_list);
+        const layout = try Layout.init(allocator, dtype_i, arr_list);
 
         return Self{
-            .storage = &storage,
-            .layout = &layout,
+            .allocator = allocator,
+            .storage = storage,
+            .layout = layout,
         };
     }
 
     // attributes
-    pub fn data_slice(self: *Self, dtype: DataType) []dtype.toType() {
-        const T = dtype.toType();
-        const d_buf = @as([*]T, @ptrCast(self.storage.buf));
+    pub fn data_slice(self: *Self, comptime dtype_i: DataType) []dtype_i.toType() {
+        const T = dtype_i.toType();
+        const d_buf: [*]T = @ptrCast(@alignCast(self.storage.buf));
 
-        const d_len = self.storage.bytes_size / dtype.dtypeSize();
+        const d_len = self.storage.bytes_size / dtype_i.dtypeSize();
         return d_buf[0..d_len];
     }
 
     // data transform
-    pub fn map_inplace(self: *Self, dtype: DataType, f: fn (dtype.toType()) dtype.toType()) void {
-        for (self.data_slice(dtype)) |*val| {
-            val.* = f(val.*);
-        }
-    }
+    // pub fn map_inplace(self: *Self, dtype: DataType, f: fn (dtype.toType()) dtype.toType()) void {
+    //     for (self.data_slice(dtype)) |*val| {
+    //         val.* = f(val.*);
+    //     }
+    // }
 
     //  pub fn map(self: *const Self, allocator: std.mem.Allocator, comptime dtype1: DataType, f: fn (T) dtype1.toType()) anyerror!Tensor(dtype1) {
     //      const data = if (self.data) |d| d else return error.DataIsNull;
@@ -377,12 +417,22 @@ pub const Tensor = struct {
         self.storage.release();
     }
 
-    fn get_data_idx(self: *const Self, dtype: DataType, idx: usize) ?dtype.toType() {
-        return if (self.data) |data| data.items[idx] else null;
+    fn get_data_idx(self: *const Self, dtype_i: DataType, idx: usize) Scalar {
+        const c_s = @constCast(self);
+        return switch (dtype_i) {
+            .f16 => Scalar{ .f16 = c_s.data_slice(DataType.f16)[idx] },
+            .f32 => Scalar{ .f32 = c_s.data_slice(DataType.f32)[idx] },
+            .i32 => Scalar{ .i32 = c_s.data_slice(DataType.i32)[idx] },
+            .u32 => Scalar{ .u32 = c_s.data_slice(DataType.u32)[idx] },
+        };
     }
 
     pub fn size(self: *const Self) usize {
         return self.storage.bytes_size / self.layout._dtype.dtypeSize();
+    }
+
+    pub fn dtype(self: *const Self) DataType {
+        return self.layout._dtype;
     }
 
     pub fn ndim(self: *const Self) usize {
@@ -406,12 +456,12 @@ pub const Tensor = struct {
         return std.mem.eql(self.layout._dtype, self_data_slice, other_data_slice);
     }
 
-    pub fn approxEqual(self: *const Self, other: *const Self, dtype: DataType, relEps: dtype.toType(), absEps: dtype.toType()) bool {
+    pub fn approxEqual(self: *const Self, other: *const Self, dtype_i: DataType, relEps: dtype_i.toType(), absEps: dtype_i.toType()) bool {
         if (!self.layout.equal(other.layout)) return false;
 
         const self_data_slice = self.data_slice(self.layout._dtype);
         const other_data_slice = other.data_slice(other.layout._dtype);
-        return utils.sliceApproxEqual(dtype.toType(), self_data_slice, other_data_slice, relEps, absEps);
+        return utils.sliceApproxEqual(dtype_i.toType(), self_data_slice, other_data_slice, relEps, absEps);
     }
 
     pub fn format(
@@ -420,7 +470,7 @@ pub const Tensor = struct {
     ) std.Io.Writer.Error!void {
         try writer.print(
             \\Tensor{{
-            \\  .TypeName = {s}
+            \\  .TaypeName = {s}
             \\  .Dtype = {any},
             \\  .Shape = ({any}, {any}),
             \\  .Strides = ({any}, {any}),
@@ -437,10 +487,10 @@ pub const Tensor = struct {
         _ = try writer.write("\n}");
     }
 
-    pub fn getIndices(self: *const Self, dtype: DataType, indices: []const usize) !dtype.toType() {
-        const flat_index = try indices_to_flat(&indices, &self.shape(), &self.strides());
-        return self.data_slice(dtype)[flat_index];
-    }
+    // pub fn getIndices(self: *const Self, dtype_i: DataType, indices: []const usize) !dtype_i.toType() {
+    //     const flat_index = try indices_to_flat(&indices, &self.shape(), &self.strides());
+    //     return self.data_slice(dtype)[flat_index];
+    // }
 
     fn fmt_recursive(self: *const Self, writer: *std.Io.Writer, depth: usize, indices: []const usize) anyerror!void {
         const dims = self.ndim();
@@ -448,7 +498,7 @@ pub const Tensor = struct {
         if (depth == dims) {
             const flat_index = try indices_to_flat(indices, asSlice(&self.shape()), asSlice(&self.strides()));
 
-            try utils.printOptional(writer, "{}", self.get_data_idx(self.layout._dtype, flat_index));
+            try writer.print("{f}", .{self.get_data_idx(self.layout._dtype, flat_index)});
         } else if (depth == dims - 1) {
             try self.fmt_1d_slice(writer, indices);
         } else {
@@ -466,20 +516,20 @@ pub const Tensor = struct {
 
         const show_all = current_dim_size <= 2 * pad_show_count;
 
-        var slice_indices = try std.ArrayList(usize).initCapacity(self.allocator, 4);
-        defer slice_indices.deinit(self.allocator);
+        var slice_indices = try std.ArrayList(usize).initCapacity(self.allocator.*, 4);
+        defer slice_indices.deinit(self.allocator.*);
 
         if (show_all) {
             for (0..current_dim_size) |i| {
-                try slice_indices.append(self.allocator, i);
+                try slice_indices.append(self.allocator.*, i);
             }
         } else {
             for (0..pad_show_count) |i| {
-                try slice_indices.append(self.allocator, i);
+                try slice_indices.append(self.allocator.*, i);
             }
 
             for (current_dim_size - pad_show_count..current_dim_size) |i| {
-                try slice_indices.append(self.allocator, i);
+                try slice_indices.append(self.allocator.*, i);
             }
         }
 
@@ -514,11 +564,11 @@ pub const Tensor = struct {
                 }
             }
 
-            var indices = try std.ArrayList(usize).initCapacity(self.allocator, 4);
-            defer indices.deinit(self.allocator);
+            var indices = try std.ArrayList(usize).initCapacity(self.allocator.*, 4);
+            defer indices.deinit(self.allocator.*);
 
-            try indices.appendSlice(self.allocator, base_indices);
-            try indices.append(self.allocator, slice_idx);
+            try indices.appendSlice(self.allocator.*, base_indices);
+            try indices.append(self.allocator.*, slice_idx);
 
             try self.fmt_recursive(writer, depth + 1, indices.items);
         }
@@ -535,6 +585,8 @@ pub const Tensor = struct {
         const line_size = 18;
 
         _ = try writer.write("[");
+
+        const allocator = self.allocator.*;
         if (current_dim_size <= max_items) {
             for (0..current_dim_size) |i| {
                 if (i > 0) {
@@ -545,7 +597,6 @@ pub const Tensor = struct {
                     }
                 }
 
-                const allocator = self.allocator;
                 var indices = try std.ArrayList(usize).initCapacity(allocator, 4);
                 defer indices.deinit(allocator);
 
@@ -554,7 +605,7 @@ pub const Tensor = struct {
 
                 const flat_idx = try indices_to_flat(indices.items, asSlice(&self.shape()), asSlice(&self.strides()));
 
-                try utils.printOptional(writer, "{}", self.get_data_idx(flat_idx));
+                try writer.print("{f}", .{self.get_data_idx(self.layout._dtype, flat_idx)});
             }
         } else {
             for (0..pad_show_count) |i| {
@@ -562,28 +613,28 @@ pub const Tensor = struct {
                     _ = try writer.write(" ");
                 }
 
-                var indices = try std.ArrayList(usize).initCapacity(self.allocator, 4);
-                defer indices.deinit(self.allocator);
+                var indices = try std.ArrayList(usize).initCapacity(allocator, 4);
+                defer indices.deinit(allocator);
 
-                try indices.appendSlice(self.allocator, base_indices);
-                try indices.append(self.allocator, i);
+                try indices.appendSlice(allocator, base_indices);
+                try indices.append(allocator, i);
 
                 const flat_idx = try indices_to_flat(indices.items, asSlice(&self.shape()), asSlice(&self.strides()));
 
-                try utils.printOptional(writer, "{}", self.get_data_idx(flat_idx));
+                try writer.print("{f}", .{self.get_data_idx(self.layout._dtype, flat_idx)});
             }
             _ = try writer.write(" ... ");
 
             for (current_dim_size - pad_show_count..current_dim_size) |i| {
-                var indices = try std.ArrayList(usize).initCapacity(self.allocator, 4);
-                defer indices.deinit(self.allocator);
+                var indices = try std.ArrayList(usize).initCapacity(allocator, 4);
+                defer indices.deinit(allocator);
 
-                try indices.appendSlice(self.allocator, base_indices);
-                try indices.append(self.allocator, i);
+                try indices.appendSlice(allocator, base_indices);
+                try indices.append(allocator, i);
 
                 const flat_idx = try indices_to_flat(indices.items, asSlice(&self.shape()), asSlice(&self.strides()));
 
-                try utils.printOptional(writer, "{}", self.get_data_idx(flat_idx));
+                try writer.print("{f}", .{self.get_data_idx(self.layout._dtype, flat_idx)});
 
                 if (i < current_dim_size - 1) {
                     _ = try writer.write(" ");
@@ -595,15 +646,13 @@ pub const Tensor = struct {
     }
 };
 
-fn getArrayRefBuf(dtype: DataType, arr: anytype) struct { [*]u8, usize } {
+fn getArrayRefBuf(comptime arr: anytype) struct { [*]u8, usize } {
     const info = @typeInfo(@TypeOf(arr));
 
-    const T = dtype.toType();
-
-    const buf: []T = switch (info) {
+    const buf: []u8 = switch (info) {
         .pointer => |ptr| switch (ptr.size) {
             .one => switch (@typeInfo(ptr.child)) {
-                .array => @as([]T, @ptrCast(@constCast(arr)))[0..],
+                .array => @as([]u8, @ptrCast(@constCast(arr)))[0..],
                 .pointer => |pp| switch (pp.size) {
                     .slice => arr.*,
                     else => @compileError("only support pointer to one"),
@@ -627,15 +676,16 @@ test "dyn tensor create" {
 
     const allocator = arena.allocator();
 
-    {
-        const arr1 = [3][2]f32{
-            [2]f32{ 1.0, 2.0 },
-            [2]f32{ 3.0, 4.0 },
-            [2]f32{ 5.0, 6.0 },
-        };
-        const t111 = try Tensor.from_shaped_data(allocator, DataType.f32, &arr1);
-        std.debug.print("t111: {f}\n", .{t111});
-    }
+    // {
+    const arr1 = [3][2]f32{
+        [2]f32{ 1.0, 2.0 },
+        [2]f32{ 3.0, 4.0 },
+        [2]f32{ 5.0, 6.0 },
+    };
+    const t111 = try Tensor.fromShapedData(&allocator, &arr1);
+
+    std.debug.print("t111: {f}\n", .{t111});
+    // }
 }
 
 // test "construction test" {
