@@ -1,5 +1,6 @@
 const std = @import("std");
 const utils = @import("utils.zig");
+const host = @import("./device/host.zig");
 
 const asSlice = utils.asSlice;
 
@@ -146,9 +147,30 @@ fn flat_to_indices(flat_index: usize, strides: []const usize) []const usize {
 pub const Tensor = struct {
     const Self = @This();
 
-    allocator: *const std.mem.Allocator,
+    allocator: std.mem.Allocator,
     storage: Storage,
     layout: Layout,
+
+    // op method
+    pub fn matmul(self: *const Self, other: *const Self) Self {
+        const m = self.layout.shape[0];
+        const n = other.layout.shape[1];
+        const k = self.layout.shape[1];
+
+        var buf = try std.ArrayList(self.dtype().toType()).initCapacity(self.allocator, m * n);
+        
+        host.matmul(self.storage.b, b: *const f32, c: *f32, m: usize, n: usize, k: usize)
+
+        const result = try Tensor.zeros(self.allocator, self.layout.dtype, &[_]usize{ m, n });
+        const result_ptr = result.storage.ptr;
+
+        const a = self.storage.ptr;
+        const b = other.storage.ptr;
+
+        device.host.matmul(a, b, result_ptr, m, n, k);
+
+        return result;
+    }
 
     // create method
     pub fn fromData(allocator: *const std.mem.Allocator, dtype_i: DataType, shapes: []const usize, data: std.ArrayList(dtype.toType())) anyerror!Self {
@@ -676,16 +698,16 @@ test "dyn tensor create" {
 
     const allocator = arena.allocator();
 
-    // {
-    const arr1 = [3][2]f32{
-        [2]f32{ 1.0, 2.0 },
-        [2]f32{ 3.0, 4.0 },
-        [2]f32{ 5.0, 6.0 },
+    const arr1 = [1][3][2]f32{
+        [3][2]f32{
+            [2]f32{ 1.0, 2.0 },
+            [2]f32{ 3.0, 4.0 },
+            [2]f32{ 5.0, 6.0 },
+        },
     };
     const t111 = try Tensor.fromShapedData(&allocator, &arr1);
 
     std.debug.print("t111: {f}\n", .{t111});
-    // }
 }
 
 // test "construction test" {
