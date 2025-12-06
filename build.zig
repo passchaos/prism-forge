@@ -82,6 +82,7 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
+    exe.linkFramework("Accelerate");
 
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
@@ -91,6 +92,7 @@ pub fn build(b: *std.Build) void {
 
     const exe_mod = b.addModule("check", .{ .root_source_file = b.path("src/main.zig"), .target = target, .optimize = optimize });
     const check_exe = b.addExecutable(.{ .name = "check_exe", .root_module = exe_mod });
+    check_exe.linkFramework("Accelerate");
     b.installArtifact(check_exe);
 
     const exe_check = b.addExecutable(.{ .name = "exe_check", .root_module = exe_mod });

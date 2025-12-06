@@ -30,6 +30,15 @@ pub const DataType = enum {
             .u32 => u32,
         };
     }
+
+    pub fn toTypeComp(comptime self: DataType) type {
+        return switch (self) {
+            .f16 => f16,
+            .f32 => f32,
+            .i32 => i32,
+            .u32 => u32,
+        };
+    }
     pub fn dtypeSize(self: DataType) usize {
         return switch (self) {
             .f16 => 2,
@@ -57,15 +66,15 @@ const Scalar = union(enum) {
 };
 
 pub const Layout = struct {
-    allocator: *const std.mem.Allocator,
+    allocator: std.mem.Allocator,
     _dtype: DataType,
     _shapes: std.ArrayList(usize),
     _strides: std.ArrayList(usize),
 
     const Self = @This();
 
-    pub fn init(allocator: *const std.mem.Allocator, dt: DataType, shapes: std.ArrayList(usize)) !Self {
-        const strides = try utils.computeStrides(allocator.*, shapes);
+    pub fn init(allocator: std.mem.Allocator, comptime dt: DataType, shapes: std.ArrayList(usize)) !Self {
+        const strides = try utils.computeStrides(allocator, shapes);
 
         const layout = Self{
             ._dtype = dt,
@@ -83,7 +92,7 @@ pub const Layout = struct {
 };
 
 pub const Storage = struct {
-    allocator: *const std.mem.Allocator,
+    allocator: std.mem.Allocator,
     device: Device,
     buf: [*]u8,
     bytes_size: usize,
@@ -91,7 +100,7 @@ pub const Storage = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: *const std.mem.Allocator, device: Device, buf: [*]u8, bytes_size: usize) Self {
+    pub fn init(allocator: std.mem.Allocator, device: Device, buf: [*]u8, bytes_size: usize) Self {
         return Self{
             .allocator = allocator,
             .device = device,
@@ -152,41 +161,55 @@ pub const Tensor = struct {
     layout: Layout,
 
     // op method
-    pub fn matmul(self: *const Self, other: *const Self) Self {
-        const m = self.layout.shape[0];
-        const n = other.layout.shape[1];
-        const k = self.layout.shape[1];
+    pub fn matmul(self: *const Self, other: *const Self) anyerror!Self {
+        if (self.dtype() != other.dtype()) {
+            return error.TypeMismatch;
+        }
 
-        var buf = try std.ArrayList(self.dtype().toType()).initCapacity(self.allocator, m * n);
-        
-        host.matmul(self.storage.b, b: *const f32, c: *f32, m: usize, n: usize, k: usize)
+        if (self.ndim() != 2 or other.ndim() != 2) {
+            return error.ShapeMismatch;
+        }
 
-        const result = try Tensor.zeros(self.allocator, self.layout.dtype, &[_]usize{ m, n });
-        const result_ptr = result.storage.ptr;
+        if (self.dtype() != DataType.f32) {
+            return error.TypeNotSupported;
+        }
 
-        const a = self.storage.ptr;
-        const b = other.storage.ptr;
+        if (self.shape()[1] != other.shape()[0]) {
+            return error.ShapeMismatch;
+        }
 
-        device.host.matmul(a, b, result_ptr, m, n, k);
+        const m = self.shape()[0];
+        const n = other.shape()[1];
+        const k = self.shape()[1];
 
-        return result;
+        const a = @as([*]const f32, @ptrCast(@alignCast(self.storage.buf)));
+        const b = @as([*]const f32, @ptrCast(@alignCast(other.storage.buf)));
+
+        const buf = try std.ArrayList(f32).initCapacity(self.allocator, m * n);
+        const c = @as([*]f32, @ptrCast(buf.items.ptr));
+
+        host.matmul(a, b, c, m, n, k);
+
+        const data = @as([*]u8, @ptrCast(c));
+
+        var shapes = try std.ArrayList(usize).initCapacity(self.allocator, 2);
+        try shapes.appendSlice(self.allocator, &.{ m, n });
+        return try Self.fromData(self.allocator, DataType.f32, shapes, m * n * @sizeOf(f32), data);
     }
 
     // create method
-    pub fn fromData(allocator: *const std.mem.Allocator, dtype_i: DataType, shapes: []const usize, data: std.ArrayList(dtype.toType())) anyerror!Self {
-        const bytes_size = data.items.len * dtype_i.dtypeSize();
-
-        const storage = Storage.init(allocator, Device.Cpu, data.items.ptr, bytes_size);
+    pub fn fromData(allocator: std.mem.Allocator, comptime dtype_i: DataType, shapes: std.ArrayList(usize), bytes_size: usize, data: [*]u8) anyerror!Self {
+        var storage = Storage.init(allocator, Device.Cpu, data, bytes_size);
         storage.retain();
 
-        const layout = Layout.init(allocator, dtype_i, shapes);
+        const layout = try Layout.init(allocator, dtype_i, shapes);
 
         return Self{ .allocator = allocator, .storage = storage, .layout = layout };
     }
 
-    pub fn fromShapedData(allocator: *const std.mem.Allocator, comptime arr: anytype) anyerror!Self {
+    pub fn fromShapedData(allocator: std.mem.Allocator, comptime arr: anytype) anyerror!Self {
         const T = utils.getArrayRefItemType(@TypeOf(arr));
-        const dtype_i = DataType.typeToDataType(T);
+        const dtype_i = comptime DataType.typeToDataType(T);
 
         const shapes = utils.getArrayRefShapes(@TypeOf(arr));
 
@@ -194,8 +217,8 @@ pub const Tensor = struct {
 
         const bytes_size = buf_r.len;
 
-        var arr_list = try std.ArrayList(usize).initCapacity(allocator.*, shapes.len);
-        try arr_list.appendSlice(allocator.*, shapes);
+        var arr_list = try std.ArrayList(usize).initCapacity(allocator, shapes.len);
+        try arr_list.appendSlice(allocator, shapes);
 
         var storage = Storage.init(allocator, Device.Cpu, buf_r.ptr, bytes_size);
         storage.retain();
@@ -538,20 +561,20 @@ pub const Tensor = struct {
 
         const show_all = current_dim_size <= 2 * pad_show_count;
 
-        var slice_indices = try std.ArrayList(usize).initCapacity(self.allocator.*, 4);
-        defer slice_indices.deinit(self.allocator.*);
+        var slice_indices = try std.ArrayList(usize).initCapacity(self.allocator, 4);
+        defer slice_indices.deinit(self.allocator);
 
         if (show_all) {
             for (0..current_dim_size) |i| {
-                try slice_indices.append(self.allocator.*, i);
+                try slice_indices.append(self.allocator, i);
             }
         } else {
             for (0..pad_show_count) |i| {
-                try slice_indices.append(self.allocator.*, i);
+                try slice_indices.append(self.allocator, i);
             }
 
             for (current_dim_size - pad_show_count..current_dim_size) |i| {
-                try slice_indices.append(self.allocator.*, i);
+                try slice_indices.append(self.allocator, i);
             }
         }
 
@@ -586,11 +609,11 @@ pub const Tensor = struct {
                 }
             }
 
-            var indices = try std.ArrayList(usize).initCapacity(self.allocator.*, 4);
-            defer indices.deinit(self.allocator.*);
+            var indices = try std.ArrayList(usize).initCapacity(self.allocator, 4);
+            defer indices.deinit(self.allocator);
 
-            try indices.appendSlice(self.allocator.*, base_indices);
-            try indices.append(self.allocator.*, slice_idx);
+            try indices.appendSlice(self.allocator, base_indices);
+            try indices.append(self.allocator, slice_idx);
 
             try self.fmt_recursive(writer, depth + 1, indices.items);
         }
@@ -608,7 +631,7 @@ pub const Tensor = struct {
 
         _ = try writer.write("[");
 
-        const allocator = self.allocator.*;
+        const allocator = self.allocator;
         if (current_dim_size <= max_items) {
             for (0..current_dim_size) |i| {
                 if (i > 0) {
@@ -698,16 +721,22 @@ test "dyn tensor create" {
 
     const allocator = arena.allocator();
 
-    const arr1 = [1][3][2]f32{
-        [3][2]f32{
-            [2]f32{ 1.0, 2.0 },
-            [2]f32{ 3.0, 4.0 },
-            [2]f32{ 5.0, 6.0 },
-        },
+    const arr1 = [3][2]f32{
+        [2]f32{ 1.0, 2.0 },
+        [2]f32{ 3.0, 4.0 },
+        [2]f32{ 5.0, 6.0 },
     };
-    const t111 = try Tensor.fromShapedData(&allocator, &arr1);
+    const t111 = try Tensor.fromShapedData(allocator, &arr1);
 
-    std.debug.print("t111: {f}\n", .{t111});
+    const arr2 = [2][4]f32{
+        [4]f32{ 3.0, 4.0, 5.0, 6.0 },
+        [4]f32{ 5.0, 6.0, 7.0, 8.0 },
+    };
+    const t112 = try Tensor.fromShapedData(allocator, &arr2);
+
+    const t113 = try t111.matmul(&t112);
+    std.debug.print("t111: {f} t112: {f}\n", .{ t111, t112 });
+    std.debug.print("t113: {f}\n", .{t113});
 }
 
 // test "construction test" {
