@@ -1,7 +1,8 @@
 const builtin = @import("builtin");
 const blasapi = switch (builtin.os.tag) {
-    else => @cImport(@cInclude("cblas.h")),
+    .linux => @cImport(@cInclude("cblas.h")),
     .macos => @cImport(@cInclude("Accelerate/Accelerate.h")),
+    else => @compileError("Unsupported os"),
 };
 
 pub fn matmul(a: [*]const f32, b: [*]const f32, c: [*]f32, m_i: usize, n_i: usize, k_i: usize) void {
