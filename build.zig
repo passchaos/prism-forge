@@ -67,11 +67,11 @@ pub fn build(b: *std.Build) void {
     // setup blas linkage
     switch (target.result.os.tag) {
         .linux => {
-            exe_mod.link_libc = true;
-            exe_mod.linkSystemLibrary("openblas", .{});
+            mod.link_libc = true;
+            mod.linkSystemLibrary("openblas", .{});
         },
         .macos => {
-            exe_mod.linkFramework("Accelerate", .{});
+            mod.linkFramework("Accelerate", .{});
         },
         else => {},
     }
@@ -156,6 +156,30 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
+
+    const tensor_mod = b.createModule(.{
+        .root_source_file = b.path("src/tensor.zig"),
+        .target = target,
+    });
+
+    // setup blas linkage
+    switch (target.result.os.tag) {
+        .linux => {
+            tensor_mod.link_libc = true;
+            tensor_mod.linkSystemLibrary("openblas", .{});
+        },
+        .macos => {
+            tensor_mod.linkFramework("Accelerate", .{});
+        },
+        else => {},
+    }
+    const tensor_tests = b.addTest(.{
+        .root_module = tensor_mod,
+    });
+    const tensor_exe_tests = b.addRunArtifact(tensor_tests);
+
+    const inner_test_step = b.step("inner_test", "Run inner tests");
+    inner_test_step.dependOn(&tensor_exe_tests.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //

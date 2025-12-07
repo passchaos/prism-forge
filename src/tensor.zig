@@ -86,6 +86,27 @@ pub const Layout = struct {
         return layout;
     }
 
+    pub fn transpose(self: *const Self) !Self {
+        if (self._shapes.items.len != 2) {
+            return error.InvalidShape;
+        }
+
+        var new_shapes = try self._shapes.clone(self.allocator);
+        var new_strides = try self._strides.clone(self.allocator);
+
+        try new_shapes.append(self.allocator, self._shapes[1]);
+        try new_shapes.append(self.allocator, self._shapes[0]);
+        try new_strides.append(self.allocator, self._strides[1]);
+        try new_strides.append(self.allocator, self._strides[0]);
+
+        return Self{
+            ._dtype = self._dtype,
+            ._shapes = new_shapes,
+            ._strides = new_strides,
+            .allocator = self.allocator,
+        };
+    }
+
     pub fn equal(self: *const Self, other: *const Self) bool {
         return self._dtype == other._dtype and std.mem.eql(usize, self._shapes.items, other._shapes.items) and std.mem.eql(usize, self._strides.items, other._strides.items);
     }
@@ -110,11 +131,27 @@ pub const Storage = struct {
         };
     }
 
-    pub fn retain(self: *Self) void {
+    pub fn clone(self: *Self) Self {
+        self.retain();
+
+        return Self{
+            .allocator = self.allocator,
+            .device = self.device,
+            .buf = self.buf,
+            .bytes_size = self.bytes_size,
+            .ref_count = self.ref_count,
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.release();
+    }
+
+    fn retain(self: *Self) void {
         self.ref_count += 1;
     }
 
-    pub fn release(self: *Self) void {
+    fn release(self: *Self) void {
         if (self.ref_count > 0) {
             self.ref_count -= 1;
         }
@@ -233,7 +270,7 @@ pub const Tensor = struct {
     }
 
     // attributes
-    pub fn data_slice(self: *Self, comptime dtype_i: DataType) []dtype_i.toType() {
+    pub fn data_slice(self: *const Self, comptime dtype_i: DataType) []const dtype_i.toType() {
         const T = dtype_i.toType();
         const d_buf: [*]T = @ptrCast(@alignCast(self.storage.buf));
 
@@ -271,52 +308,17 @@ pub const Tensor = struct {
     //      return NewTensorTyp{ ._shape = try CopyFn.copy(allocator, self._shape), ._strides = try CopyFn.copy(allocator, self._strides), .allocator = allocator, .data = new_data };
     //  }
 
-    //  // change shape
-    //  pub fn transpose(self: *Self) anyerror!void {
-    //      if (is_static_rank) {
-    //          if (Rank != 2) {
-    //              @compileError("transpose method can only work with 2-d tensor");
-    //          } else {
-    //              if (is_all_static) {
-    //                  if (comptime static_shape[0] != static_shape[1]) {
-    //                      @compileError("static shape tensor can only run transpose method with square matrix shape");
-    //                  }
-    //              }
-    //          }
-    //      } else {
-    //          if (self._shape.items.len != 2) {
-    //              return error.Non2D;
-    //          }
-    //      }
+    // change shape
+    pub fn transpose(self: *const Self) anyerror!void {
+        const new_layout = try self.layout.transpose();
+        const new_storage = self.storage.clone();
 
-    //      if (!is_all_static) {
-    //          if (is_static_rank) {
-    //              const shape0 = self._shape[0];
-    //              const shape1 = self._shape[1];
-
-    //              self._shape[0] = shape1;
-    //              self._shape[1] = shape0;
-    //          } else {
-    //              const shape0 = self._shape.items[0];
-    //              const shape1 = self._shape.items[1];
-
-    //              self._shape.items[0] = shape1;
-    //              self._shape.items[1] = shape0;
-    //          }
-    //      }
-
-    //      if (is_static_rank) {
-    //          const stride0 = self._strides[0];
-    //          const stride1 = self._strides[1];
-    //          self._strides[0] = stride1;
-    //          self._strides[1] = stride0;
-    //      } else {
-    //          const stride0 = self._strides.items[0];
-    //          const stride1 = self._strides.items[1];
-    //          self._strides.items[0] = stride1;
-    //          self._strides.items[1] = stride0;
-    //      }
-    //  }
+        return Self{
+            .allocator = self.allocator,
+            .storage = new_storage,
+            .layout = new_layout,
+        };
+    }
 
     //  pub fn reshapeComp(self: *Self, comptime new_shape: []const usize) anyerror!Tensor(dtype, &utils.toOptionalShape(new_shape)) {
     //      const Typ = Tensor(dtype, &utils.toOptionalShape(new_shape));
@@ -501,11 +503,15 @@ pub const Tensor = struct {
         return std.mem.eql(self.layout._dtype, self_data_slice, other_data_slice);
     }
 
-    pub fn approxEqual(self: *const Self, other: *const Self, dtype_i: DataType, relEps: dtype_i.toType(), absEps: dtype_i.toType()) bool {
-        if (!self.layout.equal(other.layout)) return false;
+    pub fn approxEqual(self: *const Self, other: *const Self, comptime dtype_i: DataType, relEps: dtype_i.toType(), absEps: dtype_i.toType()) bool {
+        if (!self.layout.equal(&other.layout)) return false;
 
-        const self_data_slice = self.data_slice(self.layout._dtype);
-        const other_data_slice = other.data_slice(other.layout._dtype);
+        if (self.dtype() != other.dtype()) return false;
+
+        if (self.dtype() != dtype_i) return false;
+
+        const self_data_slice = self.data_slice(dtype_i);
+        const other_data_slice = other.data_slice(dtype_i);
         return utils.sliceApproxEqual(dtype_i.toType(), self_data_slice, other_data_slice, relEps, absEps);
     }
 
@@ -734,9 +740,19 @@ test "dyn tensor create" {
     };
     const t112 = try Tensor.fromShapedData(allocator, &arr2);
 
+    const res_arr = [3][4]f32{
+        [4]f32{ 13.0, 16.0, 19.0, 22.0 },
+        [4]f32{ 29.0, 36.0, 43.0, 50.0 },
+        [4]f32{ 45.0, 56.0, 67.0, 78.0 },
+    };
+    const res_t11 = try Tensor.fromShapedData(allocator, &res_arr);
+
     const t113 = try t111.matmul(&t112);
     std.debug.print("t111: {f} t112: {f}\n", .{ t111, t112 });
     std.debug.print("t113: {f}\n", .{t113});
+
+    const compare_res = res_t11.approxEqual(&t113, DataType.f32, 0.001, 0.0001);
+    try std.testing.expect(compare_res);
 }
 
 // test "construction test" {
