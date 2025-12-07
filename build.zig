@@ -40,6 +40,7 @@ pub fn build(b: *std.Build) void {
         // which requires us to specify a target.
         .target = target,
     });
+    mod.linkFramework("Accelerate", .{});
 
     // Here we define an executable. An executable needs to have a root module
     // which needs to expose a `main` function. While we could add a main function
@@ -97,6 +98,7 @@ pub fn build(b: *std.Build) void {
 
     const exe_check = b.addExecutable(.{ .name = "exe_check", .root_module = exe_mod });
     const check = b.step("check", "Check if exe_check compiles");
+    exe_check.linkFramework("Accelerate");
     check.dependOn(&exe_check.step);
 
     // This creates a top level step. Top level steps have a name and can be
@@ -125,12 +127,21 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
+    const tensor_mod = b.createModule(.{
+        .root_source_file = b.path("src/tensor.zig"),
+        .target = target,
+    });
+    tensor_mod.linkFramework("Accelerate", .{});
+
+    // const sdk_include = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include";
     // Creates an executable that will run `test` blocks from the provided module.
     // Here `mod` needs to define a target, which is why earlier we made sure to
     // set the releative field.
     const mod_tests = b.addTest(.{
         .root_module = mod,
     });
+    mod_tests.linkFramework("Accelerate");
+    // mod_tests.addIncludePath(.{ .src_path = sdk_include });
 
     // A run step that will run the test executable.
     const run_mod_tests = b.addRunArtifact(mod_tests);
@@ -141,9 +152,17 @@ pub fn build(b: *std.Build) void {
     const exe_tests = b.addTest(.{
         .root_module = exe.root_module,
     });
+    exe_tests.linkFramework("Accelerate");
+
+    // exe_tests.addIncludePath(.{ .src_path = sdk_include });
 
     // A run step that will run the second test executable.
     const run_exe_tests = b.addRunArtifact(exe_tests);
+
+    const tensor_tests = b.addTest(.{
+        .root_module = tensor_mod,
+    });
+    const tensor_exe_tests = b.addRunArtifact(tensor_tests);
 
     // A top level step for running all tests. dependOn can be called multiple
     // times and since the two run steps do not depend on one another, this will
@@ -151,6 +170,7 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
+    test_step.dependOn(&tensor_exe_tests.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //
