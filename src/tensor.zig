@@ -82,13 +82,17 @@ pub const Layout = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, comptime dt: DataType, shapes: std.ArrayList(usize)) !Self {
-        const strides = try utils.computeStrides(allocator, shapes);
+    pub fn init(allocator: std.mem.Allocator, dt: DataType, shapes: std.ArrayList(usize)) !Self {
+        const strides_i = try utils.computeStrides(allocator, shapes);
 
+        return Self.initRaw(allocator, dt, shapes, strides_i);
+    }
+
+    pub fn initRaw(allocator: std.mem.Allocator, dt: DataType, shapes: std.ArrayList(usize), strides_a: std.ArrayList(usize)) !Self {
         const layout = Self{
             ._dtype = dt,
             ._shapes = shapes,
-            ._strides = strides,
+            ._strides = strides_a,
             .allocator = allocator,
         };
 
@@ -140,12 +144,32 @@ pub const Layout = struct {
         };
     }
 
+    pub fn equal(self: *const Self, other: *const Self) bool {
+        return self._dtype == other._dtype and std.mem.eql(usize, self._shapes.items, other._shapes.items) and std.mem.eql(usize, self._strides.items, other._strides.items);
+    }
+
     pub fn size(self: *const Self) usize {
         return product(self._shapes.items);
     }
 
-    pub fn equal(self: *const Self, other: *const Self) bool {
-        return self._dtype == other._dtype and std.mem.eql(usize, self._shapes.items, other._shapes.items) and std.mem.eql(usize, self._strides.items, other._strides.items);
+    pub fn dtypeSize(self: *const Self) usize {
+        return self._dtype.size();
+    }
+
+    pub fn dtype(self: *const Self) DataType {
+        return self._dtype;
+    }
+
+    pub fn ndim(self: *const Self) usize {
+        return self._shapes.items.len;
+    }
+
+    pub fn shape(self: *const Self) []usize {
+        return self._shapes.items;
+    }
+
+    pub fn strides(self: *const Self) []usize {
+        return self._strides.items;
     }
 };
 
@@ -463,19 +487,19 @@ pub const Tensor = struct {
     }
 
     pub fn dtype(self: *const Self) DataType {
-        return self.layout._dtype;
+        return self.layout.dtype();
     }
 
     pub fn ndim(self: *const Self) usize {
-        return self.layout._shapes.items.len;
+        return self.layout.ndim();
     }
 
     pub fn shape(self: *const Self) []const usize {
-        return self.layout._shapes.items;
+        return self.layout.shape();
     }
 
     pub fn strides(self: *const Self) []const usize {
-        return self.layout._strides.items;
+        return self.layout.strides();
     }
 
     pub fn equal(self: *const Self, other: *const Self) bool {
