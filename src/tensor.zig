@@ -2,231 +2,15 @@ const std = @import("std");
 const utils = @import("utils.zig");
 const host = @import("./device/host.zig");
 
+const dtype = @import("./dtype.zig");
+const DataType = dtype.DataType;
+const Scalar = dtype.Scalar;
+
+const Layout = @import("./Layout.zig");
+
+const Storage = @import("./Storage.zig");
+
 const asSlice = utils.asSlice;
-
-pub const Device = enum { Cpu, Cuda };
-
-pub const DataType = enum {
-    f16,
-    f32,
-    i32,
-    u32,
-
-    pub fn typeToDataType(comptime T: type) DataType {
-        return switch (T) {
-            f16 => .f16,
-            f32 => .f32,
-            i32 => .i32,
-            u32 => .u32,
-            else => @compileError("Unsupported type: " ++ @typeName(T)),
-        };
-    }
-
-    pub fn toType(self: DataType) type {
-        return switch (self) {
-            .f16 => f16,
-            .f32 => f32,
-            .i32 => i32,
-            .u32 => u32,
-        };
-    }
-
-    pub fn toTypeComp(comptime self: DataType) type {
-        return switch (self) {
-            .f16 => f16,
-            .f32 => f32,
-            .i32 => i32,
-            .u32 => u32,
-        };
-    }
-    pub fn dtypeSize(self: DataType) usize {
-        return switch (self) {
-            .f16 => 2,
-            .f32 => 4,
-            .i32 => 4,
-            .u32 => 4,
-        };
-    }
-};
-
-const Scalar = union(enum) {
-    f16: f16,
-    f32: f32,
-    i32: i32,
-    u32: u32,
-
-    pub fn format(self: @This(), writer: *std.io.Writer) std.Io.Writer.Error!void {
-        return switch (self) {
-            .f16 => writer.print("{d}", .{self.f16}),
-            .f32 => writer.print("{d}", .{self.f32}),
-            .i32 => writer.print("{d}", .{self.i32}),
-            .u32 => writer.print("{d}", .{self.u32}),
-        };
-    }
-};
-
-fn product(arr: []const usize) usize {
-    var result: usize = 1;
-    for (arr) |item| {
-        result *= item;
-    }
-    return result;
-}
-
-pub const Layout = struct {
-    allocator: std.mem.Allocator,
-    _dtype: DataType,
-    _shapes: std.ArrayList(usize),
-    _strides: std.ArrayList(usize),
-    _transposed: bool = false,
-
-    const Self = @This();
-
-    pub fn init(allocator: std.mem.Allocator, dt: DataType, shapes: std.ArrayList(usize)) !Self {
-        const strides_i = try utils.computeStrides(allocator, shapes);
-
-        return Self.initRaw(allocator, dt, shapes, strides_i);
-    }
-
-    pub fn initRaw(allocator: std.mem.Allocator, dt: DataType, shapes: std.ArrayList(usize), strides_a: std.ArrayList(usize)) !Self {
-        const layout = Self{
-            ._dtype = dt,
-            ._shapes = shapes,
-            ._strides = strides_a,
-            .allocator = allocator,
-        };
-
-        return layout;
-    }
-
-    pub fn transpose(self: *const Self) !Self {
-        if (self._shapes.items.len != 2) {
-            return error.InvalidShape;
-        }
-
-        var new_shapes = try self._shapes.clone(self.allocator);
-        var new_strides = try self._strides.clone(self.allocator);
-
-        new_shapes.items[0] = self._shapes.items[1];
-        new_shapes.items[1] = self._shapes.items[0];
-        new_strides.items[0] = self._strides.items[1];
-        new_strides.items[1] = self._strides.items[0];
-
-        return Self{
-            ._dtype = self._dtype,
-            ._shapes = new_shapes,
-            ._strides = new_strides,
-            .allocator = self.allocator,
-            ._transposed = true,
-        };
-    }
-
-    pub fn reshape(self: *const Self, new_shapes: std.ArrayList(usize)) !Self {
-        const new_size = product(new_shapes.items);
-
-        if (new_size != self.size()) {
-            return error.InvalidShape;
-        }
-
-        var new_strides = try utils.computeStrides(self.allocator, new_shapes);
-        if (self._transposed) {
-            const tmp0 = new_strides.items[0];
-            const tmp1 = new_strides.items[1];
-            new_strides.items[0] = tmp1;
-            new_strides.items[1] = tmp0;
-        }
-
-        return Self{
-            ._dtype = self._dtype,
-            ._shapes = new_shapes,
-            ._strides = new_strides,
-            .allocator = self.allocator,
-        };
-    }
-
-    pub fn equal(self: *const Self, other: *const Self) bool {
-        return self._dtype == other._dtype and std.mem.eql(usize, self._shapes.items, other._shapes.items) and std.mem.eql(usize, self._strides.items, other._strides.items);
-    }
-
-    pub fn size(self: *const Self) usize {
-        return product(self._shapes.items);
-    }
-
-    pub fn dtypeSize(self: *const Self) usize {
-        return self._dtype.size();
-    }
-
-    pub fn dtype(self: *const Self) DataType {
-        return self._dtype;
-    }
-
-    pub fn ndim(self: *const Self) usize {
-        return self._shapes.items.len;
-    }
-
-    pub fn shape(self: *const Self) []usize {
-        return self._shapes.items;
-    }
-
-    pub fn strides(self: *const Self) []usize {
-        return self._strides.items;
-    }
-};
-
-pub const Storage = struct {
-    allocator: std.mem.Allocator,
-    device: Device,
-    buf: [*]u8,
-    bytes_size: usize,
-    ref_count: usize,
-
-    const Self = @This();
-
-    pub fn init(allocator: std.mem.Allocator, device: Device, buf: [*]u8, bytes_size: usize) Self {
-        return Self{
-            .allocator = allocator,
-            .device = device,
-            .buf = buf,
-            .bytes_size = bytes_size,
-            .ref_count = 1,
-        };
-    }
-
-    pub fn clone(self: *const Self) Self {
-        const v_s = @constCast(self);
-        v_s.retain();
-
-        return Self{
-            .allocator = self.allocator,
-            .device = self.device,
-            .buf = self.buf,
-            .bytes_size = self.bytes_size,
-            .ref_count = self.ref_count,
-        };
-    }
-
-    pub fn deinit(self: *Self) void {
-        self.release();
-    }
-
-    fn retain(self: *Self) void {
-        self.ref_count += 1;
-    }
-
-    fn release(self: *Self) void {
-        if (self.ref_count > 0) {
-            self.ref_count -= 1;
-        }
-
-        if (self.ref_count == 0) {
-            if (self.device == .Cpu) {
-                if (self.buf) |buf| {
-                    self.allocator.free(buf);
-                }
-            }
-        }
-    }
-};
 
 fn indices_to_flat(indices: []const usize, shape: []const usize, strides: []const usize) anyerror!usize {
     if (indices.len == 0) {
@@ -298,8 +82,7 @@ pub const Tensor = struct {
 
     // create method
     pub fn fromData(allocator: std.mem.Allocator, comptime dtype_i: DataType, shapes: std.ArrayList(usize), bytes_size: usize, data: [*]u8) anyerror!Self {
-        var storage = Storage.init(allocator, Device.Cpu, data, bytes_size);
-        storage.retain();
+        const storage = Storage.init(allocator, Storage.Device.Cpu, data, bytes_size);
 
         const layout = try Layout.init(allocator, dtype_i, shapes);
 
@@ -319,8 +102,7 @@ pub const Tensor = struct {
         var arr_list = try std.ArrayList(usize).initCapacity(allocator, shapes.len);
         try arr_list.appendSlice(allocator, shapes);
 
-        var storage = Storage.init(allocator, Device.Cpu, buf_r.ptr, bytes_size);
-        storage.retain();
+        const storage = Storage.init(allocator, Storage.Device.Cpu, buf_r.ptr, bytes_size);
 
         const layout = try Layout.init(allocator, dtype_i, arr_list);
 
@@ -332,7 +114,7 @@ pub const Tensor = struct {
     }
 
     pub fn rand(allocator: std.mem.Allocator, shapes: std.ArrayList(usize), low: f32, high: f32) !Self {
-        const total = product(shapes.items);
+        const total = utils.product(shapes.items);
 
         const buf = try allocator.alloc(f32, total);
 
@@ -346,13 +128,13 @@ pub const Tensor = struct {
 
         return Self{
             .allocator = allocator,
-            .storage = Storage.init(allocator, Device.Cpu, @as([*]u8, @ptrCast(buf.ptr)), total * @sizeOf(f32)),
+            .storage = Storage.init(allocator, Storage.Device.Cpu, @as([*]u8, @ptrCast(buf.ptr)), total * @sizeOf(f32)),
             .layout = try Layout.init(allocator, DataType.f32, shapes),
         };
     }
 
     pub fn randNorm(allocator: std.mem.Allocator, shapes: std.ArrayList(usize), mean: f32, stddev: f32) !Self {
-        const total = product(shapes.items);
+        const total = utils.product(shapes.items);
 
         const buf = try allocator.alloc(f32, total);
 
@@ -366,7 +148,7 @@ pub const Tensor = struct {
 
         return Self{
             .allocator = allocator,
-            .storage = Storage.init(allocator, Device.Cpu, @as([*]u8, @ptrCast(buf.ptr)), total * @sizeOf(f32)),
+            .storage = Storage.init(allocator, Storage.Device.Cpu, @as([*]u8, @ptrCast(buf.ptr)), total * @sizeOf(f32)),
             .layout = try Layout.init(allocator, DataType.f32, shapes),
         };
     }

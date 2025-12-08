@@ -200,10 +200,10 @@ pub fn asSlice(value: anytype) []const ElemOf(@TypeOf(value)) {
     };
 }
 
-pub fn product(comptime arr: []const usize) usize {
+pub fn product(arr: []const usize) usize {
     var result: usize = 1;
-    inline for (arr) |dim| {
-        result *= dim;
+    for (arr) |item| {
+        result *= item;
     }
     return result;
 }
