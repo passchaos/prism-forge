@@ -307,6 +307,46 @@ pub const Tensor = struct {
         };
     }
 
+    pub fn rand(allocator: std.mem.Allocator, shapes: std.ArrayList(usize), low: f32, high: f32) !Self {
+        const total = product(shapes.items);
+
+        const buf = try allocator.alloc(f32, total);
+
+        var rpng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
+        const rng = rpng.random();
+
+        for (buf) |*x| {
+            const u = rng.float(f32);
+            x.* = low + (high - low) * u;
+        }
+
+        return Self{
+            .allocator = allocator,
+            .storage = Storage.init(allocator, Device.Cpu, @as([*]u8, @ptrCast(buf.ptr)), total * @sizeOf(f32)),
+            .layout = try Layout.init(allocator, DataType.f32, shapes),
+        };
+    }
+
+    pub fn randNorm(allocator: std.mem.Allocator, shapes: std.ArrayList(usize), mean: f32, stddev: f32) !Self {
+        const total = product(shapes.items);
+
+        const buf = try allocator.alloc(f32, total);
+
+        var rpng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
+        const rng = rpng.random();
+
+        for (buf) |*x| {
+            const u = rng.floatNorm(f32);
+            x.* = mean + stddev * u;
+        }
+
+        return Self{
+            .allocator = allocator,
+            .storage = Storage.init(allocator, Device.Cpu, @as([*]u8, @ptrCast(buf.ptr)), total * @sizeOf(f32)),
+            .layout = try Layout.init(allocator, DataType.f32, shapes),
+        };
+    }
+
     // attributes
     pub fn dataSlice(self: *const Self, comptime dtype_i: DataType) []const dtype_i.toType() {
         const T = dtype_i.toType();
@@ -730,6 +770,31 @@ test "shape test" {
     try std.testing.expectEqualSlices(usize, t111_squeezed.shape(), &.{ 3, 2 });
 
     std.debug.print("unsqueezed: {f} squeezed: {f}\n", .{ t111_unsqueezed, t111_squeezed });
+}
+
+test "random test" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+
+    var shapes = try std.ArrayList(usize).initCapacity(allocator, 2);
+    try shapes.appendSlice(allocator, &.{ 3000, 3000 });
+
+    const t1 = try Tensor.rand(allocator, shapes, 0.0, 1.0);
+    std.debug.print("t1: {f}\n", .{t1});
+
+    const t2 = try Tensor.randNorm(allocator, shapes, 0.0, 1.0);
+    std.debug.print("t2: {f}\n", .{t2});
+
+    const begin = std.time.microTimestamp();
+    const t3 = try t1.matmul(&(try t2.transpose()));
+    const end = std.time.microTimestamp();
+
+    std.debug.print("t3: {f}\nelapsed: {d} microseconds\n", .{ t3, end - begin });
 }
 
 // test "construction test" {
