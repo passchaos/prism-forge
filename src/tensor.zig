@@ -113,6 +113,52 @@ pub const Tensor = struct {
         };
     }
 
+    pub fn contiguous(self: *Self) !Self {
+        // if (self.layout.isContiguous()) {
+        //     return self.dupe();
+        // }
+
+        const T = self.dtype().toType();
+
+        const new_buf = try self.allocator.alloc(T, self.size());
+
+        var idx: usize = 0;
+        const indices = try self.allocator.alloc(usize, self.ndim());
+
+        const data_slice = self.dataSlice(T);
+        const inner_scope = struct {
+            fn copyRecursive(tensor: *Self, indices_i: []usize, dim: usize, new_buf_i: []T, idx_i: *usize) void {
+                if (dim == self.ndim()) {
+                    var offset: usize = 0;
+                    for (indices_i, 0..) |ind, i| {
+                        offset += ind * self.strides()[i];
+                    }
+
+                    new_buf_i[idx_i.*] = data_slice[offset];
+                    idx_i.* += 1;
+                    return;
+                }
+
+                const shape_dim = tensor.shapes()[dim];
+                for (0..shape_dim) |i| {
+                    indices_i[dim] = i;
+                    copyRecursive(tensor, indices_i, dim + 1, new_buf_i, idx_i);
+                }
+            }
+        };
+
+        inner_scope.copyRecursive(self, indices, 0, new_buf, &idx);
+
+        const layout = try Layout.init(self.allocator, self.layout.dtype, self.layout.shapes);
+        const storage = Storage.init(self.allocator, Storage.Device.Cpu, @as([*]u8, @ptrCast(new_buf.ptr)), self.storage.byteSize());
+
+        return Self{
+            .allocator = self.allocator,
+            .storage = storage,
+            .layout = layout,
+        };
+    }
+
     pub fn rand(allocator: std.mem.Allocator, shapes_a: std.ArrayList(usize), low: f32, high: f32) !Self {
         const total = utils.product(shapes_a.items);
 
@@ -154,15 +200,13 @@ pub const Tensor = struct {
     }
 
     // attributes
-    pub fn dataSlice(self: *const Self, comptime dtype_i: DataType) []const dtype_i.toType() {
-        const T = dtype_i.toType();
-
+    pub fn dataSlice(self: *const Self, comptime T: anytype) []const T {
         return self.storage.dataSlice(T)[0..self.size()];
     }
 
     pub fn getWithIndices(self: *const Self, comptime dtype_i: DataType, indices: []const usize) !dtype_i.toType() {
         const flat_index = try indices_to_flat(indices, self.shapes(), self.strides());
-        return self.dataSlice(dtype_i)[flat_index];
+        return self.dataSlice(dtype_i.toType())[flat_index];
     }
 
     // data transform
@@ -256,10 +300,10 @@ pub const Tensor = struct {
     fn getDataWithIdx(self: *const Self, dtype_i: DataType, idx: usize) Scalar {
         const c_s = @constCast(self);
         return switch (dtype_i) {
-            .f16 => Scalar{ .f16 = c_s.dataSlice(DataType.f16)[idx] },
-            .f32 => Scalar{ .f32 = c_s.dataSlice(DataType.f32)[idx] },
-            .i32 => Scalar{ .i32 = c_s.dataSlice(DataType.i32)[idx] },
-            .u32 => Scalar{ .u32 = c_s.dataSlice(DataType.u32)[idx] },
+            .f16 => Scalar{ .f16 = c_s.dataSlice(DataType.f16.toType())[idx] },
+            .f32 => Scalar{ .f32 = c_s.dataSlice(DataType.f32.toType())[idx] },
+            .i32 => Scalar{ .i32 = c_s.dataSlice(DataType.i32.toType())[idx] },
+            .u32 => Scalar{ .u32 = c_s.dataSlice(DataType.u32.toType())[idx] },
         };
     }
 
@@ -299,8 +343,8 @@ pub const Tensor = struct {
 
         if (self.dtype() != dtype_i) return false;
 
-        const self_data_slice = self.dataSlice(dtype_i);
-        const other_data_slice = other.dataSlice(dtype_i);
+        const self_data_slice = self.dataSlice(dtype_i.toType());
+        const other_data_slice = other.dataSlice(dtype_i.toType());
         return utils.sliceApproxEqual(dtype_i.toType(), self_data_slice, other_data_slice, relEps, absEps);
     }
 
@@ -310,13 +354,9 @@ pub const Tensor = struct {
     ) std.Io.Writer.Error!void {
         try writer.print(
             \\Tensor{{
-            \\  .TypeName = {s}
-            \\  .Dtype = {any},
-            \\  .Shape = ({any}, {any}),
-            \\  .Strides = ({any}, {any}),
-            \\  .DataLen = {}
-            \\  .Data =
-        , .{ @typeName(@TypeOf(self)), self.layout.dtype(), @TypeOf(self.shapes()), self.shapes(), @TypeOf(self.strides()), self.strides(), self.size() });
+            \\.{f}
+            \\.Data =
+        , .{self.layout});
 
         _ = try writer.write("\n");
 
