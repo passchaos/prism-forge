@@ -11,16 +11,16 @@ _transposed: bool = false,
 
 const Self = @This();
 
-pub fn init(allocator: std.mem.Allocator, dt: DataType, shapes: std.ArrayList(usize)) !Self {
-    const strides_i = try utils.computeStrides(allocator, shapes);
+pub fn init(allocator: std.mem.Allocator, dt: DataType, shapes_a: std.ArrayList(usize)) !Self {
+    const strides_i = try utils.computeStrides(allocator, shapes_a);
 
-    return Self.initRaw(allocator, dt, shapes, strides_i);
+    return Self.initRaw(allocator, dt, shapes_a, strides_i);
 }
 
-pub fn initRaw(allocator: std.mem.Allocator, dt: DataType, shapes: std.ArrayList(usize), strides_a: std.ArrayList(usize)) !Self {
+pub fn initRaw(allocator: std.mem.Allocator, dt: DataType, shapes_a: std.ArrayList(usize), strides_a: std.ArrayList(usize)) !Self {
     const layout = Self{
         ._dtype = dt,
-        ._shapes = shapes,
+        ._shapes = shapes_a,
         ._strides = strides_a,
         .allocator = allocator,
     };
@@ -82,7 +82,7 @@ pub fn size(self: *const Self) usize {
 }
 
 pub fn dtypeSize(self: *const Self) usize {
-    return self._dtype.size();
+    return self._dtype.dtypeSize();
 }
 
 pub fn dtype(self: *const Self) DataType {
@@ -93,7 +93,7 @@ pub fn ndim(self: *const Self) usize {
     return self._shapes.items.len;
 }
 
-pub fn shape(self: *const Self) []usize {
+pub fn shapes(self: *const Self) []usize {
     return self._shapes.items;
 }
 

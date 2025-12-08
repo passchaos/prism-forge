@@ -3,21 +3,31 @@ const std = @import("std");
 pub const Device = enum { Cpu, Cuda };
 
 allocator: std.mem.Allocator,
-device: Device,
-buf: [*]u8,
-bytes_size: usize,
-ref_count: usize,
+_device: Device,
+_buf: [*]u8,
+_bytes_size: usize,
+_ref_count: usize,
 
 const Self = @This();
 
 pub fn init(allocator: std.mem.Allocator, device: Device, buf: [*]u8, bytes_size: usize) Self {
     return Self{
         .allocator = allocator,
-        .device = device,
-        .buf = buf,
-        .bytes_size = bytes_size,
-        .ref_count = 1,
+        ._device = device,
+        ._buf = buf,
+        ._bytes_size = bytes_size,
+        ._ref_count = 1,
     };
+}
+
+pub fn dataSlice(self: *const Self, comptime T: anytype) [*]T {
+    const d_buf: [*]T = @ptrCast(@alignCast(self._buf));
+
+    return d_buf;
+}
+
+pub fn byteSize(self: *const Self) usize {
+    return self._bytes_size;
 }
 
 pub fn clone(self: *const Self) Self {
@@ -26,10 +36,10 @@ pub fn clone(self: *const Self) Self {
 
     return Self{
         .allocator = self.allocator,
-        .device = self.device,
-        .buf = self.buf,
-        .bytes_size = self.bytes_size,
-        .ref_count = self.ref_count,
+        ._device = self._device,
+        ._buf = self._buf,
+        ._bytes_size = self._bytes_size,
+        ._ref_count = self._ref_count,
     };
 }
 
@@ -38,17 +48,17 @@ pub fn deinit(self: *Self) void {
 }
 
 fn retain(self: *Self) void {
-    self.ref_count += 1;
+    self._ref_count += 1;
 }
 
 fn release(self: *Self) void {
-    if (self.ref_count > 0) {
-        self.ref_count -= 1;
+    if (self._ref_count > 0) {
+        self._ref_count -= 1;
     }
 
-    if (self.ref_count == 0) {
-        if (self.device == .Cpu) {
-            if (self.buf) |buf| {
+    if (self._ref_count == 0) {
+        if (self._device == .Cpu) {
+            if (self._buf) |buf| {
                 self.allocator.free(buf);
             }
         }
