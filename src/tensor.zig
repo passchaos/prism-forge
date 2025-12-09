@@ -43,6 +43,78 @@ pub const Tensor = struct {
     storage: Storage,
     layout: Layout,
 
+    // scope method
+    pub fn cat(allocator: std.mem.Allocator, tensors: []const Self, dim: usize) !Self {
+        const dtype_i = tensors[0].dtype();
+        const rank = tensors[0].ndim();
+
+        for (tensors) |t| {
+            if (t.dtype() != dtype_i or t.ndim() != rank) return error.ShapeMismatch;
+        }
+
+        var new_shape = try allocator.alloc(usize, rank);
+        for (0..rank) |i| {
+            if (i == dim) {
+                var sum: usize = 0;
+                for (tensors) |t| {
+                    sum += t.shapes()[i];
+                }
+                new_shape[i] = sum;
+            } else {
+                new_shape[i] = tensors[0].shapes()[i];
+            }
+        }
+
+        var total: usize = 1;
+        for (new_shape) |s| total *= s;
+
+        const elem_size = dtype_i.dtypeSize();
+        var new_buf = try allocator.alloc(u8, total * elem_size);
+
+        var offset: usize = 0;
+        for (tensors) |t| {
+            const bytes = t.rawDataSlice();
+            @memcpy(new_buf[offset .. offset + bytes.len], bytes);
+            offset += bytes.len;
+        }
+
+        var shape_list = try std.ArrayList(usize).initCapacity(allocator, new_shape.len);
+        try shape_list.appendSlice(allocator, new_shape);
+        return Self.fromDataRaw(allocator, dtype_i, shape_list, Storage.Device.Cpu, new_buf.len, @ptrCast(new_buf));
+    }
+
+    pub fn stack(allocator: std.mem.Allocator, tensors: []const Self, dim: usize) !Self {
+        const dtype_i = tensors[0].dtype();
+        const rank = tensors[0].ndim();
+
+        for (tensors) |t| {
+            if (t.dtype() != dtype_i or !std.mem.eql(usize, t.shapes(), tensors[0].shapes())) return error.ShapeMismatch;
+        }
+
+        var new_shape = try allocator.alloc(usize, rank + 1);
+        for (0..dim) |i| new_shape[i] = tensors[0].shapes()[i];
+        new_shape[dim] = tensors.len;
+        for (dim..rank) |i| new_shape[i + 1] = tensors[0].shapes()[i];
+
+        var total: usize = 1;
+        for (new_shape) |s| total *= s;
+
+        const elem_size = dtype_i.dtypeSize();
+        var new_buf = try allocator.alloc(u8, total * elem_size);
+
+        var offset: usize = 0;
+        for (tensors) |t| {
+            const bytes = t.rawDataSlice();
+            std.debug.print("len: {}\n", .{bytes.len});
+            @memcpy(new_buf[offset .. offset + bytes.len], bytes);
+            offset += bytes.len;
+        }
+
+        var shape_list = try std.ArrayList(usize).initCapacity(allocator, new_shape.len);
+        try shape_list.appendSlice(allocator, new_shape);
+        return Self.fromDataRaw(allocator, dtype_i, shape_list, Storage.Device.Cpu, new_buf.len, @ptrCast(new_buf));
+    }
+
     // op method
     pub fn matmul(self: *const Self, other: *const Self) anyerror!Self {
         if (self.dtype() != other.dtype()) {
@@ -733,4 +805,23 @@ test "contiguous test" {
 
     // const data = try std.ArrayList(f32).initCapacity(allocator, num: usize)
     // const t1 = try Tensor.fromData(allocator: Allocator, comptime dtype_i: DataType, shapes_a: Aligned(usize), data: Aligned(either type))
+}
+
+test "cat stack" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+
+    const t1 = try Tensor.rand(allocator, &.{ 1, 2, 2 }, 0.0, 2.0);
+
+    const t2 = try Tensor.rand(allocator, &.{ 1, 2, 2 }, 0.0, 2.0);
+
+    const t3 = try Tensor.cat(allocator, &.{ t1, t2 }, 2);
+
+    const t4 = try Tensor.stack(allocator, &.{ t1, t2 }, 2);
+    std.debug.print("t1: {f} t2: {f} t3: {f} t4: {f}\n", .{ t1.layout, t2.layout, t3.layout, t4.layout });
 }
