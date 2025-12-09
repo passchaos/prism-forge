@@ -49,18 +49,26 @@ pub fn initRaw(allocator: std.mem.Allocator, dt: DataType, shapes_a: std.ArrayLi
     return layout;
 }
 
-pub fn transpose(self: *const Self) !Self {
-    if (self._shapes.items.len != 2) {
-        return error.InvalidShape;
+pub fn transpose(self: *const Self, dim0: usize, dim1: usize) !Self {
+    var perm = try self.allocator.alloc(usize, self.ndim());
+
+    for (perm, 0..) |*p, i| p.* = i;
+
+    const tmp = perm[dim0];
+    perm[dim0] = perm[dim1];
+    perm[dim1] = tmp;
+
+    return try self.permute(perm);
+}
+
+pub fn permute(self: *const Self, perm: []const usize) !Self {
+    const new_shapes = try self._shapes.clone(self.allocator);
+    const new_strides = try self._strides.clone(self.allocator);
+
+    for (perm, 0..) |p, i| {
+        new_shapes.items[i] = self._shapes.items[p];
+        new_strides.items[i] = self._strides.items[p];
     }
-
-    var new_shapes = try self._shapes.clone(self.allocator);
-    var new_strides = try self._strides.clone(self.allocator);
-
-    new_shapes.items[0] = self._shapes.items[1];
-    new_shapes.items[1] = self._shapes.items[0];
-    new_strides.items[0] = self._strides.items[1];
-    new_strides.items[1] = self._strides.items[0];
 
     const is_contiguous = checkContiguous(new_shapes.items, new_strides.items);
     return Self{
@@ -79,13 +87,7 @@ pub fn reshape(self: *const Self, new_shapes: std.ArrayList(usize)) !Self {
         return error.InvalidShape;
     }
 
-    var new_strides = try utils.computeStrides(self.allocator, new_shapes);
-    if (self._is_contiguous) {
-        const tmp0 = new_strides.items[0];
-        const tmp1 = new_strides.items[1];
-        new_strides.items[0] = tmp1;
-        new_strides.items[1] = tmp0;
-    }
+    const new_strides = try utils.computeStrides(self.allocator, new_shapes);
 
     return Self{
         ._dtype = self._dtype,

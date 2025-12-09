@@ -181,8 +181,11 @@ pub const Tensor = struct {
         return Self.fromDataRaw(self.allocator, self.layout.dtype(), shapes_a, Storage.Device.Cpu, self.storage.byteSize(), @as([*]u8, @ptrCast(new_buf.ptr)));
     }
 
-    pub fn rand(allocator: std.mem.Allocator, shapes_a: std.ArrayList(usize), low: f32, high: f32) !Self {
-        const total = utils.product(shapes_a.items);
+    pub fn rand(allocator: std.mem.Allocator, shapes_a: []const usize, low: f32, high: f32) !Self {
+        var shapes_i = try std.ArrayList(usize).initCapacity(allocator, shapes_a.len);
+        try shapes_i.appendSlice(allocator, shapes_a);
+
+        const total = utils.product(shapes_i.items);
 
         const buf = try allocator.alloc(f32, total);
 
@@ -197,7 +200,7 @@ pub const Tensor = struct {
         return Self{
             .allocator = allocator,
             .storage = Storage.init(allocator, Storage.Device.Cpu, @as([*]u8, @ptrCast(buf.ptr)), total * @sizeOf(f32)),
-            .layout = try Layout.init(allocator, DataType.f32, shapes_a),
+            .layout = try Layout.init(allocator, DataType.f32, shapes_i),
         };
     }
 
@@ -267,11 +270,24 @@ pub const Tensor = struct {
 
     // change shape
     pub fn transpose(self: *const Self) anyerror!Self {
-        const new_layout = try self.layout.transpose();
+        const new_layout = try self.layout.transpose(0, 1);
         const new_storage = self.storage.clone();
 
         return Self{
             .allocator = self.allocator,
+            .storage = new_storage,
+            .layout = new_layout,
+        };
+    }
+
+    pub fn permute(self: *const Self, perm: []const usize) anyerror!Self {
+        const obj = if (!self.layout.isContiguous()) &(try self.contiguous()) else self;
+
+        const new_layout = try obj.layout.permute(perm);
+        const new_storage = obj.storage.clone();
+
+        return Self{
+            .allocator = obj.allocator,
             .storage = new_storage,
             .layout = new_layout,
         };
@@ -668,6 +684,21 @@ test "random test" {
     const end = std.time.microTimestamp();
 
     std.debug.print("t3: {f}\nelapsed: {d} microseconds\n", .{ t3, end - begin });
+}
+
+test "permute test" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+
+    const t1 = try Tensor.rand(allocator, &.{ 1, 2, 3, 4, 5, 6 }, 0.0, 2.0);
+    const t1p = try t1.permute(&.{ 5, 4, 3, 2, 1, 0 });
+
+    std.debug.print("t1: {f}\nt1p: {f}\n", .{ t1.layout, t1p.layout });
 }
 
 test "contiguous test" {
