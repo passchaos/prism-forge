@@ -61,32 +61,63 @@ pub const Tensor = struct {
             return error.ShapeMismatch;
         }
 
-        const m = self.shapes()[0];
-        const n = other.shapes()[1];
-        const k = self.shapes()[1];
+        const lhs = if (!self.layout.isContiguous()) &(try self.contiguous()) else self;
 
-        const a = self.storage.dataSlice(f32);
-        const b = other.storage.dataSlice(f32);
+        const rhs = if (!other.layout.isContiguous()) &(try other.contiguous()) else other;
 
-        const buf = try std.ArrayList(f32).initCapacity(self.allocator, m * n);
+        const m = lhs.shapes()[0];
+        const n = rhs.shapes()[1];
+        const k = lhs.shapes()[1];
+
+        const a = lhs.storage.dataSlice(f32);
+        const b = rhs.storage.dataSlice(f32);
+
+        const buf = try std.ArrayList(f32).initCapacity(lhs.allocator, m * n);
         const c = @as([*]f32, @ptrCast(buf.items.ptr));
 
         host.matmul(a, b, c, m, n, k);
 
         const data = @as([*]u8, @ptrCast(c));
 
-        var shapes_i = try std.ArrayList(usize).initCapacity(self.allocator, 2);
-        try shapes_i.appendSlice(self.allocator, &.{ m, n });
-        return try Self.fromData(self.allocator, DataType.f32, shapes_i, m * n * @sizeOf(f32), data);
+        var shapes_i = try std.ArrayList(usize).initCapacity(lhs.allocator, 2);
+        try shapes_i.appendSlice(lhs.allocator, &.{ m, n });
+        return try Self.fromDataRaw(lhs.allocator, DataType.f32, shapes_i, Storage.Device.Cpu, m * n * @sizeOf(f32), data);
     }
 
     // create method
-    pub fn fromData(allocator: std.mem.Allocator, comptime dtype_i: DataType, shapes_a: std.ArrayList(usize), bytes_size: usize, data: [*]u8) anyerror!Self {
-        const storage = Storage.init(allocator, Storage.Device.Cpu, data, bytes_size);
+    pub fn fromDataRaw(allocator: std.mem.Allocator, dtype_i: DataType, shapes_a: std.ArrayList(usize), device: Storage.Device, bytes_size: usize, data: [*]u8) anyerror!Self {
+        var expected_size: usize = 1;
+        for (shapes_a.items) |shape| {
+            expected_size *= shape;
+        }
+        expected_size *= dtype_i.dtypeSize();
+
+        if (expected_size != bytes_size) {
+            return error.InvalidSize;
+        }
+
+        const storage = Storage.init(allocator, device, data, bytes_size);
 
         const layout = try Layout.init(allocator, dtype_i, shapes_a);
 
         return Self{ .allocator = allocator, .storage = storage, .layout = layout };
+    }
+
+    pub fn fromData(allocator: std.mem.Allocator, comptime dtype_i: DataType, shapes_a: std.ArrayList(usize), data: std.ArrayList(dtype_i.toTypeComp())) anyerror!Self {
+        const buf_r: [*]u8 = @ptrCast(data.items.ptr);
+        const bytes_size = dtype_i.dtypeSize() * data.items.len;
+
+        return Self.fromDataRaw(allocator, dtype_i, shapes_a, Storage.Device.Cpu, bytes_size, buf_r);
+    }
+
+    pub fn fromSlice(allocator: std.mem.Allocator, comptime dtype_i: DataType, shapes_a: []const usize, data: []const dtype_i.toTypeComp()) anyerror!Self {
+        var shape_list = try std.ArrayList(usize).initCapacity(allocator, shapes_a.len);
+        try shape_list.appendSlice(allocator, shapes_a);
+
+        var data_list = try std.ArrayList(dtype_i.toTypeComp()).initCapacity(allocator, data.len);
+        try data_list.appendSlice(allocator, data);
+
+        return try Self.fromData(allocator, dtype_i, shape_list, data_list);
     }
 
     pub fn fromShapedData(allocator: std.mem.Allocator, comptime arr: anytype) anyerror!Self {
@@ -102,39 +133,34 @@ pub const Tensor = struct {
         var arr_list = try std.ArrayList(usize).initCapacity(allocator, shapes_i.len);
         try arr_list.appendSlice(allocator, shapes_i);
 
-        const storage = Storage.init(allocator, Storage.Device.Cpu, buf_r.ptr, bytes_size);
-
-        const layout = try Layout.init(allocator, dtype_i, arr_list);
-
-        return Self{
-            .allocator = allocator,
-            .storage = storage,
-            .layout = layout,
-        };
+        return Self.fromDataRaw(allocator, dtype_i, arr_list, Storage.Device.Cpu, bytes_size, buf_r.ptr);
     }
 
-    pub fn contiguous(self: *Self) !Self {
+    pub fn contiguous(self: *const Self) !Self {
         // if (self.layout.isContiguous()) {
         //     return self.dupe();
         // }
 
-        const T = self.dtype().toType();
+        const elem_size = self.dtype().dtypeSize();
 
-        const new_buf = try self.allocator.alloc(T, self.size());
+        const new_buf = try self.allocator.alloc(u8, self.size() * elem_size);
 
         var idx: usize = 0;
         const indices = try self.allocator.alloc(usize, self.ndim());
 
-        const data_slice = self.dataSlice(T);
         const inner_scope = struct {
-            fn copyRecursive(tensor: *Self, indices_i: []usize, dim: usize, new_buf_i: []T, idx_i: *usize) void {
-                if (dim == self.ndim()) {
+            fn copyRecursive(tensor: *const Self, indices_i: []usize, dim: usize, new_buf_i: []u8, idx_i: *usize, elem_size_a: usize) void {
+                if (dim == tensor.ndim()) {
                     var offset: usize = 0;
                     for (indices_i, 0..) |ind, i| {
-                        offset += ind * self.strides()[i];
+                        offset += ind * tensor.strides()[i];
                     }
+                    offset *= elem_size_a;
 
-                    new_buf_i[idx_i.*] = data_slice[offset];
+                    const src = tensor.rawDataSlice()[offset .. offset + elem_size_a];
+                    const dst = new_buf_i[idx_i.* * elem_size_a .. (idx_i.* + 1) * elem_size_a];
+                    @memcpy(dst, src);
+
                     idx_i.* += 1;
                     return;
                 }
@@ -142,21 +168,17 @@ pub const Tensor = struct {
                 const shape_dim = tensor.shapes()[dim];
                 for (0..shape_dim) |i| {
                     indices_i[dim] = i;
-                    copyRecursive(tensor, indices_i, dim + 1, new_buf_i, idx_i);
+                    copyRecursive(tensor, indices_i, dim + 1, new_buf_i, idx_i, elem_size_a);
                 }
             }
         };
 
-        inner_scope.copyRecursive(self, indices, 0, new_buf, &idx);
+        inner_scope.copyRecursive(self, indices, 0, new_buf, &idx, elem_size);
 
-        const layout = try Layout.init(self.allocator, self.layout.dtype, self.layout.shapes);
-        const storage = Storage.init(self.allocator, Storage.Device.Cpu, @as([*]u8, @ptrCast(new_buf.ptr)), self.storage.byteSize());
+        var shapes_a = try std.ArrayList(usize).initCapacity(self.allocator, self.ndim());
+        try shapes_a.appendSlice(self.allocator, self.shapes());
 
-        return Self{
-            .allocator = self.allocator,
-            .storage = storage,
-            .layout = layout,
-        };
+        return Self.fromDataRaw(self.allocator, self.layout.dtype(), shapes_a, Storage.Device.Cpu, self.storage.byteSize(), @as([*]u8, @ptrCast(new_buf.ptr)));
     }
 
     pub fn rand(allocator: std.mem.Allocator, shapes_a: std.ArrayList(usize), low: f32, high: f32) !Self {
@@ -202,6 +224,10 @@ pub const Tensor = struct {
     // attributes
     pub fn dataSlice(self: *const Self, comptime T: anytype) []const T {
         return self.storage.dataSlice(T)[0..self.size()];
+    }
+
+    pub fn rawDataSlice(self: *const Self) []u8 {
+        return self.storage.rawDataSlice()[0..self.storage.byteSize()];
     }
 
     pub fn getWithIndices(self: *const Self, comptime dtype_i: DataType, indices: []const usize) !dtype_i.toType() {
@@ -252,11 +278,13 @@ pub const Tensor = struct {
     }
 
     pub fn reshape(self: *const Self, new_shapes: std.ArrayList(usize)) anyerror!Self {
-        const new_layout = try self.layout.reshape(new_shapes);
-        const new_storage = self.storage.clone();
+        const obj = if (!self.layout.isContiguous()) &(try self.contiguous()) else self;
+
+        const new_layout = try obj.layout.reshape(new_shapes);
+        const new_storage = obj.storage.clone();
 
         return Self{
-            .allocator = self.allocator,
+            .allocator = obj.allocator,
             .storage = new_storage,
             .layout = new_layout,
         };
@@ -642,209 +670,36 @@ test "random test" {
     std.debug.print("t3: {f}\nelapsed: {d} microseconds\n", .{ t3, end - begin });
 }
 
-// test "construction test" {
-//     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-//     defer _ = gpa.deinit();
+test "contiguous test" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
 
-//     const allocator = gpa.allocator();
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+    defer arena.deinit();
 
-//     const DType = DataType;
-//     const TensorF32x3x2 = Tensor(DType.f32, &.{ 3, 2 });
+    const allocator = arena.allocator();
 
-//     const arr1 = [3][2]f32{
-//         [2]f32{ 1.0, 2.0 },
-//         [2]f32{ 3.0, 4.0 },
-//         [2]f32{ 5.0, 6.0 },
-//     };
-//     const t11 = try TensorF32x3x2.from_shaped_data(allocator, &arr1);
-//     defer t11.deinit(allocator);
-//     std.debug.print("t11: {f}\n", .{t11});
+    const t1 = try Tensor.fromSlice(allocator, DataType.f32, &.{ 3, 4 }, &.{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0 });
+    std.debug.print("t1: {f}\n", .{t1});
 
-//     const Tensor3U32_1 = Tensor(DType.u32, &.{ 3, null, 5 });
-//     const t3_1 = try Tensor3U32_1.full(allocator, .{ .shape = .{ 3, 4, 5 } }, 21);
-//     defer t3_1.deinit(allocator);
-//     std.debug.print("t3_1: {f}\n", .{t3_1});
+    const t1_ds = t1.dataSlice(f32);
 
-//     const TensorU32 = Tensor(DType.u32, null);
+    std.debug.print("t1 ds: {any}\n", .{t1_ds});
 
-//     var shape4 = try std.ArrayList(usize).initCapacity(allocator, 4);
-//     try shape4.appendSlice(allocator, &.{ 2, 3, 3, 1, 5 });
+    const t1t = try t1.transpose();
+    std.debug.print("t1t: {f}\n", .{t1t});
 
-//     const t4 = try TensorU32.full(allocator, .{ .shape = try shape4.clone(allocator) }, 24);
-//     defer t4.deinit(allocator);
-//     std.debug.print("t4: {f}\n", .{t4});
+    const t1tc = try t1t.contiguous();
+    std.debug.print("t1tc: {f}\n", .{t1tc});
+    try std.testing.expect(t1tc.layout.isContiguous());
 
-//     const t5 = try TensorU32.full(allocator, .{ .shape = shape4 }, 24);
-//     defer t5.deinit(allocator);
-//     std.debug.print("t5: {f} {any}\n", .{ t5, t5._shape });
+    std.debug.print("t1t ds: {any}\nt1tc ds: {any}\n", .{ t1t.dataSlice(f32), t1tc.dataSlice(f32) });
 
-//     const Tensor2 = Tensor(DType.f32, &.{ null, null });
-//     const t6 = try Tensor2.eye(allocator, 10);
-//     defer t6.deinit(allocator);
-//     std.debug.print("t6: {f}\n", .{t6});
-// }
+    try std.testing.expectApproxEqAbs(try t1t.getWithIndices(DataType.f32, &.{ 0, 2 }), try t1tc.getWithIndices(DataType.f32, &.{ 0, 2 }), 0.00001);
 
-// test "arange" {
-//     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-//     defer _ = gpa.deinit();
+    // var shape_1 = try std.ArrayList(usize).initCapacity(allocator, 10);
+    // try shape_1.appendSlice(allocator, &.{3, 4});
 
-//     const allocator = gpa.allocator();
-
-//     const Tensor3 = Tensor(DataType.u32, &.{null});
-
-//     const t1 = try Tensor3.arange_count(allocator, 1, 2, 20);
-//     defer t1.deinit(allocator);
-//     std.debug.print("t1: {f}\n", .{t1});
-
-//     const t2 = try Tensor3.arange_step(
-//         allocator,
-//         1,
-//         40,
-//         2,
-//     );
-//     defer t2.deinit(allocator);
-//     std.debug.print("t2: {f}\n", .{t2});
-// }
-
-// test "shape transform" {
-//     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-//     defer _ = gpa.deinit();
-
-//     const allocator = gpa.allocator();
-
-//     const Tensor112 = Tensor(DataType.u32, &.{ 2, 2 });
-//     const Tensor122 = Tensor(DataType.u32, &.{ 3, 3 });
-
-//     var arr1 = try std.ArrayList(u32).initCapacity(allocator, 4);
-//     try arr1.appendSlice(allocator, &[_]u32{ 1, 2, 3, 4 });
-//     var t112 = try Tensor112.from_data(allocator, .{}, arr1);
-//     defer t112.deinit(allocator);
-
-//     try t112.transpose();
-
-//     var t112_reshaped = try t112.reshape(&.{ 4, 1 });
-//     defer t112_reshaped.deinit(allocator);
-//     std.debug.print("t112 reshaped: {f}\n", .{t112_reshaped});
-
-//     const t112_comp_reshaped = try t112_reshaped.reshapeComp(&.{ 4, 1 });
-//     defer t112_comp_reshaped.deinit(allocator);
-//     std.debug.print("t112 comp reshaped: {f}\n", .{t112_comp_reshaped});
-
-//     std.debug.print("t112: {f}\n", .{t112});
-
-//     const Tensor41 = Tensor(DataType.u32, &.{ 4, 1 });
-
-//     var arr1_normal = try std.ArrayList(u32).initCapacity(allocator, 4);
-//     try arr1_normal.appendSlice(allocator, &[_]u32{ 6, 7, 8, 9 });
-//     const t112_normal = try Tensor41.from_data(allocator, .{}, arr1_normal);
-//     defer t112_normal.deinit(allocator);
-//     std.debug.print("t112 normal: {f}\n", .{t112_normal});
-
-//     if (@TypeOf(t112_reshaped) == @TypeOf(t112_normal)) {
-//         std.debug.print("same type\n", .{});
-//     } else {
-//         std.debug.print("different type\n", .{});
-//     }
-
-//     // defer t112_reshaped.deinit(allocator);
-
-//     var arr2 = try std.ArrayList(u32).initCapacity(allocator, 6);
-//     try arr2.appendSlice(allocator, &[_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9 });
-//     var t122 = try Tensor122.from_data(allocator, .{}, arr2);
-//     defer t122.deinit(allocator);
-
-//     std.debug.print("t122: {f}\n", .{t122});
-//     try t122.transpose();
-//     std.debug.print("transposed t122: {f}\n", .{t122});
-
-//     const Tensor22 = Tensor(DataType.f32, &.{ null, 5 });
-//     var t22 = try Tensor22.eye(allocator, 5);
-//     defer t22.deinit(allocator);
-
-//     std.debug.print("t22: {f}\n", .{t22});
-//     try t22.transpose();
-//     std.debug.print("t22 transpose: {f}\n", .{t22});
-
-//     const Tensor32 = Tensor(DataType.f32, null);
-//     const t32 = try Tensor32.eye(allocator, 5);
-//     defer t32.deinit(allocator);
-
-//     const arr = [4][5]f32{ [_]f32{ 1, 2, 3, 4, 5 }, [_]f32{ 6, 7, 8, 9, 10 }, [_]f32{ 11, 12, 13, 14, 15 }, [_]f32{ 16, 17, 18, 19, 20 } };
-//     var t312 = try Tensor32.from_shaped_data(allocator, &arr);
-//     defer t312.deinit(allocator);
-
-//     std.debug.print("t312: {f}\n", .{t312});
-
-//     try t312.transpose();
-
-//     std.debug.print("t312 transpose: {f}\n", .{t312});
-// }
-
-// test "map related methods" {
-//     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-//     defer _ = gpa.deinit();
-
-//     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
-//     defer arena.deinit();
-//     const allocator = arena.allocator();
-//     // const allocator = gpa.allocator();
-
-//     const TensorF32x3x2 = Tensor(DataType.f32, &.{ 3, 2 });
-
-//     const arr1 = [3][2]f32{
-//         [2]f32{ 1.1, 2.2 },
-//         [2]f32{ 3.3, 4.01 },
-//         [2]f32{ 5.9, 6.1 },
-//     };
-//     var t11 = try TensorF32x3x2.from_shaped_data(allocator, &arr1);
-//     std.debug.print("t11: {f}\n", .{t11});
-
-//     const FnWithCtx = struct {
-//         pub fn double(x: f32) f32 {
-//             return 2.0 * x;
-//         }
-//         pub fn call(x: f32) i32 {
-//             return @as(i32, @intFromFloat(x));
-//         }
-//     };
-
-//     const t11_1 = try t11.map(allocator, DataType.i32, FnWithCtx.call);
-//     std.debug.print("t11_1: {f}\n", .{t11_1});
-
-//     t11.map_i(FnWithCtx.double);
-//     std.debug.print("t11: {f}\n", .{t11});
-// }
-
-// test "equal judge" {
-//     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-//     defer _ = gpa.deinit();
-
-//     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
-//     defer arena.deinit();
-//     const allocator = arena.allocator();
-
-//     const TensorF32x3x2 = Tensor(DataType.f32, &.{ 3, 2 });
-
-//     const arr1 = [3][2]f32{
-//         [2]f32{ 1.1, 2.2 },
-//         [2]f32{ 3.3, 4.01 },
-//         [2]f32{ 5.9, 6.1 },
-//     };
-
-//     const t11 = try TensorF32x3x2.from_shaped_data(allocator, &arr1);
-
-//     const arr2 = [3][2]f32{
-//         [2]f32{ 1.1, 2.2 },
-//         [2]f32{ 3.3, 4.01 },
-//         [2]f32{ 5.9, 6.1000005 },
-//     };
-
-//     const a: []const f32 = &.{ 5.9, 6.1000001 };
-//     const b: []const f32 = &.{ 5.9, 6.1 };
-
-//     try std.testing.expect(utils.sliceEqual(f32, a, b));
-
-//     const t11_1 = try TensorF32x3x2.from_shaped_data(allocator, &arr2);
-//     try std.testing.expect(!t11.equal(&t11_1));
-//     try std.testing.expect(t11.approxEqual(&t11_1, 0.0000001, 0.00001));
-// }
+    // const data = try std.ArrayList(f32).initCapacity(allocator, num: usize)
+    // const t1 = try Tensor.fromData(allocator: Allocator, comptime dtype_i: DataType, shapes_a: Aligned(usize), data: Aligned(either type))
+}

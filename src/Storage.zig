@@ -26,6 +26,10 @@ pub fn dataSlice(self: *const Self, comptime T: anytype) [*]T {
     return d_buf;
 }
 
+pub fn rawDataSlice(self: *const Self) [*]u8 {
+    return self._buf;
+}
+
 pub fn byteSize(self: *const Self) usize {
     return self._bytes_size;
 }
