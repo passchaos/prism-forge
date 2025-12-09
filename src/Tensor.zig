@@ -41,6 +41,7 @@ const Self = @This();
 allocator: std.mem.Allocator,
 storage: Storage,
 layout: Layout,
+_storage_offset: usize = 0,
 
 // scope method
 pub fn cat(allocator: std.mem.Allocator, tensors: []const Self, dim: usize) !Self {
@@ -127,6 +128,13 @@ pub fn split(self: *const Self, chunk_size: usize, dim: usize) ![]const Self {
     var offset: usize = 0;
     for (0..num_splits) |i| {
         const chunk_size_i = if ((offset + chunk_size) <= dim_len) chunk_size else (dim_len - offset);
+
+        var new_shape = try std.ArrayList(usize).initCapacity(self.allocator, self.shapes().len);
+        try new_shape.appendSlice(self.allocator, self.shapes());
+        new_shape.items[dim] = chunk_size_i;
+
+        result[i] = try Self.fromDataRaw(self.allocator, self.dtype(), new_shape, Storage.Device.Cpu, chunk_size_i * self.shapes()[dim + 1], @ptrCast(new_buf[offset .. offset + chunk_size_i * self.shapes()[dim + 1]]));
+        offset += chunk_size_i;
     }
 }
 
@@ -168,11 +176,11 @@ pub fn matmul(self: *const Self, other: *const Self) anyerror!Self {
 
     var shapes_i = try std.ArrayList(usize).initCapacity(lhs.allocator, 2);
     try shapes_i.appendSlice(lhs.allocator, &.{ m, n });
-    return try Self.fromDataRaw(lhs.allocator, DataType.f32, shapes_i, Storage.Device.Cpu, m * n * @sizeOf(f32), data);
+    return try Self.fromDataRaw(lhs.allocator, DataType.f32, shapes_i, Storage.Device.Cpu, data);
 }
 
 // create method
-pub fn fromDataRaw(allocator: std.mem.Allocator, dtype_i: DataType, shapes_a: std.ArrayList(usize), device: Storage.Device, bytes_size: usize, data: [*]u8) anyerror!Self {
+pub fn fromDataRaw(allocator: std.mem.Allocator, dtype_i: DataType, shapes_a: std.ArrayList(usize), device: Storage.Device, data: [*]u8) anyerror!Self {
     var expected_size: usize = 1;
     for (shapes_a.items) |shape| {
         expected_size *= shape;
@@ -316,7 +324,7 @@ pub fn randNorm(allocator: std.mem.Allocator, shapes_a: []const usize, mean: f32
 }
 
 // attributes
-pub fn dataSlice(self: *const Self, comptime T: anytype) []const T {
+fn dataSlice(self: *const Self, comptime T: anytype) []const T {
     return self.storage.dataSlice(T)[0..self.size()];
 }
 
@@ -325,7 +333,8 @@ pub fn rawDataSlice(self: *const Self) []u8 {
 }
 
 pub fn getWithIndices(self: *const Self, comptime dtype_i: DataType, indices: []const usize) !dtype_i.toType() {
-    const flat_index = try indices_to_flat(indices, self.shapes(), self.strides());
+    var flat_index = try indices_to_flat(indices, self.shapes(), self.strides());
+    flat_index += self._storage_offset;
     return self.dataSlice(dtype_i.toType())[flat_index];
 }
 
@@ -443,7 +452,7 @@ fn getDataWithIdx(self: *const Self, dtype_i: DataType, idx: usize) Scalar {
 }
 
 pub fn size(self: *const Self) usize {
-    return self.storage.byteSize() / self.layout.dtypeSize();
+    return self.layout.size() * self.layout.dtypeSize();
 }
 
 pub fn dtype(self: *const Self) DataType {
