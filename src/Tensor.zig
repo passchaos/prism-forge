@@ -114,6 +114,22 @@ pub fn stack(allocator: std.mem.Allocator, tensors: []const Self, dim: usize) !S
     return Self.fromDataRaw(allocator, dtype_i, shape_list, Storage.Device.Cpu, new_buf.len, @ptrCast(new_buf));
 }
 
+// divide
+pub fn split(self: *const Self, chunk_size: usize, dim: usize) ![]const Self {
+    if (dim >= self.ndim()) return error.InvalidDim;
+
+    const dim_len = self.shapes()[dim];
+    if (chunk_size == 0 or chunk_size > dim_len) return error.InvalidSplit;
+
+    const num_splits = (dim_len + chunk_size - 1) / chunk_size;
+    var result = try self.allocator.alloc(Self, num_splits);
+
+    var offset: usize = 0;
+    for (0..num_splits) |i| {
+        const chunk_size_i = if ((offset + chunk_size) <= dim_len) chunk_size else (dim_len - offset);
+    }
+}
+
 // op method
 pub fn matmul(self: *const Self, other: *const Self) anyerror!Self {
     if (self.dtype() != other.dtype()) {
@@ -208,6 +224,7 @@ pub fn fromShapedData(allocator: std.mem.Allocator, comptime arr: anytype) anyer
 }
 
 pub fn contiguous(self: *const Self) !Self {
+    std.debug.print("run contiguouse\n", .{});
     // if (self.layout.isContiguous()) {
     //     return self.dupe();
     // }
@@ -749,9 +766,11 @@ test "random test" {
     const t2 = try Self.randNorm(allocator, &.{ 3000, 3000 }, 0.0, 1.0);
     std.debug.print("t2: {f}\n", .{t2});
 
-    const begin = std.time.microTimestamp();
-    const t3 = try t1.matmul(&(try t2.transpose()));
-    const end = std.time.microTimestamp();
+    const t2_tc = try (try t2.transpose()).contiguous();
+
+    const begin = std.time.milliTimestamp();
+    const t3 = try t1.matmul(&t2_tc);
+    const end = std.time.milliTimestamp();
 
     std.debug.print("t3: {f}\nelapsed: {d} microseconds\n", .{ t3, end - begin });
 }

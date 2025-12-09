@@ -16,20 +16,17 @@ pub fn main() !void {
 
     const allocator = arena.allocator();
 
-    const arr1 = [3][2]f32{
-        [2]f32{ 1.0, 2.0 },
-        [2]f32{ 3.0, 4.0 },
-        [2]f32{ 5.0, 6.0 },
-    };
-    const t111 = try Tensor.fromShapedData(allocator, &arr1);
+    const t1 = try Tensor.rand(allocator, &.{ 3000, 3000 }, 0.0, 1.0);
+    std.debug.print("t1: {f}\n", .{t1.layout});
 
-    const arr2 = [2][4]f32{
-        [4]f32{ 3.0, 4.0, 5.0, 6.0 },
-        [4]f32{ 5.0, 6.0, 7.0, 8.0 },
-    };
-    const t112 = try Tensor.fromShapedData(allocator, &arr2);
+    const t2 = try Tensor.randNorm(allocator, &.{ 3000, 3000 }, 0.0, 1.0);
+    std.debug.print("t2: {f}\n", .{t2.layout});
 
-    const t113 = try t111.matmul(&t112);
-    std.debug.print("t111: {f} t112: {f}\n", .{ t111, t112 });
-    std.debug.print("t113: {f}\n", .{t113});
+    const t2_tc = try (try t2.transpose()).contiguous();
+
+    const begin = std.time.milliTimestamp();
+    const t3 = try t1.matmul(&t2_tc);
+    const end = std.time.milliTimestamp();
+
+    std.debug.print("t3: {f}\nelapsed: {d} microseconds\n", .{ t3.layout, end - begin });
 }
