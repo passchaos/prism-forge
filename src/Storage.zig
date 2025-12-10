@@ -20,13 +20,13 @@ pub fn init(allocator: std.mem.Allocator, device: Device, buf: [*]u8, bytes_size
     };
 }
 
-pub fn dataSlice(self: *const Self, comptime T: anytype) [*]T {
+pub fn dataSlice(self: *const Self, comptime T: anytype) []const T {
     const d_buf: [*]T = @ptrCast(@alignCast(self._buf));
 
-    return d_buf;
+    return d_buf[0 .. self.byteSize() / @sizeOf(T)];
 }
 
-pub fn rawDataSlice(self: *const Self) [*]u8 {
+pub fn rawDataSlice(self: *const Self) [*]const u8 {
     return self._buf;
 }
 

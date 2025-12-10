@@ -78,9 +78,7 @@ pub fn cat(allocator: std.mem.Allocator, tensors: []const Self, dim: usize) !Sel
         offset += bytes.len;
     }
 
-    var shape_list = try std.ArrayList(usize).initCapacity(allocator, new_shape.len);
-    try shape_list.appendSlice(allocator, new_shape);
-    return Self.fromDataRaw(allocator, dtype_i, shape_list, Storage.Device.Cpu, new_buf.len, @ptrCast(new_buf));
+    return Self.fromDataRaw(allocator, dtype_i, new_shape, Storage.Device.Cpu, @ptrCast(new_buf), new_buf.len);
 }
 
 pub fn stack(allocator: std.mem.Allocator, tensors: []const Self, dim: usize) !Self {
@@ -110,9 +108,7 @@ pub fn stack(allocator: std.mem.Allocator, tensors: []const Self, dim: usize) !S
         offset += bytes.len;
     }
 
-    var shape_list = try std.ArrayList(usize).initCapacity(allocator, new_shape.len);
-    try shape_list.appendSlice(allocator, new_shape);
-    return Self.fromDataRaw(allocator, dtype_i, shape_list, Storage.Device.Cpu, new_buf.len, @ptrCast(new_buf));
+    return Self.fromDataRaw(allocator, dtype_i, new_shape, Storage.Device.Cpu, @ptrCast(new_buf), new_buf.len);
 }
 
 // divide
@@ -133,9 +129,17 @@ pub fn split(self: *const Self, chunk_size: usize, dim: usize) ![]const Self {
         try new_shape.appendSlice(self.allocator, self.shapes());
         new_shape.items[dim] = chunk_size_i;
 
-        result[i] = try Self.fromDataRaw(self.allocator, self.dtype(), new_shape, Storage.Device.Cpu, chunk_size_i * self.shapes()[dim + 1], @ptrCast(new_buf[offset .. offset + chunk_size_i * self.shapes()[dim + 1]]));
+        // must use old strides
+        var new_strides = try std.ArrayList(usize).initCapacity(self.allocator, self.strides().len);
+        try new_strides.appendSlice(self.allocator, self.strides());
+
+        const layout = try Layout.initRaw(self.allocator, self.dtype(), new_shape, new_strides);
+        result[i] = try Self.fromDataImpl(self.allocator, layout, self.storage.clone(), self._storage_offset + offset * self.strides()[dim]);
+
         offset += chunk_size_i;
     }
+
+    return result;
 }
 
 // op method
@@ -164,8 +168,8 @@ pub fn matmul(self: *const Self, other: *const Self) anyerror!Self {
     const n = rhs.shapes()[1];
     const k = lhs.shapes()[1];
 
-    const a = lhs.storage.dataSlice(f32);
-    const b = rhs.storage.dataSlice(f32);
+    const a: [*c]const f32 = @ptrCast(lhs.storage.dataSlice(f32));
+    const b: [*c]const f32 = @ptrCast(rhs.storage.dataSlice(f32));
 
     const buf = try std.ArrayList(f32).initCapacity(lhs.allocator, m * n);
     const c = @as([*]f32, @ptrCast(buf.items.ptr));
@@ -174,45 +178,44 @@ pub fn matmul(self: *const Self, other: *const Self) anyerror!Self {
 
     const data = @as([*]u8, @ptrCast(c));
 
-    var shapes_i = try std.ArrayList(usize).initCapacity(lhs.allocator, 2);
-    try shapes_i.appendSlice(lhs.allocator, &.{ m, n });
-    return try Self.fromDataRaw(lhs.allocator, DataType.f32, shapes_i, Storage.Device.Cpu, data);
+    return try Self.fromDataRaw(lhs.allocator, DataType.f32, &.{ m, n }, Storage.Device.Cpu, data, m * n * @sizeOf(f32));
 }
 
 // create method
-pub fn fromDataRaw(allocator: std.mem.Allocator, dtype_i: DataType, shapes_a: std.ArrayList(usize), device: Storage.Device, data: [*]u8) anyerror!Self {
-    var expected_size: usize = 1;
-    for (shapes_a.items) |shape| {
-        expected_size *= shape;
-    }
-    expected_size *= dtype_i.dtypeSize();
-
-    if (expected_size != bytes_size) {
+pub fn fromDataImpl(allocator: std.mem.Allocator, layout_a: Layout, storage_a: Storage, storage_offset_a: usize) !Self {
+    const layout_bytes_zie = layout_a.size() * layout_a.dtypeSize();
+    if (layout_bytes_zie + storage_offset_a > storage_a.byteSize()) {
         return error.InvalidSize;
     }
 
+    return Self{
+        .allocator = allocator,
+        .layout = layout_a,
+        .storage = storage_a,
+        ._storage_offset = storage_offset_a,
+    };
+}
+
+pub fn fromDataRaw(allocator: std.mem.Allocator, dtype_i: DataType, shapes_a: []const usize, device: Storage.Device, data: [*]u8, bytes_size: usize) anyerror!Self {
     const storage = Storage.init(allocator, device, data, bytes_size);
 
     const layout = try Layout.init(allocator, dtype_i, shapes_a);
 
-    return Self{ .allocator = allocator, .storage = storage, .layout = layout };
+    return try Self.fromDataImpl(allocator, layout, storage, 0);
 }
 
-pub fn fromData(allocator: std.mem.Allocator, comptime dtype_i: DataType, shapes_a: std.ArrayList(usize), data: std.ArrayList(dtype_i.toTypeComp())) anyerror!Self {
+pub fn fromData(allocator: std.mem.Allocator, comptime dtype_i: DataType, shapes_a: []const usize, data: std.ArrayList(dtype_i.toTypeComp())) anyerror!Self {
     const buf_r: [*]u8 = @ptrCast(data.items.ptr);
     const bytes_size = dtype_i.dtypeSize() * data.items.len;
 
-    return Self.fromDataRaw(allocator, dtype_i, shapes_a, Storage.Device.Cpu, bytes_size, buf_r);
+    return Self.fromDataRaw(allocator, dtype_i, shapes_a, Storage.Device.Cpu, buf_r, bytes_size);
 }
 
 pub fn fromSlice(allocator: std.mem.Allocator, comptime dtype_i: DataType, shapes_a: []const usize, data: []const dtype_i.toTypeComp()) anyerror!Self {
-    var shape_list = try std.ArrayList(usize).initCapacity(allocator, shapes_a.len);
-    try shape_list.appendSlice(allocator, shapes_a);
-
     var data_list = try std.ArrayList(dtype_i.toTypeComp()).initCapacity(allocator, data.len);
     try data_list.appendSlice(allocator, data);
 
-    return try Self.fromData(allocator, dtype_i, shape_list, data_list);
+    return try Self.fromData(allocator, dtype_i, shapes_a, data_list);
 }
 
 pub fn fromShapedData(allocator: std.mem.Allocator, comptime arr: anytype) anyerror!Self {
@@ -225,10 +228,7 @@ pub fn fromShapedData(allocator: std.mem.Allocator, comptime arr: anytype) anyer
 
     const bytes_size = buf_r.len;
 
-    var arr_list = try std.ArrayList(usize).initCapacity(allocator, shapes_i.len);
-    try arr_list.appendSlice(allocator, shapes_i);
-
-    return Self.fromDataRaw(allocator, dtype_i, arr_list, Storage.Device.Cpu, bytes_size, buf_r.ptr);
+    return Self.fromDataRaw(allocator, dtype_i, shapes_i, Storage.Device.Cpu, buf_r.ptr, bytes_size);
 }
 
 pub fn contiguous(self: *const Self) !Self {
@@ -274,14 +274,32 @@ pub fn contiguous(self: *const Self) !Self {
     var shapes_a = try std.ArrayList(usize).initCapacity(self.allocator, self.ndim());
     try shapes_a.appendSlice(self.allocator, self.shapes());
 
-    return Self.fromDataRaw(self.allocator, self.layout.dtype(), shapes_a, Storage.Device.Cpu, self.storage.byteSize(), @as([*]u8, @ptrCast(new_buf.ptr)));
+    return Self.fromDataRaw(self.allocator, self.layout.dtype(), shapes_a.items, Storage.Device.Cpu, @as([*]u8, @ptrCast(new_buf.ptr)), self.storage.byteSize());
+}
+
+pub fn arange(allocator: std.mem.Allocator, comptime data_type: DataType, args: struct { start: data_type.toTypeComp() = @as(data_type.toTypeComp(), 0), end: data_type.toTypeComp(), step: data_type.toTypeComp() = @as(data_type.toTypeComp(), 1) }) !Self {
+    const T = data_type.toTypeComp();
+
+    var arr_list = try std.ArrayList(T).initCapacity(allocator, 10);
+
+    const start = args.start;
+    const step = args.step;
+
+    var tmp = start;
+
+    while (tmp < args.end) {
+        try arr_list.append(allocator, tmp);
+        tmp += step;
+    }
+
+    var shape_list = try std.ArrayList(usize).initCapacity(allocator, 1);
+    try shape_list.append(allocator, arr_list.items.len);
+
+    return Self.fromData(allocator, data_type, shape_list.items, arr_list);
 }
 
 pub fn rand(allocator: std.mem.Allocator, shapes_a: []const usize, low: f32, high: f32) !Self {
-    var shapes_i = try std.ArrayList(usize).initCapacity(allocator, shapes_a.len);
-    try shapes_i.appendSlice(allocator, shapes_a);
-
-    const total = utils.product(shapes_i.items);
+    const total = utils.product(shapes_a);
 
     const buf = try allocator.alloc(f32, total);
 
@@ -296,15 +314,12 @@ pub fn rand(allocator: std.mem.Allocator, shapes_a: []const usize, low: f32, hig
     return Self{
         .allocator = allocator,
         .storage = Storage.init(allocator, Storage.Device.Cpu, @as([*]u8, @ptrCast(buf.ptr)), total * @sizeOf(f32)),
-        .layout = try Layout.init(allocator, DataType.f32, shapes_i),
+        .layout = try Layout.init(allocator, DataType.f32, shapes_a),
     };
 }
 
 pub fn randNorm(allocator: std.mem.Allocator, shapes_a: []const usize, mean: f32, stddev: f32) !Self {
-    var shapes_i = try std.ArrayList(usize).initCapacity(allocator, shapes_a.len);
-    try shapes_i.appendSlice(allocator, shapes_a);
-
-    const total = utils.product(shapes_i.items);
+    const total = utils.product(shapes_a);
 
     const buf = try allocator.alloc(f32, total);
 
@@ -319,23 +334,38 @@ pub fn randNorm(allocator: std.mem.Allocator, shapes_a: []const usize, mean: f32
     return Self{
         .allocator = allocator,
         .storage = Storage.init(allocator, Storage.Device.Cpu, @as([*]u8, @ptrCast(buf.ptr)), total * @sizeOf(f32)),
-        .layout = try Layout.init(allocator, DataType.f32, shapes_i),
+        .layout = try Layout.init(allocator, DataType.f32, shapes_a),
     };
 }
 
 // attributes
 fn dataSlice(self: *const Self, comptime T: anytype) []const T {
-    return self.storage.dataSlice(T)[0..self.size()];
+    return self.storage.dataSlice(T);
 }
 
-pub fn rawDataSlice(self: *const Self) []u8 {
+pub fn rawDataSlice(self: *const Self) []const u8 {
     return self.storage.rawDataSlice()[0..self.storage.byteSize()];
 }
 
-pub fn getWithIndices(self: *const Self, comptime dtype_i: DataType, indices: []const usize) !dtype_i.toType() {
-    var flat_index = try indices_to_flat(indices, self.shapes(), self.strides());
-    flat_index += self._storage_offset;
-    return self.dataSlice(dtype_i.toType())[flat_index];
+pub fn getWithIndices(self: *const Self, dtype_i: DataType, indices: []const usize) !Scalar {
+    var idx = try indices_to_flat(indices, self.shapes(), self.strides());
+    idx += self._storage_offset;
+
+    return switch (dtype_i) {
+        .f16 => Scalar{ .f16 = self.dataSlice(DataType.f16.toType())[idx] },
+        .f32 => Scalar{ .f32 = self.dataSlice(DataType.f32.toType())[idx] },
+        .i32 => Scalar{ .i32 = self.dataSlice(DataType.i32.toType())[idx] },
+        .u32 => Scalar{ .u32 = self.dataSlice(DataType.u32.toType())[idx] },
+    };
+}
+
+pub fn getWithIndicesCompType(self: *const Self, comptime dtype_i: DataType, indices: []const usize) !dtype_i.toTypeComp() {
+    var idx = try indices_to_flat(indices, self.shapes(), self.strides());
+    idx += self._storage_offset;
+
+    const T = dtype_i.toTypeComp();
+
+    return self.dataSlice(T)[idx];
 }
 
 // data transform
@@ -393,7 +423,7 @@ pub fn permute(self: *const Self, perm: []const usize) anyerror!Self {
     };
 }
 
-pub fn reshape(self: *const Self, new_shapes: std.ArrayList(usize)) anyerror!Self {
+pub fn reshape(self: *const Self, new_shapes: []const usize) anyerror!Self {
     const obj = if (!self.layout.isContiguous()) &(try self.contiguous()) else self;
 
     const new_layout = try obj.layout.reshape(new_shapes);
@@ -411,7 +441,7 @@ pub fn unsqueeze(self: *const Self, dim: usize) anyerror!Self {
     try new_shapes.appendSlice(self.allocator, self.layout.shapes());
     try new_shapes.insert(self.allocator, dim, 1);
 
-    return try self.reshape(new_shapes);
+    return try self.reshape(new_shapes.items);
 }
 
 pub fn squeeze(self: *const Self, dim: ?usize) anyerror!Self {
@@ -433,7 +463,7 @@ pub fn squeeze(self: *const Self, dim: ?usize) anyerror!Self {
         }
     }
 
-    return try self.reshape(new_shapes);
+    return try self.reshape(new_shapes.items);
 }
 
 // core method
@@ -515,9 +545,7 @@ fn fmtRecursive(self: *const Self, writer: *std.Io.Writer, depth: usize, indices
     const dims = self.ndim();
 
     if (depth == dims) {
-        const flat_index = try indices_to_flat(indices, asSlice(&self.shapes()), asSlice(&self.strides()));
-
-        try writer.print("{f}", .{self.getDataWithIdx(self.layout.dtype(), flat_index)});
+        try writer.print("{f}", .{try self.getWithIndices(self.layout.dtype(), indices)});
     } else if (depth == dims - 1) {
         try self.fmt1dSlice(writer, indices);
     } else {
@@ -622,9 +650,7 @@ fn fmt1dSlice(self: *const Self, writer: *std.Io.Writer, base_indices: []const u
             try indices.appendSlice(allocator, base_indices);
             try indices.append(allocator, i);
 
-            const flat_idx = try indices_to_flat(indices.items, asSlice(&self.shapes()), asSlice(&self.strides()));
-
-            try writer.print("{f}", .{self.getDataWithIdx(self.layout.dtype(), flat_idx)});
+            try writer.print("{f}", .{try self.getWithIndices(self.layout.dtype(), indices.items)});
         }
     } else {
         for (0..pad_show_count) |i| {
@@ -638,9 +664,7 @@ fn fmt1dSlice(self: *const Self, writer: *std.Io.Writer, base_indices: []const u
             try indices.appendSlice(allocator, base_indices);
             try indices.append(allocator, i);
 
-            const flat_idx = try indices_to_flat(indices.items, asSlice(&self.shapes()), asSlice(&self.strides()));
-
-            try writer.print("{f}", .{self.getDataWithIdx(self.layout.dtype(), flat_idx)});
+            try writer.print("{f}", .{try self.getWithIndices(self.layout.dtype(), indices.items)});
         }
         _ = try writer.write(" ... ");
 
@@ -651,9 +675,7 @@ fn fmt1dSlice(self: *const Self, writer: *std.Io.Writer, base_indices: []const u
             try indices.appendSlice(allocator, base_indices);
             try indices.append(allocator, i);
 
-            const flat_idx = try indices_to_flat(indices.items, asSlice(&self.shapes()), asSlice(&self.strides()));
-
-            try writer.print("{f}", .{self.getDataWithIdx(self.layout.dtype(), flat_idx)});
+            try writer.print("{f}", .{try self.getWithIndices(self.layout.dtype(), indices.items)});
 
             if (i < current_dim_size - 1) {
                 _ = try writer.write(" ");
@@ -824,7 +846,7 @@ test "contiguous test" {
 
     std.debug.print("t1t ds: {any}\nt1tc ds: {any}\n", .{ t1t.dataSlice(f32), t1tc.dataSlice(f32) });
 
-    try std.testing.expectApproxEqAbs(try t1t.getWithIndices(DataType.f32, &.{ 0, 2 }), try t1tc.getWithIndices(DataType.f32, &.{ 0, 2 }), 0.00001);
+    try std.testing.expectApproxEqAbs(try t1t.getWithIndicesCompType(DataType.f32, &.{ 0, 2 }), try t1tc.getWithIndicesCompType(DataType.f32, &.{ 0, 2 }), 0.00001);
 
     // var shape_1 = try std.ArrayList(usize).initCapacity(allocator, 10);
     // try shape_1.appendSlice(allocator, &.{3, 4});
@@ -850,4 +872,26 @@ test "cat stack" {
 
     const t4 = try Self.stack(allocator, &.{ t1, t2 }, 2);
     std.debug.print("t1: {f} t2: {f} t3: {f} t4: {f}\n", .{ t1.layout, t2.layout, t3.layout, t4.layout });
+}
+
+test "split unbind" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+
+    const t = try Self.arange(allocator, DataType.f32, .{ .end = 20 });
+    std.debug.print("t: {f}\n", .{t});
+
+    const t1 = try t.reshape(&.{ 2, 2, 5 });
+
+    const results = try t1.split(2, 2);
+
+    std.debug.print("t1: {f}\n", .{t1});
+    for (results) |result| {
+        std.debug.print("result: {f} offset= {}\n", .{ result, result._storage_offset });
+    }
 }

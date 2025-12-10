@@ -11,8 +11,8 @@ pub fn sliceApproxEqual(comptime T: type, a: []const T, b: []const T, relEps: T,
     return true;
 }
 
-pub fn computeStrides(allocator: std.mem.Allocator, dims: std.ArrayList(usize)) !std.ArrayList(usize) {
-    const rank = dims.items.len;
+pub fn computeStrides(allocator: std.mem.Allocator, dims: []const usize) !std.ArrayList(usize) {
+    const rank = dims.len;
     var dyn_strides = try std.ArrayList(usize).initCapacity(allocator, rank);
     try dyn_strides.appendNTimes(allocator, 0, rank);
 
@@ -20,7 +20,7 @@ pub fn computeStrides(allocator: std.mem.Allocator, dims: std.ArrayList(usize)) 
     var i: usize = rank - 1;
     while (i != 0) : (i -= 1) {
         dyn_strides.items[i] = acc;
-        acc *= dims.items[i];
+        acc *= dims[i];
     }
     dyn_strides.items[0] = acc;
 

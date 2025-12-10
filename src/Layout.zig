@@ -29,10 +29,13 @@ fn checkContiguous(shapes_a: []const usize, strides_a: []const usize) bool {
     return true;
 }
 
-pub fn init(allocator: std.mem.Allocator, dt: DataType, shapes_a: std.ArrayList(usize)) !Self {
+pub fn init(allocator: std.mem.Allocator, dt: DataType, shapes_a: []const usize) !Self {
     const strides_i = try utils.computeStrides(allocator, shapes_a);
 
-    return Self.initRaw(allocator, dt, shapes_a, strides_i);
+    var shapes_i = try std.ArrayList(usize).initCapacity(allocator, shapes_a.len);
+    try shapes_i.appendSlice(allocator, shapes_a);
+
+    return Self.initRaw(allocator, dt, shapes_i, strides_i);
 }
 
 pub fn initRaw(allocator: std.mem.Allocator, dt: DataType, shapes_a: std.ArrayList(usize), strides_a: std.ArrayList(usize)) !Self {
@@ -80,18 +83,21 @@ pub fn permute(self: *const Self, perm: []const usize) !Self {
     };
 }
 
-pub fn reshape(self: *const Self, new_shapes: std.ArrayList(usize)) !Self {
-    const new_size = product(new_shapes.items);
+pub fn reshape(self: *const Self, new_shapes: []const usize) !Self {
+    const new_size = product(new_shapes);
 
     if (new_size != self.size()) {
         return error.InvalidShape;
     }
 
+    var shape_list = try std.ArrayList(usize).initCapacity(self.allocator, new_shapes.len);
+    try shape_list.appendSlice(self.allocator, new_shapes);
+
     const new_strides = try utils.computeStrides(self.allocator, new_shapes);
 
     return Self{
         ._dtype = self._dtype,
-        ._shapes = new_shapes,
+        ._shapes = shape_list,
         ._strides = new_strides,
         .allocator = self.allocator,
     };
