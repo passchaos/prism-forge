@@ -12,30 +12,6 @@ const Storage = @import("./Storage.zig");
 
 const asSlice = utils.asSlice;
 
-fn indices_to_flat(indices: []const usize, shape: []const usize, strides_a: []const usize) anyerror!usize {
-    if (indices.len == 0) {
-        return error.EmptyIndices;
-    }
-
-    var flat_index: usize = 0;
-    for (indices, shape, 0..) |index, dim, idx| {
-        if (index >= dim) {
-            return error.OutOfBounds;
-        }
-
-        flat_index += index * strides_a[idx];
-    }
-    return flat_index;
-}
-fn flat_to_indices(flat_index: usize, strides_a: []const usize) []const usize {
-    var indices = [_]usize{0} ** strides_a.len;
-    for (0..strides_a.len) |dim| {
-        indices[dim] = flat_index / strides_a[dim];
-        flat_index %= strides_a[dim];
-    }
-    return indices;
-}
-
 const Self = @This();
 
 allocator: std.mem.Allocator,
@@ -174,6 +150,64 @@ pub fn unbind(self: *const Self, dim: usize) ![]const Self {
     return result;
 }
 
+// elementwise method
+pub fn map_(self: *Self, comptime T: type, func: fn (*T) void) !void {
+    const cartesian_product = try utils.cartesianProduct(self.allocator, self.shapes());
+
+    for (cartesian_product.items) |indices| {
+        const v = try self.getWithIndicesCompType(T, indices.items);
+        func(v);
+    }
+}
+pub fn add(self: *Self, comptime T: type, value: T) !Self {
+    const func = struct {
+        const inner_v: f32 = value;
+
+        fn call(v: *f32) void {
+            v.* += inner_v;
+        }
+    }.call;
+
+    try self.map_(T, func);
+}
+
+pub fn mul_(self: *Self, comptime T: type, value: T) !void {
+    const func = struct {
+        const inner_v: f32 = value;
+
+        fn call(v: *f32) void {
+            v.* *= inner_v;
+        }
+    }.call;
+
+    try self.map_(T, func);
+}
+
+pub fn sin_(self: *Self, comptime T: type) !void {
+    const func = struct {
+        fn call(v: *T) void {
+            v.* = @sin(v.*);
+        }
+    }.call;
+
+    try self.map_(T, func);
+}
+
+pub fn exp_(self: *Self, comptime T: type) !void {
+    const func = struct {
+        fn call(v: *T) void {
+            v.* = @exp(v.*);
+        }
+    }.call;
+
+    try self.map_(T, func);
+}
+
+//
+//
+//
+// reduce method
+
 // op method
 pub fn matmul(self: *const Self, other: *const Self) anyerror!Self {
     if (self.dtype() != other.dtype()) {
@@ -250,6 +284,13 @@ pub fn fromSlice(allocator: std.mem.Allocator, comptime dtype_i: DataType, shape
     return try Self.fromData(allocator, dtype_i, shapes_a, data_list);
 }
 
+pub fn clone(self: *const Self, allocator: std.mem.Allocator) !Self {
+    const layout = try self.layout.clone();
+    const storage = try self.storage.clone();
+
+    return try Self.fromDataImpl(allocator, layout, storage, self._storage_offset);
+}
+
 pub fn fromShapedData(allocator: std.mem.Allocator, comptime arr: anytype) anyerror!Self {
     const T = utils.getArrayRefItemType(@TypeOf(arr));
     const dtype_i = comptime DataType.typeToDataType(T);
@@ -271,7 +312,7 @@ pub fn contiguous(self: *const Self) !Self {
 
     const elem_size = self.dtype().dtypeSize();
 
-    const new_buf = try self.allocator.alloc(u8, self.size() * elem_size);
+    const new_buf = try self.allocator.alloc(u8, self.byteSize() * elem_size);
 
     var idx: usize = 0;
     const indices = try self.allocator.alloc(usize, self.ndim());
@@ -279,7 +320,7 @@ pub fn contiguous(self: *const Self) !Self {
     const inner_scope = struct {
         fn copyRecursive(tensor: *const Self, indices_i: []usize, dim: usize, new_buf_i: []u8, idx_i: *usize, elem_size_a: usize) void {
             if (dim == tensor.ndim()) {
-                var offset: usize = 0;
+                var offset: usize = tensor._storage_offset;
                 for (indices_i, 0..) |ind, i| {
                     offset += ind * tensor.strides()[i];
                 }
@@ -371,16 +412,16 @@ pub fn randNorm(allocator: std.mem.Allocator, shapes_a: []const usize, mean: f32
 }
 
 // attributes
-fn dataSlice(self: *const Self, comptime T: anytype) []const T {
+fn dataSlice(self: *const Self, comptime T: anytype) []T {
     return self.storage.dataSlice(T);
 }
 
-pub fn rawDataSlice(self: *const Self) []const u8 {
+pub fn rawDataSlice(self: *const Self) []u8 {
     return self.storage.rawDataSlice()[0..self.storage.byteSize()];
 }
 
 pub fn getWithIndices(self: *const Self, dtype_i: DataType, indices: []const usize) !Scalar {
-    var idx = try indices_to_flat(indices, self.shapes(), self.strides());
+    var idx = try utils.indices_to_flat(indices, self.shapes(), self.strides());
     idx += self._storage_offset;
 
     return switch (dtype_i) {
@@ -391,13 +432,11 @@ pub fn getWithIndices(self: *const Self, dtype_i: DataType, indices: []const usi
     };
 }
 
-pub fn getWithIndicesCompType(self: *const Self, comptime dtype_i: DataType, indices: []const usize) !dtype_i.toTypeComp() {
-    var idx = try indices_to_flat(indices, self.shapes(), self.strides());
+pub fn getWithIndicesCompType(self: *const Self, comptime T: type, indices: []const usize) !*T {
+    var idx = try utils.indices_to_flat(indices, self.shapes(), self.strides());
     idx += self._storage_offset;
 
-    const T = dtype_i.toTypeComp();
-
-    return self.dataSlice(T)[idx];
+    return &self.dataSlice(T)[idx];
 }
 
 // data transform
@@ -469,7 +508,7 @@ pub fn reshape(self: *const Self, new_shapes: []const usize) anyerror!Self {
 }
 
 pub fn unsqueeze(self: *const Self, dim: usize) anyerror!Self {
-    var new_shapes = try std.ArrayList(usize).initCapacity(self.allocator, self.size());
+    var new_shapes = try std.ArrayList(usize).initCapacity(self.allocator, self.byteSize());
     try new_shapes.appendSlice(self.allocator, self.layout.shapes());
     try new_shapes.insert(self.allocator, dim, 1);
 
@@ -477,7 +516,7 @@ pub fn unsqueeze(self: *const Self, dim: usize) anyerror!Self {
 }
 
 pub fn squeeze(self: *const Self, dim: ?usize) anyerror!Self {
-    var new_shapes = try std.ArrayList(usize).initCapacity(self.allocator, self.size());
+    var new_shapes = try std.ArrayList(usize).initCapacity(self.allocator, self.byteSize());
 
     if (dim) |d| {
         for (self.shapes(), 0..) |s, i| {
@@ -513,7 +552,7 @@ fn getDataWithIdx(self: *const Self, dtype_i: DataType, idx: usize) Scalar {
     };
 }
 
-pub fn size(self: *const Self) usize {
+pub fn byteSize(self: *const Self) usize {
     return self.layout.size() * self.layout.dtypeSize();
 }
 
@@ -945,7 +984,32 @@ test "split unbind" {
 
         std.debug.print("t1: {f}\n", .{t1});
         for (results) |result| {
-            std.debug.print("result: {f} offset= {}\n", .{ result, result._storage_offset });
+            std.debug.print("result: {f} offset= {} contiguoused= {f}\n", .{ result, result._storage_offset, try result.contiguous() });
         }
     }
+}
+
+test "map" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+
+    var t = try Self.arange(allocator, DataType.f32, .{ .end = 10 });
+
+    const func = struct {
+        fn call(x: *f32) void {
+            x.* *= 3;
+        }
+    }.call;
+    try t.map_(f32, func);
+    std.debug.print("t: {f}\n", .{t});
+
+    try t.sin_(f32);
+    try t.exp_(f32);
+
+    std.debug.print("t: {f}\n", .{t});
 }

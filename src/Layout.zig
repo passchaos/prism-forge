@@ -103,6 +103,15 @@ pub fn reshape(self: *const Self, new_shapes: []const usize) !Self {
     };
 }
 
+pub fn clone(self: *const Self) !Self {
+    return Self{
+        ._dtype = self._dtype,
+        ._shapes = try self._shapes.clone(self.allocator),
+        ._strides = try self._strides.clone(self.allocator),
+        .allocator = self.allocator,
+    };
+}
+
 pub fn equal(self: *const Self, other: *const Self) bool {
     return self._dtype == other._dtype and std.mem.eql(usize, self._shapes.items, other._shapes.items) and std.mem.eql(usize, self._strides.items, other._strides.items);
 }

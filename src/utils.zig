@@ -11,22 +11,6 @@ pub fn sliceApproxEqual(comptime T: type, a: []const T, b: []const T, relEps: T,
     return true;
 }
 
-pub fn computeStrides(allocator: std.mem.Allocator, dims: []const usize) !std.ArrayList(usize) {
-    const rank = dims.len;
-    var dyn_strides = try std.ArrayList(usize).initCapacity(allocator, rank);
-    try dyn_strides.appendNTimes(allocator, 0, rank);
-
-    var acc: usize = 1;
-    var i: usize = rank - 1;
-    while (i != 0) : (i -= 1) {
-        dyn_strides.items[i] = acc;
-        acc *= dims[i];
-    }
-    dyn_strides.items[0] = acc;
-
-    return dyn_strides;
-}
-
 test "approx equal" {
     try std.testing.expect(approxEqual(f32, 2.0001, 2.0000999999, 0.000001, 0.0001));
     try std.testing.expect(sliceApproxEqual(f64, &.{ 10.000001, 2.99999999 }, &.{ 10.0, 3.0 }, 0.0003, 0.00001));
@@ -215,4 +199,76 @@ pub fn allStatic(comptime dims: ?[]const ?usize) bool {
         if (dim == null) return false;
     }
     return true;
+}
+
+pub fn computeStrides(allocator: std.mem.Allocator, dims: []const usize) !std.ArrayList(usize) {
+    const rank = dims.len;
+    var dyn_strides = try std.ArrayList(usize).initCapacity(allocator, rank);
+    try dyn_strides.appendNTimes(allocator, 0, rank);
+
+    var acc: usize = 1;
+    var i: usize = rank - 1;
+    while (i != 0) : (i -= 1) {
+        dyn_strides.items[i] = acc;
+        acc *= dims[i];
+    }
+    dyn_strides.items[0] = acc;
+
+    return dyn_strides;
+}
+
+pub fn indices_to_flat(indices: []const usize, shape: []const usize, strides_a: []const usize) anyerror!usize {
+    if (indices.len == 0) {
+        return error.EmptyIndices;
+    }
+
+    var flat_index: usize = 0;
+    for (indices, shape, 0..) |index, dim, idx| {
+        if (index >= dim) {
+            return error.OutOfBounds;
+        }
+
+        flat_index += index * strides_a[idx];
+    }
+    return flat_index;
+}
+
+pub fn flat_to_indices(allocator: std.mem.Allocator, flat_index: usize, strides_a: []const usize) !std.ArrayList(usize) {
+    var indices = try std.ArrayList(usize).initCapacity(allocator, strides_a.len);
+
+    var tmp = flat_index;
+    for (0..strides_a.len) |dim| {
+        try indices.append(allocator, tmp / strides_a[dim]);
+        tmp %= strides_a[dim];
+    }
+    return indices;
+}
+
+pub fn cartesianProduct(allocator: std.mem.Allocator, dims: []const usize) !std.ArrayList(std.ArrayList(usize)) {
+    const total = product(dims);
+    var result = try std.ArrayList(std.ArrayList(usize)).initCapacity(allocator, total);
+
+    const strides = try computeStrides(allocator, dims);
+
+    for (0..total) |i| {
+        const indices = try flat_to_indices(allocator, i, strides.items);
+        try result.append(allocator, indices);
+    }
+
+    return result;
+}
+
+test "cartesian product" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+
+    const res = try cartesianProduct(allocator, &.{ 2, 3, 5 });
+    for (res.items) |item| {
+        std.debug.print("item: {any}\n", .{item});
+    }
 }
