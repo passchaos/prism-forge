@@ -204,6 +204,12 @@ pub fn allStatic(comptime dims: ?[]const ?usize) bool {
 pub fn computeStrides(allocator: std.mem.Allocator, dims: []const usize) !std.ArrayList(usize) {
     const rank = dims.len;
     var dyn_strides = try std.ArrayList(usize).initCapacity(allocator, rank);
+
+    // handle zero-dimensional tensor
+    if (rank == 0) {
+        return dyn_strides;
+    }
+
     try dyn_strides.appendNTimes(allocator, 0, rank);
 
     var acc: usize = 1;
@@ -219,7 +225,8 @@ pub fn computeStrides(allocator: std.mem.Allocator, dims: []const usize) !std.Ar
 
 pub fn indices_to_flat(indices: []const usize, shape: []const usize, strides_a: []const usize) anyerror!usize {
     if (indices.len == 0) {
-        return error.EmptyIndices;
+        return 0;
+        // return error.EmptyIndices;
     }
 
     var flat_index: usize = 0;

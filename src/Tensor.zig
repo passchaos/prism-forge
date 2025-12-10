@@ -31,11 +31,11 @@ pub fn cat(allocator: std.mem.Allocator, tensors: []const Self, dim: usize) !Sel
     var new_shape = try allocator.alloc(usize, rank);
     for (0..rank) |i| {
         if (i == dim) {
-            var sum: usize = 0;
+            var sum_i: usize = 0;
             for (tensors) |t| {
-                sum += t.shapes()[i];
+                sum_i += t.shapes()[i];
             }
-            new_shape[i] = sum;
+            new_shape[i] = sum_i;
         } else {
             new_shape[i] = tensors[0].shapes()[i];
         }
@@ -210,7 +210,97 @@ pub fn exp_(self: *Self, comptime data_type: DataType) !void {
 //
 //
 // reduce method
+pub fn sum(self: *const Self, comptime data_type: DataType, dim: ?usize) !Self {
+    const T = data_type.toTypeComp();
 
+    if (dim) |dm| {
+        var shapes_i = try std.ArrayList(usize).initCapacity(self.allocator, self.ndim() - 1);
+        try shapes_i.appendSlice(self.allocator, self.shapes());
+        std.debug.print("shapes_i: {any}\n", .{shapes_i});
+        _ = shapes_i.orderedRemove(dm);
+
+        std.debug.print("shapes_i: {any}\n", .{shapes_i});
+
+        const data_len = utils.product(shapes_i.items);
+        std.debug.print("data len: {}\n", .{data_len});
+
+        var new_buf = try self.allocator.alloc(T, data_len);
+
+        var indices = try self.allocator.alloc(usize, self.ndim());
+        for (indices) |*i| i.* = 0;
+
+        var out_i: usize = 0;
+        var done = false;
+
+        while (!done) {
+            var acc: T = 0;
+            for (0..self.shapes()[dm]) |k| {
+                indices[dm] = k;
+                acc += (try self.getWithIndicesCompType(data_type, indices)).*;
+            }
+
+            new_buf[out_i] = acc;
+            out_i += 1;
+
+            var j = self.shapes().len - 1;
+
+            if (j == 0) {
+                break;
+            }
+
+            while (j > 0) : (j -= 1) {
+                if (j - 1 == dm) continue;
+
+                indices[j - 1] += 1;
+                if (indices[j - 1] < self.shapes()[j - 1]) {
+                    break;
+                } else if (j == 1) {
+                    done = true;
+                } else {
+                    indices[j - 1] = 0;
+                }
+            }
+        }
+
+        const layout = try Layout.init(self.allocator, data_type, shapes_i.items);
+
+        const bytes_size = new_buf.len * @sizeOf(T);
+        const storage = Storage.init(self.allocator, Storage.Device.Cpu, @ptrCast(new_buf.ptr), bytes_size);
+
+        return Self.fromDataImpl(self.allocator, layout, storage, 0);
+    } else {
+        var total: T = 0;
+
+        var idx = try self.allocator.alloc(usize, self.shapes().len);
+        for (idx) |*x| x.* = 0;
+
+        var done = false;
+        while (!done) {
+            total += (try self.getWithIndicesCompType(data_type, idx)).*;
+
+            var d: usize = self.shapes().len;
+            while (d > 0) : (d -= 1) {
+                idx[d - 1] += 1;
+
+                if (idx[d - 1] < self.shapes()[d - 1]) {
+                    break;
+                } else if (d == 1) {
+                    done = true;
+                } else {
+                    idx[d - 1] = 0;
+                }
+            }
+        }
+
+        var new_buf = try self.allocator.alloc(T, 1);
+        new_buf[0] = total;
+
+        const layout = try Layout.init(self.allocator, data_type, &.{1});
+        const storage = Storage.init(self.allocator, Storage.Device.Cpu, @ptrCast(new_buf.ptr), @sizeOf(T));
+
+        return Self.fromDataImpl(self.allocator, layout, storage, 0);
+    }
+}
 // op method
 pub fn matmul(self: *const Self, other: *const Self) anyerror!Self {
     if (self.dtype() != other.dtype()) {
@@ -423,11 +513,11 @@ pub fn rawDataSlice(self: *const Self) []u8 {
     return self.storage.rawDataSlice()[0..self.storage.byteSize()];
 }
 
-pub fn getWithIndices(self: *const Self, dtype_i: DataType, indices: []const usize) !Scalar {
+pub fn getWithIndices(self: *const Self, indices: []const usize) !Scalar {
     var idx = try utils.indices_to_flat(indices, self.shapes(), self.strides());
     idx += self._storage_offset;
 
-    return switch (dtype_i) {
+    return switch (self.dtype()) {
         .f16 => Scalar{ .f16 = self.dataSlice(DataType.f16.toType())[idx] },
         .f32 => Scalar{ .f32 = self.dataSlice(DataType.f32.toType())[idx] },
         .i32 => Scalar{ .i32 = self.dataSlice(DataType.i32.toType())[idx] },
@@ -619,7 +709,7 @@ fn fmtRecursive(self: *const Self, writer: *std.Io.Writer, depth: usize, indices
     const dims = self.ndim();
 
     if (depth == dims) {
-        try writer.print("{f}", .{try self.getWithIndices(self.layout.dtype(), indices)});
+        try writer.print("{f}", .{try self.getWithIndices(indices)});
     } else if (depth == dims - 1) {
         try self.fmt1dSlice(writer, indices);
     } else {
@@ -724,7 +814,7 @@ fn fmt1dSlice(self: *const Self, writer: *std.Io.Writer, base_indices: []const u
             try indices.appendSlice(allocator, base_indices);
             try indices.append(allocator, i);
 
-            try writer.print("{f}", .{try self.getWithIndices(self.layout.dtype(), indices.items)});
+            try writer.print("{f}", .{try self.getWithIndices(indices.items)});
         }
     } else {
         for (0..pad_show_count) |i| {
@@ -738,7 +828,7 @@ fn fmt1dSlice(self: *const Self, writer: *std.Io.Writer, base_indices: []const u
             try indices.appendSlice(allocator, base_indices);
             try indices.append(allocator, i);
 
-            try writer.print("{f}", .{try self.getWithIndices(self.layout.dtype(), indices.items)});
+            try writer.print("{f}", .{try self.getWithIndices(indices.items)});
         }
         _ = try writer.write(" ... ");
 
@@ -749,7 +839,7 @@ fn fmt1dSlice(self: *const Self, writer: *std.Io.Writer, base_indices: []const u
             try indices.appendSlice(allocator, base_indices);
             try indices.append(allocator, i);
 
-            try writer.print("{f}", .{try self.getWithIndices(self.layout.dtype(), indices.items)});
+            try writer.print("{f}", .{try self.getWithIndices(indices.items)});
 
             if (i < current_dim_size - 1) {
                 _ = try writer.write(" ");
@@ -838,7 +928,7 @@ test "shape test" {
 
     try std.testing.expect(t111.shapes()[0] == t111_transposed.shapes()[1]);
     try std.testing.expect(t111.shapes()[1] == t111_transposed.shapes()[0]);
-    try std.testing.expectEqual(t111.getWithIndices(DataType.f32, &.{ 0, 1 }), t111_transposed.getWithIndices(DataType.f32, &.{ 1, 0 }));
+    try std.testing.expectEqual(t111.getWithIndices(&.{ 0, 1 }), t111_transposed.getWithIndices(&.{ 1, 0 }));
 
     std.debug.print("t111: {f} t111 transposed: {f}\n", .{ t111, t111_transposed });
 
@@ -1018,4 +1108,25 @@ test "map" {
     try t.exp_(DataType.f32);
 
     std.debug.print("t: {f}\n", .{t});
+}
+
+test "reduce" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+
+    var a1 = try std.ArrayList(usize).initCapacity(allocator, 10);
+    try a1.appendNTimes(allocator, 10, 10);
+    std.debug.print("a1: {any}\n", .{a1});
+    _ = a1.orderedRemove(0);
+
+    std.debug.print("a1: {any}\n", .{a1});
+
+    const t1 = try Self.arange(allocator, DataType.f32, .{ .end = 10 });
+    const t2 = try t1.sum(DataType.f32, 0);
+    std.debug.print("t1: {f} t2: {f}\n", .{ t1, t2 });
 }
