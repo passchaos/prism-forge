@@ -151,28 +151,24 @@ pub fn unbind(self: *const Self, dim: usize) ![]const Self {
 }
 
 // elementwise method
-pub fn map_(self: *Self, comptime data_type: DataType, func: fn (*data_type.toTypeComp()) void) !void {
+pub fn map_(self: *Self, comptime data_type: DataType, func: fn (*data_type.toTypeComp(), ctx: anytype) void, ctx: anytype) !void {
     const cartesian_product = try utils.cartesianProduct(self.allocator, self.shapes());
 
     for (cartesian_product.items) |indices| {
         const v = try self.getWithIndicesCompType(data_type, indices.items);
-        func(v);
+        func(v, ctx);
     }
 }
 
-pub fn add_(self: *Self, comptime data_type: DataType, value: data_type.toTypeComp()) !Self {
+pub fn add_(self: *Self, comptime data_type: DataType, value: data_type.toTypeComp()) !void {
     const T = data_type.toTypeComp();
     const scope = struct {
-        inner_v: T,
-
-        fn call(inner: @This(), v: *T) void {
-            v.* += inner.inner_v;
+        fn call(v: *T, ctx: anytype) void {
+            v.* += ctx;
         }
-    }{
-        .inner_v = value,
-    };
+    }.call;
 
-    try self.map_(data_type, scope.call);
+    try self.map_(data_type, scope, value);
 }
 
 pub fn mul_(self: *Self, comptime data_type: DataType, value: data_type.toTypeComp()) !void {
@@ -191,23 +187,23 @@ pub fn mul_(self: *Self, comptime data_type: DataType, value: data_type.toTypeCo
 pub fn sin_(self: *Self, comptime data_type: DataType) !void {
     const T = data_type.toTypeComp();
     const func = struct {
-        fn call(v: *T) void {
+        fn call(v: *T, _: anytype) void {
             v.* = @sin(v.*);
         }
     }.call;
 
-    try self.map_(data_type, func);
+    try self.map_(data_type, func, .{});
 }
 
 pub fn exp_(self: *Self, comptime data_type: DataType) !void {
     const T = data_type.toTypeComp();
     const func = struct {
-        fn call(v: *T) void {
+        fn call(v: *T, _: anytype) void {
             v.* = @exp(v.*);
         }
     }.call;
 
-    try self.map_(data_type, func);
+    try self.map_(data_type, func, .{});
 }
 
 //
@@ -1008,14 +1004,16 @@ test "map" {
     var t = try Self.arange(allocator, DataType.f32, .{ .end = 10 });
 
     const func = struct {
-        fn call(x: *f32) void {
+        fn call(x: *f32, _: anytype) void {
             x.* *= 3;
         }
     }.call;
-    try t.map_(DataType.f32, func);
+    try t.map_(DataType.f32, func, .{});
     std.debug.print("t: {f}\n", .{t});
 
-    try t.add_(DataType.f32, 10.0);
+    try t.add_(DataType.f32, 11.0);
+    std.debug.print("t: {f}\n", .{t});
+
     try t.sin_(DataType.f32);
     try t.exp_(DataType.f32);
 
