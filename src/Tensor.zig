@@ -151,56 +151,63 @@ pub fn unbind(self: *const Self, dim: usize) ![]const Self {
 }
 
 // elementwise method
-pub fn map_(self: *Self, comptime T: type, func: fn (*T) void) !void {
+pub fn map_(self: *Self, comptime data_type: DataType, func: fn (*data_type.toTypeComp()) void) !void {
     const cartesian_product = try utils.cartesianProduct(self.allocator, self.shapes());
 
     for (cartesian_product.items) |indices| {
-        const v = try self.getWithIndicesCompType(T, indices.items);
+        const v = try self.getWithIndicesCompType(data_type, indices.items);
         func(v);
     }
 }
-pub fn add(self: *Self, comptime T: type, value: T) !Self {
-    const func = struct {
-        const inner_v: f32 = value;
 
-        fn call(v: *f32) void {
-            v.* += inner_v;
+pub fn add_(self: *Self, comptime data_type: DataType, value: data_type.toTypeComp()) !Self {
+    const T = data_type.toTypeComp();
+    const scope = struct {
+        inner_v: T,
+
+        fn call(inner: @This(), v: *T) void {
+            v.* += inner.inner_v;
         }
-    }.call;
+    }{
+        .inner_v = value,
+    };
 
-    try self.map_(T, func);
+    try self.map_(data_type, scope.call);
 }
 
-pub fn mul_(self: *Self, comptime T: type, value: T) !void {
+pub fn mul_(self: *Self, comptime data_type: DataType, value: data_type.toTypeComp()) !void {
+    const T = data_type.toTypeComp();
     const func = struct {
-        const inner_v: f32 = value;
+        const inner_v: T = value;
 
-        fn call(v: *f32) void {
+        fn call(v: *T) void {
             v.* *= inner_v;
         }
     }.call;
 
-    try self.map_(T, func);
+    try self.map_(data_type, func);
 }
 
-pub fn sin_(self: *Self, comptime T: type) !void {
+pub fn sin_(self: *Self, comptime data_type: DataType) !void {
+    const T = data_type.toTypeComp();
     const func = struct {
         fn call(v: *T) void {
             v.* = @sin(v.*);
         }
     }.call;
 
-    try self.map_(T, func);
+    try self.map_(data_type, func);
 }
 
-pub fn exp_(self: *Self, comptime T: type) !void {
+pub fn exp_(self: *Self, comptime data_type: DataType) !void {
+    const T = data_type.toTypeComp();
     const func = struct {
         fn call(v: *T) void {
             v.* = @exp(v.*);
         }
     }.call;
 
-    try self.map_(T, func);
+    try self.map_(data_type, func);
 }
 
 //
@@ -432,11 +439,11 @@ pub fn getWithIndices(self: *const Self, dtype_i: DataType, indices: []const usi
     };
 }
 
-pub fn getWithIndicesCompType(self: *const Self, comptime T: type, indices: []const usize) !*T {
+pub fn getWithIndicesCompType(self: *const Self, comptime data_type: DataType, indices: []const usize) !*data_type.toTypeComp() {
     var idx = try utils.indices_to_flat(indices, self.shapes(), self.strides());
     idx += self._storage_offset;
 
-    return &self.dataSlice(T)[idx];
+    return &self.dataSlice(data_type.toTypeComp())[idx];
 }
 
 // data transform
@@ -917,7 +924,7 @@ test "contiguous test" {
 
     std.debug.print("t1t ds: {any}\nt1tc ds: {any}\n", .{ t1t.dataSlice(f32), t1tc.dataSlice(f32) });
 
-    try std.testing.expectApproxEqAbs(try t1t.getWithIndicesCompType(DataType.f32, &.{ 0, 2 }), try t1tc.getWithIndicesCompType(DataType.f32, &.{ 0, 2 }), 0.00001);
+    try std.testing.expectApproxEqAbs((try t1t.getWithIndicesCompType(DataType.f32, &.{ 0, 2 })).*, (try t1tc.getWithIndicesCompType(DataType.f32, &.{ 0, 2 })).*, 0.00001);
 
     // var shape_1 = try std.ArrayList(usize).initCapacity(allocator, 10);
     // try shape_1.appendSlice(allocator, &.{3, 4});
@@ -1005,11 +1012,12 @@ test "map" {
             x.* *= 3;
         }
     }.call;
-    try t.map_(f32, func);
+    try t.map_(DataType.f32, func);
     std.debug.print("t: {f}\n", .{t});
 
-    try t.sin_(f32);
-    try t.exp_(f32);
+    try t.add_(DataType.f32, 10.0);
+    try t.sin_(DataType.f32);
+    try t.exp_(DataType.f32);
 
     std.debug.print("t: {f}\n", .{t});
 }

@@ -1,6 +1,5 @@
 const std = @import("std");
 
-
 pub const DataType = enum {
     f16,
     f32,
@@ -52,10 +51,7 @@ pub const Scalar = union(DataType) {
 
     pub fn format(self: @This(), writer: *std.io.Writer) std.Io.Writer.Error!void {
         return switch (self) {
-            .f16 => writer.print("{d}", .{self.f16}),
-            .f32 => writer.print("{d}", .{self.f32}),
-            .i32 => writer.print("{d}", .{self.i32}),
-            .u32 => writer.print("{d}", .{self.u32}),
+            inline else => |v| writer.print("{d}", .{v}),
         };
     }
 };
