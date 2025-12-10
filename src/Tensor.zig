@@ -142,6 +142,38 @@ pub fn split(self: *const Self, chunk_size: usize, dim: usize) ![]const Self {
     return result;
 }
 
+pub fn chunk(self: *const Self, chunk_count: usize, dim: usize) ![]const Self {
+    if (dim >= self.ndim()) return error.InvalidDim;
+
+    const dim_len = self.shapes()[dim];
+    if (chunk_count == 0 or chunk_count > dim_len) return error.InvalidSplit;
+
+    const chunk_size_i = (dim_len + chunk_count - 1) / chunk_count;
+    return try self.split(chunk_size_i, dim);
+}
+
+pub fn unbind(self: *const Self, dim: usize) ![]const Self {
+    if (dim >= self.ndim()) return error.InvalidDim;
+
+    const dim_len = self.shapes()[dim];
+    var result = try self.allocator.alloc(Self, dim_len);
+
+    for (0..dim_len) |i| {
+        var new_shapes = try std.ArrayList(usize).initCapacity(self.allocator, self.ndim() - 1);
+        var new_strides = try std.ArrayList(usize).initCapacity(self.allocator, self.ndim() - 1);
+
+        for (0..self.ndim()) |j| {
+            if (j == dim) continue;
+            try new_shapes.append(self.allocator, self.shapes()[j]);
+            try new_strides.append(self.allocator, self.strides()[j]);
+        }
+
+        const layout = try Layout.initRaw(self.allocator, self.dtype(), new_shapes, new_strides);
+        result[i] = try Self.fromDataImpl(self.allocator, layout, self.storage.clone(), self._storage_offset + i * self.strides()[dim]);
+    }
+    return result;
+}
+
 // op method
 pub fn matmul(self: *const Self, other: *const Self) anyerror!Self {
     if (self.dtype() != other.dtype()) {
@@ -888,10 +920,32 @@ test "split unbind" {
 
     const t1 = try t.reshape(&.{ 2, 2, 5 });
 
-    const results = try t1.split(2, 2);
+    {
+        const results = try t1.split(2, 2);
 
-    std.debug.print("t1: {f}\n", .{t1});
-    for (results) |result| {
-        std.debug.print("result: {f} offset= {}\n", .{ result, result._storage_offset });
+        std.debug.print("t1: {f}\n", .{t1});
+        for (results) |result| {
+            std.debug.print("result: {f} offset= {}\n", .{ result, result._storage_offset });
+        }
+    }
+
+    std.debug.print("begin chunk\n", .{});
+    {
+        const results = try t1.chunk(5, 2);
+
+        std.debug.print("t1: {f}\n", .{t1});
+        for (results) |result| {
+            std.debug.print("result: {f} offset= {}\n", .{ result, result._storage_offset });
+        }
+    }
+
+    std.debug.print("begin unbind\n", .{});
+    {
+        const results = try t1.unbind(2);
+
+        std.debug.print("t1: {f}\n", .{t1});
+        for (results) |result| {
+            std.debug.print("result: {f} offset= {}\n", .{ result, result._storage_offset });
+        }
     }
 }
