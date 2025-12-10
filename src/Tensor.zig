@@ -19,6 +19,14 @@ storage: Storage,
 layout: Layout,
 _storage_offset: usize = 0,
 
+pub fn item(self: *const Self) !Scalar {
+    if (self.ndim() == 0) {
+        return self.getWithIndices(&.{});
+    } else {
+        return error.ShapeMismatch;
+    }
+}
+
 // scope method
 pub fn cat(allocator: std.mem.Allocator, tensors: []const Self, dim: usize) !Self {
     const dtype_i = tensors[0].dtype();
@@ -1128,5 +1136,5 @@ test "reduce" {
 
     const t1 = try Self.arange(allocator, DataType.f32, .{ .end = 10 });
     const t2 = try t1.sum(DataType.f32, 0);
-    std.debug.print("t1: {f} t2: {f}\n", .{ t1, t2 });
+    std.debug.print("t1: {f} t2: {f} t2 item: {f}\n", .{ t1, t2, try t2.item() });
 }
