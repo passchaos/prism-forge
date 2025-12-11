@@ -168,6 +168,17 @@ pub fn map_(self: *Self, comptime data_type: DataType, func: fn (*data_type.toTy
     }
 }
 
+pub fn clamp_(self: *Self, comptime data_type: DataType, min_a: data_type.toTypeComp(), max_a: data_type.toTypeComp()) !void {
+    const T = data_type.toTypeComp();
+    const scope = struct {
+        fn call(v: *T, ctx: anytype) void {
+            v.* = std.math.clamp(v.*, ctx[0], ctx[1]);
+        }
+    }.call;
+
+    try self.map_(data_type, scope, .{ min_a, max_a });
+}
+
 pub fn add_(self: *Self, comptime data_type: DataType, value: data_type.toTypeComp()) !void {
     const T = data_type.toTypeComp();
     const scope = struct {
@@ -1185,6 +1196,9 @@ test "map" {
     try t.sin_(DataType.f32);
     try t.exp_(DataType.f32);
 
+    std.debug.print("t: {f}\n", .{t});
+
+    try t.clamp_(DataType.f32, 122.0, 150.0);
     std.debug.print("t: {f}\n", .{t});
 }
 
