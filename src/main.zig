@@ -28,5 +28,5 @@ pub fn main() !void {
     const t3 = try t1.matmul(&t2_tc);
     const end = std.time.milliTimestamp();
 
-    std.debug.print("t3: {f}\nelapsed: {d} microseconds\n", .{ t3.layout, end - begin });
+    std.debug.print("t3: {f}\nelapsed: {d} milliseconds\n", .{ t3.layout, end - begin });
 }

@@ -179,24 +179,48 @@ pub fn clamp_(self: *Self, comptime data_type: DataType, min_a: data_type.toType
     try self.map_(data_type, scope, .{ min_a, max_a });
 }
 
-pub fn add_(self: *Self, comptime data_type: DataType, value: data_type.toTypeComp()) !void {
-    const T = data_type.toTypeComp();
+pub fn add_(self: *Self, value: anytype) !void {
+    const DT = comptime DataType.typeToDataType(@TypeOf(value));
     const scope = struct {
-        fn call(v: *T, ctx: anytype) void {
+        fn call(v: *DT.toTypeComp(), ctx: anytype) void {
             v.* += ctx;
         }
     }.call;
 
-    try self.map_(data_type, scope, value);
+    try self.map_(DT, scope, value);
 }
 
-pub fn mul_(self: *Self, comptime data_type: DataType, value: data_type.toTypeComp()) !void {
+pub fn sub_(self: *Self, value: anytype) !void {
+    const DT = comptime DataType.typeToDataType(@TypeOf(value));
+    const scope = struct {
+        fn call(v: *DT.toTypeComp(), ctx: anytype) void {
+            v.* -= ctx;
+        }
+    }.call;
+
+    try self.map_(DT, scope, value);
+}
+
+pub fn mul_(self: *Self, value: anytype) !void {
+    const DT = comptime DataType.typeToDataType(@TypeOf(value));
+    const func = struct {
+        const inner_v: DT.toTypeComp() = value;
+
+        fn call(v: *DT.toTypeComp(), _: anytype) void {
+            v.* *= inner_v;
+        }
+    }.call;
+
+    try self.map_(DT, func, 0);
+}
+
+pub fn div_(self: *Self, comptime data_type: DataType, value: data_type.toTypeComp()) !void {
     const T = data_type.toTypeComp();
     const func = struct {
         const inner_v: T = value;
 
         fn call(v: *T) void {
-            v.* *= inner_v;
+            v.* /= inner_v;
         }
     }.call;
 
@@ -468,9 +492,14 @@ pub fn fromSlice(allocator: std.mem.Allocator, comptime dtype_i: DataType, shape
 
 pub fn clone(self: *const Self, allocator: std.mem.Allocator) !Self {
     const layout = try self.layout.clone();
-    const storage = try self.storage.clone();
 
-    return try Self.fromDataImpl(allocator, layout, storage, self._storage_offset);
+    if (!self.layout.isContiguous()) {
+        return try self.contiguous();
+    } else {
+        const storage = try self.storage.deepCopy();
+
+        return try Self.fromDataImpl(allocator, layout, storage, self._storage_offset);
+    }
 }
 
 pub fn fromShapedData(allocator: std.mem.Allocator, comptime arr: anytype) anyerror!Self {
@@ -487,7 +516,6 @@ pub fn fromShapedData(allocator: std.mem.Allocator, comptime arr: anytype) anyer
 }
 
 pub fn contiguous(self: *const Self) !Self {
-    std.debug.print("run contiguouse\n", .{});
     // if (self.layout.isContiguous()) {
     //     return self.dupe();
     // }
@@ -607,11 +635,49 @@ pub fn getWithIndices(self: *const Self, indices: []const usize) !Scalar {
     idx += self._storage_offset;
 
     return switch (self.dtype()) {
-        .f16 => Scalar{ .f16 = self.dataSlice(DataType.f16.toType())[idx] },
-        .f32 => Scalar{ .f32 = self.dataSlice(DataType.f32.toType())[idx] },
-        .i32 => Scalar{ .i32 = self.dataSlice(DataType.i32.toType())[idx] },
-        .u32 => Scalar{ .u32 = self.dataSlice(DataType.u32.toType())[idx] },
+        inline else => |v| Scalar.from(self.dataSlice(v.toTypeComp())[idx]),
+        // .f16 => Scalar{ .f16 = self.dataSlice(DataType.f16.toType())[idx] },
+        // .f32 => Scalar{ .f32 = self.dataSlice(DataType.f32.toType())[idx] },
+        // .i32 => Scalar{ .i32 = self.dataSlice(DataType.i32.toType())[idx] },
+        // .u32 => Scalar{ .u32 = self.dataSlice(DataType.u32.toType())[idx] },
     };
+}
+
+pub fn broadcast_to(self: *const Self, target_shape: []const usize) !Self {
+    if (self.ndim() > target_shape.len) return error.ShapeMismatch;
+
+    var new_strides = try self.allocator.alloc(usize, target_shape.len);
+    var old_i: isize = @intCast(self.shapes().len);
+    old_i -= 1;
+    var new_i: isize = @intCast(target_shape.len);
+    new_i -= 1;
+
+    while (new_i >= 0) : (new_i -= 1) {
+        const td = target_shape[@intCast(new_i)];
+
+        if (old_i >= 0) {
+            const od_i: usize = @intCast(old_i);
+            const od = self.shapes()[od_i];
+            const os = self.strides()[od_i];
+
+            if (od == td) {
+                new_strides[@intCast(new_i)] = os;
+            } else if (od == 1 and td > 1) {
+                new_strides[@intCast(new_i)] = 0;
+            } else {
+                return error.ShapeMismatch;
+            }
+
+            old_i -= 1;
+        } else {
+            new_strides[@intCast(new_i)] = 0;
+        }
+    }
+
+    const layout = try Layout.initRaw(self.allocator, self.dtype(), target_shape, new_strides);
+    const storage = self.storage.clone();
+
+    return Self.fromDataImpl(self.allocator, layout, storage, self._storage_offset);
 }
 
 pub fn getWithIndicesCompType(self: *const Self, comptime data_type: DataType, indices: []const usize) !*data_type.toTypeComp() {
@@ -1190,8 +1256,11 @@ test "map" {
     try t.map_(DataType.f32, func, .{});
     std.debug.print("t: {f}\n", .{t});
 
-    try t.add_(DataType.f32, 11.0);
-    std.debug.print("t: {f}\n", .{t});
+    try t.add_(11.0);
+    std.debug.print("add t: {f}\n", .{t});
+
+    try t.mul_(2.0);
+    std.debug.print("mul t: {f}\n", .{t});
 
     try t.sin_(DataType.f32);
     try t.exp_(DataType.f32);

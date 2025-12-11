@@ -47,6 +47,19 @@ pub fn clone(self: *const Self) Self {
     };
 }
 
+pub fn deepCopy(self: *const Self) !Self {
+    const new_buf = try self.allocator.alloc(u8, self._bytes_size);
+    @memcpy(new_buf, self._buf);
+
+    return Self{
+        .allocator = self.allocator,
+        ._device = self._device,
+        ._buf = new_buf.ptr,
+        ._bytes_size = self._bytes_size,
+        ._ref_count = 0,
+    };
+}
+
 pub fn deinit(self: *Self) void {
     self.release();
 }
