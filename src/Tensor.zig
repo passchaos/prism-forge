@@ -218,33 +218,34 @@ pub fn exp_(self: *Self, comptime data_type: DataType) !void {
 //
 //
 // reduce method
-pub fn sum(self: *const Self, comptime data_type: DataType, dim: ?usize) !Self {
+pub fn reduce(self: *const Self, comptime data_type: DataType, dim: ?usize, op_init: data_type.toTypeComp(), op_func: fn (acc: data_type.toTypeComp(), x: data_type.toTypeComp()) data_type.toTypeComp(), post_func: ?fn (acc: data_type.toTypeComp(), count: usize) data_type.toTypeComp()) !Self {
     const T = data_type.toTypeComp();
 
     if (dim) |dm| {
         var shapes_i = try std.ArrayList(usize).initCapacity(self.allocator, self.ndim() - 1);
         try shapes_i.appendSlice(self.allocator, self.shapes());
-        std.debug.print("shapes_i: {any}\n", .{shapes_i});
         _ = shapes_i.orderedRemove(dm);
 
-        std.debug.print("shapes_i: {any}\n", .{shapes_i});
-
         const data_len = utils.product(shapes_i.items);
-        std.debug.print("data len: {}\n", .{data_len});
-
         var new_buf = try self.allocator.alloc(T, data_len);
 
         var indices = try self.allocator.alloc(usize, self.ndim());
+        defer self.allocator.free(indices);
+
         for (indices) |*i| i.* = 0;
 
         var out_i: usize = 0;
         var done = false;
 
         while (!done) {
-            var acc: T = 0;
+            var acc: T = op_init;
             for (0..self.shapes()[dm]) |k| {
                 indices[dm] = k;
-                acc += (try self.getWithIndicesCompType(data_type, indices)).*;
+                acc = op_func(acc, (try self.getWithIndicesCompType(data_type, indices)).*);
+            }
+
+            if (post_func) |pf| {
+                acc = pf(acc, self.shapes()[dm]);
             }
 
             new_buf[out_i] = acc;
@@ -275,16 +276,20 @@ pub fn sum(self: *const Self, comptime data_type: DataType, dim: ?usize) !Self {
         const bytes_size = new_buf.len * @sizeOf(T);
         const storage = Storage.init(self.allocator, Storage.Device.Cpu, @ptrCast(new_buf.ptr), bytes_size);
 
-        return Self.fromDataImpl(self.allocator, layout, storage, 0);
+        return try Self.fromDataImpl(self.allocator, layout, storage, 0);
     } else {
-        var total: T = 0;
+        var total: T = op_init;
 
         var idx = try self.allocator.alloc(usize, self.shapes().len);
         for (idx) |*x| x.* = 0;
 
         var done = false;
+
+        var count: usize = 0;
         while (!done) {
-            total += (try self.getWithIndicesCompType(data_type, idx)).*;
+            total = op_func(total, (try self.getWithIndicesCompType(data_type, idx)).*);
+
+            count += 1;
 
             var d: usize = self.shapes().len;
             while (d > 0) : (d -= 1) {
@@ -300,15 +305,50 @@ pub fn sum(self: *const Self, comptime data_type: DataType, dim: ?usize) !Self {
             }
         }
 
+        if (post_func) |pf| {
+            total = pf(total, count);
+        }
+
         var new_buf = try self.allocator.alloc(T, 1);
         new_buf[0] = total;
 
         const layout = try Layout.init(self.allocator, data_type, &.{1});
         const storage = Storage.init(self.allocator, Storage.Device.Cpu, @ptrCast(new_buf.ptr), @sizeOf(T));
 
-        return Self.fromDataImpl(self.allocator, layout, storage, 0);
+        return try Self.fromDataImpl(self.allocator, layout, storage, 0);
     }
 }
+
+pub fn sum(self: *const Self, comptime data_type: DataType, dim: ?usize) !Self {
+    const T = data_type.toTypeComp();
+    const scope = struct {
+        fn op_func(acc: T, val: T) T {
+            return acc + val;
+        }
+    };
+    return try self.reduce(data_type, dim, 0, scope.op_func, null);
+}
+
+pub fn mean(self: *const Self, comptime data_type: DataType, dim: ?usize) !Self {
+    const T = data_type.toTypeComp();
+
+    // std.debug.print("type info: {any}\n", .{@typeInfo())})
+    if (@typeInfo(T) != .float) {
+        @compileError("only support float");
+    }
+
+    const scope = struct {
+        fn op_func(acc: T, val: T) T {
+            return acc + val;
+        }
+        fn post_func(acc: T, count: usize) T {
+            return acc / @as(T, @floatFromInt(count));
+        }
+    };
+
+    return try self.reduce(data_type, dim, 0, scope.op_func, scope.post_func);
+}
+
 // op method
 pub fn matmul(self: *const Self, other: *const Self) anyerror!Self {
     if (self.dtype() != other.dtype()) {
@@ -492,7 +532,7 @@ pub fn rand(allocator: std.mem.Allocator, shapes_a: []const usize, low: f32, hig
     };
 }
 
-pub fn randNorm(allocator: std.mem.Allocator, shapes_a: []const usize, mean: f32, stddev: f32) !Self {
+pub fn randNorm(allocator: std.mem.Allocator, shapes_a: []const usize, mean_a: f32, stddev: f32) !Self {
     const total = utils.product(shapes_a);
 
     const buf = try allocator.alloc(f32, total);
@@ -502,7 +542,7 @@ pub fn randNorm(allocator: std.mem.Allocator, shapes_a: []const usize, mean: f32
 
     for (buf) |*x| {
         const u = rng.floatNorm(f32);
-        x.* = mean + stddev * u;
+        x.* = mean_a + stddev * u;
     }
 
     return Self{
@@ -1134,7 +1174,17 @@ test "reduce" {
 
     std.debug.print("a1: {any}\n", .{a1});
 
-    const t1 = try Self.arange(allocator, DataType.f32, .{ .end = 10 });
-    const t2 = try t1.sum(DataType.f32, 0);
-    std.debug.print("t1: {f} t2: {f} t2 item: {f}\n", .{ t1, t2, try t2.item() });
+    {
+        const t1 = try Self.arange(allocator, DataType.f32, .{ .end = 10 });
+        const t2 = try t1.sum(DataType.f32, 0);
+        const t3 = try t1.mean(DataType.f32, 0);
+        std.debug.print("t1: {f} t2: {f} t2 item: {f} t3: {f}\n", .{ t1, t2, try t2.item(), t3 });
+    }
+
+    {
+        const t1 = try (try Self.arange(allocator, DataType.f32, .{ .end = 10 })).reshape(&.{ 2, 5 });
+        const t2 = try t1.sum(DataType.f32, 1);
+        const t3 = try t1.mean(DataType.f32, 1);
+        std.debug.print("t1: {f} t2: {f} t3: {f}\n", .{ t1, t2, t3 });
+    }
 }
