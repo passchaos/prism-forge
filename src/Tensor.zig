@@ -329,6 +329,36 @@ pub fn sum(self: *const Self, comptime data_type: DataType, dim: ?usize) !Self {
     return try self.reduce(data_type, dim, 0, scope.op_func, null);
 }
 
+pub fn max(self: *const Self, comptime data_type: DataType, dim: ?usize) !Self {
+    const T = data_type.toTypeComp();
+    const scope = struct {
+        fn op_func(acc: T, val: T) T {
+            return @max(acc, val);
+        }
+    };
+    return try self.reduce(data_type, dim, -std.math.inf(T), scope.op_func, null);
+}
+
+pub fn min(self: *const Self, comptime data_type: DataType, dim: ?usize) !Self {
+    const T = data_type.toTypeComp();
+    const scope = struct {
+        fn op_func(acc: T, val: T) T {
+            return @min(acc, val);
+        }
+    };
+    return try self.reduce(data_type, dim, std.math.inf(T), scope.op_func, null);
+}
+
+pub fn prod(self: *const Self, comptime data_type: DataType, dim: ?usize) !Self {
+    const T = data_type.toTypeComp();
+    const scope = struct {
+        fn op_func(acc: T, val: T) T {
+            return acc * val;
+        }
+    };
+    return try self.reduce(data_type, dim, std.math.inf(T), scope.op_func, null);
+}
+
 pub fn mean(self: *const Self, comptime data_type: DataType, dim: ?usize) !Self {
     const T = data_type.toTypeComp();
 
