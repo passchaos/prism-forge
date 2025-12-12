@@ -5,6 +5,7 @@ pub const DataType = enum {
     f32,
     i32,
     u32,
+    bool,
 
     pub fn typeToDataType(comptime T: type) DataType {
         return switch (T) {
@@ -12,6 +13,7 @@ pub const DataType = enum {
             f32, comptime_float => .f32,
             i32 => .i32,
             u32, comptime_int => .u32,
+            bool => .bool,
             else => @compileError("Unsupported type: " ++ @typeName(T)),
         };
     }
@@ -22,6 +24,7 @@ pub const DataType = enum {
             .f32 => f32,
             .i32 => i32,
             .u32 => u32,
+            .bool => bool,
         };
     }
 
@@ -31,14 +34,12 @@ pub const DataType = enum {
             .f32 => f32,
             .i32 => i32,
             .u32 => u32,
+            .bool => bool,
         };
     }
     pub fn dtypeSize(self: DataType) usize {
         return switch (self) {
-            .f16 => 2,
-            .f32 => 4,
-            .i32 => 4,
-            .u32 => 4,
+            inline else => |v| @sizeOf(v.toTypeComp()),
         };
     }
 };
@@ -48,6 +49,7 @@ pub const Scalar = union(DataType) {
     f32: f32,
     i32: i32,
     u32: u32,
+    bool: bool,
 
     pub fn from(value: anytype) Scalar {
         return switch (@TypeOf(value)) {
@@ -55,12 +57,14 @@ pub const Scalar = union(DataType) {
             f32 => .{ .f32 = value },
             i32 => .{ .i32 = value },
             u32 => .{ .u32 = value },
+            bool => .{ .bool = value },
             else => @compileError("Unsupported type: " ++ @typeName(@TypeOf(value))),
         };
     }
 
     pub fn format(self: @This(), writer: *std.io.Writer) std.Io.Writer.Error!void {
         return switch (self) {
+            inline .bool => |v| writer.print("{}", .{v}),
             inline else => |v| writer.print("{d}", .{v}),
         };
     }

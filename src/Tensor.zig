@@ -221,6 +221,77 @@ pub fn map(self: *const Self, comptime data_type: DataType, func: fn (data_type.
     return a;
 }
 
+pub fn mapBool(self: *const Self, comptime data_type: DataType, func: fn (data_type.toTypeComp()) bool) !Self {
+    var new_buf = try self.allocator.alloc(bool, self.layout.size());
+
+    var iter = try self.dataIter();
+    defer iter.deinit();
+
+    const data_slice = self.dataSlice(data_type.toTypeComp());
+    while (iter.next()) |idx| {
+        new_buf[idx] = func(data_slice[idx]);
+    }
+
+    const layout = try Layout.init(self.allocator, DataType.bool, self.shapes());
+    const storage = Storage.init(self.allocator, Storage.Device.Cpu, @ptrCast(new_buf.ptr), new_buf.len * @sizeOf(bool));
+
+    return Self.fromDataImpl(self.allocator, layout, storage, self._storage_offset);
+}
+
+pub fn eql(self: *const Self, value: anytype) !Self {
+    const DT = comptime DataType.typeToDataType(@TypeOf(value));
+    switch (self.dtype()) {
+        inline DT => {
+            const scope = struct {
+                fn call(v: DT.toTypeComp()) bool {
+                    return v == value;
+                }
+            }.call;
+            return try self.mapBool(DT, scope);
+        },
+        else => |dt| {
+            std.debug.print("Unsupported data type: self= {}\n", .{dt});
+            return error.UnsupportedDataType;
+        },
+    }
+}
+
+pub fn lt(self: *const Self, value: anytype) !Self {
+    const DT = comptime DataType.typeToDataType(@TypeOf(value));
+    switch (self.dtype()) {
+        inline DT => {
+            const scope = struct {
+                fn call(v: DT.toTypeComp()) bool {
+                    return v < value;
+                }
+            }.call;
+            return try self.mapBool(DT, scope);
+        },
+        else => |dt| {
+            std.debug.print("Unsupported data type: self= {}\n", .{dt});
+            return error.UnsupportedDataType;
+        },
+    }
+}
+
+pub fn gt(self: *const Self, value: anytype) !Self {
+    const DT = comptime DataType.typeToDataType(@TypeOf(value));
+    switch (self.dtype()) {
+        inline DT => {
+            const scope = struct {
+                fn call(v: DT.toTypeComp()) bool {
+                    return v > value;
+                }
+            }.call;
+            return try self.mapBool(DT, scope);
+        },
+        else => |dt| {
+            std.debug.print("Unsupported data type: self= {}\n", .{dt});
+            return error.UnsupportedDataType;
+        },
+    }
+}
+
 pub fn binaryOp_(self: *Self, b: Self, comptime data_type: DataType, op_func: fn (x: data_type.toTypeComp(), y: data_type.toTypeComp()) data_type.toTypeComp()) !void {
     // inplace method: need broadcast to self shape
     var b_i = b;
@@ -1472,4 +1543,22 @@ test "iterator" {
     }
     // std.debug.print("typ: {any}\n", .{@typeInfo(@TypeOf(&t))});
 
+}
+
+test "bool op" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+
+    const t1 = try Self.rand(allocator, &.{ 2, 3 }, -1.0, 1.0);
+    std.debug.print("t1: {f}\n", .{t1});
+
+    const t2 = try t1.eql(0.0);
+    const t3 = try t1.lt(0.0);
+    const t4 = try t1.gt(0.0);
+    std.debug.print("t1: {f} t2: {f} t3: {f} t4: {f}\n", .{ t1, t2, t3, t4 });
 }
