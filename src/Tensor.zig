@@ -708,15 +708,96 @@ pub fn fromSlice(allocator: std.mem.Allocator, comptime dtype_i: DataType, shape
     return try Self.fromData(allocator, dtype_i, shapes_a, data_list);
 }
 
-pub fn clone(self: *const Self, allocator: std.mem.Allocator) !Self {
+pub fn to(self: *const Self, data_type: DataType) !Self {
+    if (data_type == self.dtype()) {
+        const layout = try self.layout.clone();
+        const storage = self.storage.clone();
+
+        return Self.fromDataImpl(self.allocator, layout, storage, self._storage_offset);
+    } else {
+        switch (data_type) {
+            inline else => |dt| {
+                const layout = try Layout.init(self.allocator, dt, self.shapes());
+
+                var new_buf = try self.allocator.alloc(dt.toTypeComp(), self.layout.size());
+
+                var iter = try self.dataIter();
+
+                switch (self.dtype()) {
+                    inline else => |sdt| {
+                        const data_slice = self.dataSlice(sdt.toTypeComp());
+
+                        var i: usize = 0;
+                        while (iter.next()) |idx| {
+                            switch (dt) {
+                                .f16, .f32 => switch (sdt) {
+                                    .f16, .f32 => {
+                                        new_buf[i] = @floatCast(data_slice[idx]);
+                                    },
+                                    .i32, .u32 => {
+                                        new_buf[i] = @floatFromInt(data_slice[idx]);
+                                    },
+                                    .bool => {
+                                        new_buf[i] = if (data_slice[idx]) 1.0 else 0.0;
+                                    },
+                                },
+                                .i32, .u32 => switch (sdt) {
+                                    .f16, .f32 => {
+                                        new_buf[i] = @intFromFloat(data_slice[idx]);
+                                    },
+                                    .i32, .u32 => {
+                                        new_buf[i] = @intCast(data_slice[idx]);
+                                    },
+                                    .bool => {
+                                        new_buf[i] = if (data_slice[idx]) 1 else 0;
+                                    },
+                                },
+                                .bool => switch (sdt) {
+                                    .f16, .f32 => {
+                                        new_buf[i] = data_slice[idx] > 0.0;
+                                    },
+                                    .i32, .u32 => {
+                                        new_buf[i] = data_slice[idx] > 0;
+                                    },
+                                    .bool => {
+                                        new_buf[i] = data_slice[idx];
+                                    },
+                                },
+                            }
+
+                            i += 1;
+                        }
+
+                        const storage = Storage.init(self.allocator, Storage.Device.Cpu, @ptrCast(new_buf.ptr), new_buf.len * data_type.dtypeSize());
+
+                        return Self.fromDataImpl(self.allocator, layout, storage, 0);
+                    },
+                }
+            },
+        }
+    }
+}
+
+pub fn clone(self: *const Self) !Self {
     const layout = try self.layout.clone();
 
-    if (!self.layout.isContiguous()) {
-        return try self.contiguous();
-    } else {
-        const storage = try self.storage.deepCopy();
+    switch (self.dtype()) {
+        inline else => |dt| {
+            var new_buf = try self.allocator.alloc(dt.toTypeComp(), self.layout.size());
 
-        return try Self.fromDataImpl(allocator, layout, storage, self._storage_offset);
+            var iter = try self.dataIter();
+            const data_slice = self.dataSlice(dt.toTypeComp());
+
+            var i: usize = 0;
+            while (iter.next()) |idx| {
+                new_buf[i] = data_slice[idx];
+                i += 1;
+            }
+
+            const storage = Storage.init(self.allocator, Storage.Device.Cpu, @ptrCast(new_buf.ptr), new_buf.len * self.dtype().dtypeSize());
+
+            return Self.fromDataImpl(self.allocator, layout, storage, 0);
+        },
     }
 }
 
@@ -1561,4 +1642,26 @@ test "bool op" {
     const t3 = try t1.lt(0.0);
     const t4 = try t1.gt(0.0);
     std.debug.print("t1: {f} t2: {f} t3: {f} t4: {f}\n", .{ t1, t2, t3, t4 });
+}
+
+test "to" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+
+    const t1 = try Self.rand(allocator, &.{ 2, 3 }, -1.0, 1.0);
+    std.debug.print("t1: {f}\n", .{t1});
+
+    // const a1: f32 = 20.01;
+    const t2 = try t1.to(DataType.f16);
+
+    std.debug.print("t2: {f}\n", .{t2});
+
+    const t3 = try t2.to(DataType.bool);
+
+    std.debug.print("t3: {f}\n", .{t3});
 }
