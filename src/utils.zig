@@ -265,7 +265,44 @@ pub fn cartesianProduct(allocator: std.mem.Allocator, dims: []const usize) !std.
     return result;
 }
 
-pub fn broadcastShapes(allocator: std.mem.Allocator, lhs_shape: []const usize, rhs_shape: []const usize) ![]const usize {
+pub fn broadcastShapes(allocator: std.mem.Allocator, orig_shape: []const usize, orig_strides: []const usize, target_shape: []const usize) !std.ArrayList(usize) {
+    if (orig_shape.len > target_shape.len) return error.ShapeMismatch;
+
+    var new_strides = try allocator.alloc(usize, target_shape.len);
+    var old_i: isize = @intCast(orig_shape.len);
+    old_i -= 1;
+    var new_i: isize = @intCast(target_shape.len);
+    new_i -= 1;
+
+    while (new_i >= 0) : (new_i -= 1) {
+        const td = target_shape[@intCast(new_i)];
+
+        if (old_i >= 0) {
+            const od_i: usize = @intCast(old_i);
+            const od = orig_shape[od_i];
+            const os = orig_strides[od_i];
+
+            if (od == td) {
+                new_strides[@intCast(new_i)] = os;
+            } else if (od == 1 and td > 1) {
+                new_strides[@intCast(new_i)] = 0;
+            } else {
+                return error.ShapeMismatch;
+            }
+
+            old_i -= 1;
+        } else {
+            new_strides[@intCast(new_i)] = 0;
+        }
+    }
+
+    var new_strides_i = try std.ArrayList(usize).initCapacity(allocator, target_shape.len);
+    try new_strides_i.appendSlice(allocator, new_strides);
+
+    return new_strides_i;
+}
+
+pub fn compatibleBroacastShapes(allocator: std.mem.Allocator, lhs_shape: []const usize, rhs_shape: []const usize) !std.ArrayList(usize) {
     const l_l = lhs_shape.len;
     const r_l = rhs_shape.len;
 
@@ -274,7 +311,7 @@ pub fn broadcastShapes(allocator: std.mem.Allocator, lhs_shape: []const usize, r
     }
 
     const result_len = @max(l_l, r_l);
-    var result = try std.ArrayList(usize).initCapacity(result_len);
+    var result = try std.ArrayList(usize).initCapacity(allocator, result_len);
     try result.appendNTimes(allocator, 0, result_len);
 
     for (0..result_len) |i| {
@@ -283,10 +320,10 @@ pub fn broadcastShapes(allocator: std.mem.Allocator, lhs_shape: []const usize, r
             break :blk v;
         } else rhs_shape[r_l - i - 1];
 
-        result[result_len - i - 1] = v;
+        result.items[result_len - i - 1] = v;
     }
 
-    return result.toOwnedSlice();
+    return result;
 }
 
 test "cartesian product" {

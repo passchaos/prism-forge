@@ -214,12 +214,21 @@ pub fn map_(self: *Self, comptime data_type: DataType, func: fn (data_type.toTyp
     }
 }
 
+pub fn map(self: *const Self, comptime data_type: DataType, func: fn (data_type.toTypeComp()) data_type.toTypeComp()) !Self {
+    var a = try self.contiguous();
+
+    try a.map_(data_type, func);
+    return a;
+}
+
 pub fn binaryOp_(self: *Self, b: Self, comptime data_type: DataType, op_func: fn (x: data_type.toTypeComp(), y: data_type.toTypeComp()) data_type.toTypeComp()) !void {
     // inplace method: need broadcast to self shape
     var b_i = b;
-    try b_i.broadcast_to(self.shapes());
+    try b_i.broadcast_to_(self.shapes());
 
     var iter = try self.dataIter();
+    defer iter.deinit();
+
     while (iter.next()) |idx| {
         const x = &self.dataSlice(data_type.toTypeComp())[idx];
         const y = b_i.dataSlice(data_type.toTypeComp())[idx];
@@ -227,17 +236,16 @@ pub fn binaryOp_(self: *Self, b: Self, comptime data_type: DataType, op_func: fn
     }
 }
 
-pub fn binaryOp(self: *Self, b: Self, comptime data_type: DataType, op_func: fn (x: data_type.toTypeComp(), y: data_type.toTypeComp()) data_type.toTypeComp()) !Self {
-    // inplace method: need broadcast to self shape
-    var b_i = b;
-    try b_i.broadcast_to(self.shapes());
+pub fn binaryOp(self: *const Self, b: Self, comptime data_type: DataType, op_func: fn (x: data_type.toTypeComp(), y: data_type.toTypeComp()) data_type.toTypeComp()) !Self {
+    const target_shapes = try utils.compatibleBroacastShapes(self.allocator, self.shapes(), b.shapes());
 
-    var iter = try self.dataIter();
-    while (iter.next()) |idx| {
-        const x = &self.dataSlice(data_type.toTypeComp())[idx];
-        const y = b_i.dataSlice(data_type.toTypeComp())[idx];
-        x.* = op_func(x.*, y);
-    }
+    const a = try self.broadcast_to(target_shapes.items);
+    var a1 = try a.contiguous();
+    const c = try b.broadcast_to(target_shapes.items);
+
+    try a1.binaryOp_(c, data_type, op_func);
+
+    return a1;
 }
 
 pub fn clamp_(self: *Self, min_a: anytype, max_a: anytype) !void {
@@ -274,6 +282,31 @@ pub fn add_(self: *Self, value: anytype) !void {
     }.call;
 
     try self.map_(DT, scope);
+}
+
+pub fn add(self: *Self, value: anytype) !Self {
+    if (@TypeOf(value) == @This()) {
+        switch (self.dtype()) {
+            inline else => |dt| {
+                const scope = struct {
+                    fn call(v: dt.toTypeComp(), other: dt.toTypeComp()) dt.toTypeComp() {
+                        return v + other;
+                    }
+                }.call;
+
+                return try self.binaryOp(@as(@This(), value), dt, scope);
+            },
+        }
+    }
+
+    const DT = comptime DataType.typeToDataType(@TypeOf(value));
+    const scope = struct {
+        fn call(v: DT.toTypeComp()) DT.toTypeComp() {
+            return v + value;
+        }
+    }.call;
+
+    return try self.map(DT, scope);
 }
 
 pub fn sub_(self: *Self, value: anytype) !void {
@@ -736,43 +769,25 @@ pub fn getWithIndices(self: *const Self, indices: []const usize) !Scalar {
     };
 }
 
-pub fn broadcast_to(self: *Self, target_shape: []const usize) !void {
-    if (self.ndim() > target_shape.len) return error.ShapeMismatch;
-
-    var new_strides = try self.allocator.alloc(usize, target_shape.len);
-    var old_i: isize = @intCast(self.shapes().len);
-    old_i -= 1;
-    var new_i: isize = @intCast(target_shape.len);
-    new_i -= 1;
-
-    while (new_i >= 0) : (new_i -= 1) {
-        const td = target_shape[@intCast(new_i)];
-
-        if (old_i >= 0) {
-            const od_i: usize = @intCast(old_i);
-            const od = self.shapes()[od_i];
-            const os = self.strides()[od_i];
-
-            if (od == td) {
-                new_strides[@intCast(new_i)] = os;
-            } else if (od == 1 and td > 1) {
-                new_strides[@intCast(new_i)] = 0;
-            } else {
-                return error.ShapeMismatch;
-            }
-
-            old_i -= 1;
-        } else {
-            new_strides[@intCast(new_i)] = 0;
-        }
-    }
+pub fn broadcast_to(self: *const Self, target_shape: []const usize) !Self {
+    const new_strides = try utils.broadcastShapes(self.allocator, self.shapes(), self.strides(), target_shape);
 
     var new_shapes = try std.ArrayList(usize).initCapacity(self.allocator, target_shape.len);
     try new_shapes.appendSlice(self.allocator, target_shape);
-    var new_strides_i = try std.ArrayList(usize).initCapacity(self.allocator, target_shape.len);
-    try new_strides_i.appendSlice(self.allocator, new_strides);
 
-    const layout = try Layout.initRaw(self.allocator, self.dtype(), new_shapes, new_strides_i);
+    const layout = try Layout.initRaw(self.allocator, self.dtype(), new_shapes, new_strides);
+    const storage = self.storage.clone();
+
+    return try Self.fromDataImpl(self.allocator, layout, storage, self._storage_offset);
+}
+
+pub fn broadcast_to_(self: *Self, target_shape: []const usize) !void {
+    const new_strides = try utils.broadcastShapes(self.allocator, self.shapes(), self.strides(), target_shape);
+
+    var new_shapes = try std.ArrayList(usize).initCapacity(self.allocator, target_shape.len);
+    try new_shapes.appendSlice(self.allocator, target_shape);
+
+    const layout = try Layout.initRaw(self.allocator, self.dtype(), new_shapes, new_strides);
 
     self.layout = layout;
 }
@@ -1367,6 +1382,9 @@ test "map" {
 
     try t.clamp_(0.0, 2.39);
     std.debug.print("t: {f}\n", .{t});
+
+    const t1 = try t.add(t);
+    std.debug.print("t: {f} t1: {f}\n", .{ t, t1 });
 }
 
 test "reduce" {
