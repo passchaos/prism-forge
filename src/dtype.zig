@@ -11,7 +11,7 @@ pub const DataType = enum {
             f16 => .f16,
             f32, comptime_float => .f32,
             i32 => .i32,
-            u32 => .u32,
+            u32, comptime_int => .u32,
             else => @compileError("Unsupported type: " ++ @typeName(T)),
         };
     }
