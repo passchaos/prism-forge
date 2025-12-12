@@ -240,12 +240,34 @@ pub fn binaryOp(self: *const Self, b: Self, comptime data_type: DataType, op_fun
     const target_shapes = try utils.compatibleBroacastShapes(self.allocator, self.shapes(), b.shapes());
 
     const a = try self.broadcast_to(target_shapes.items);
-    var a1 = try a.contiguous();
     const c = try b.broadcast_to(target_shapes.items);
 
-    try a1.binaryOp_(c, data_type, op_func);
+    var new_buf = try self.allocator.alloc(data_type.toTypeComp(), utils.product(target_shapes.items));
 
-    return a1;
+    var iter_a = try a.dataIter();
+    var iter_c = try c.dataIter();
+
+    var i: usize = 0;
+
+    const slice_a = a.dataSlice(data_type.toTypeComp());
+    const slice_c = c.dataSlice(data_type.toTypeComp());
+
+    while (iter_a.next()) |idx_a| {
+        if (iter_c.next()) |idx_c| {
+            const x = slice_a[idx_a];
+            const y = slice_c[idx_c];
+
+            new_buf[i] = op_func(x, y);
+            i += 1;
+        } else {
+            return error.IncompatibleShapes;
+        }
+    }
+
+    const layout = try Layout.init(self.allocator, data_type, target_shapes.items);
+    const storage = Storage.init(self.allocator, Storage.Device.Cpu, @ptrCast(new_buf.ptr), new_buf.len * data_type.dtypeSize());
+
+    return try Self.fromDataImpl(self.allocator, layout, storage, 0);
 }
 
 pub fn clamp_(self: *Self, min_a: anytype, max_a: anytype) !void {
@@ -284,7 +306,7 @@ pub fn add_(self: *Self, value: anytype) !void {
     try self.map_(DT, scope);
 }
 
-pub fn add(self: *Self, value: anytype) !Self {
+pub fn add(self: *const Self, value: anytype) !Self {
     if (@TypeOf(value) == @This()) {
         switch (self.dtype()) {
             inline else => |dt| {
@@ -585,11 +607,6 @@ pub fn dataIter(self: *const Self) !TensorIterator {
 
 // create method
 pub fn fromDataImpl(allocator: std.mem.Allocator, layout_a: Layout, storage_a: Storage, storage_offset_a: usize) !Self {
-    const layout_bytes_zie = layout_a.size() * layout_a.dtypeSize();
-    if (layout_bytes_zie + storage_offset_a > storage_a.byteSize()) {
-        return error.InvalidSize;
-    }
-
     return Self{
         .allocator = allocator,
         .layout = layout_a,
@@ -1385,6 +1402,12 @@ test "map" {
 
     const t1 = try t.add(t);
     std.debug.print("t: {f} t1: {f}\n", .{ t, t1 });
+
+    const a1 = try Self.rand(allocator, &.{ 1, 3 }, 0.0, 2.0);
+    const a2 = try Self.rand(allocator, &.{ 3, 1 }, -2.0, 5.0);
+
+    const a3 = try a1.add(a2);
+    std.debug.print("a1: {f} a2: {f} a3: {f}\n", .{ a1, a2, a3 });
 }
 
 test "reduce" {
