@@ -265,6 +265,30 @@ pub fn cartesianProduct(allocator: std.mem.Allocator, dims: []const usize) !std.
     return result;
 }
 
+pub fn broadcastShapes(allocator: std.mem.Allocator, lhs_shape: []const usize, rhs_shape: []const usize) ![]const usize {
+    const l_l = lhs_shape.len;
+    const r_l = rhs_shape.len;
+
+    if (l_l == 0 or r_l == 0) {
+        return error.InvalidShape;
+    }
+
+    const result_len = @max(l_l, r_l);
+    var result = try std.ArrayList(usize).initCapacity(result_len);
+    try result.appendNTimes(allocator, 0, result_len);
+
+    for (0..result_len) |i| {
+        const v = if (l_l > i) blk: {
+            const v = if (r_l > i) @max(lhs_shape[l_l - i - 1], rhs_shape[r_l - i - 1]) else lhs_shape[l_l - i - 1];
+            break :blk v;
+        } else rhs_shape[r_l - i - 1];
+
+        result[result_len - i - 1] = v;
+    }
+
+    return result.toOwnedSlice();
+}
+
 test "cartesian product" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();

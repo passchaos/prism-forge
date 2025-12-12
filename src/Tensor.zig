@@ -12,6 +12,51 @@ const Storage = @import("./Storage.zig");
 
 const asSlice = utils.asSlice;
 
+const TensorIterator = struct {
+    tensor: *const Self,
+
+    idx: []usize,
+    done: bool,
+
+    fn init(tensor: *const Self) !@This() {
+        var idx = try tensor.allocator.alloc(usize, tensor.ndim());
+        for (idx, 0..) |_, i| idx[i] = 0;
+
+        return @This(){
+            .tensor = tensor,
+            .idx = idx,
+            .done = false,
+        };
+    }
+
+    fn deinit(self: *@This()) void {
+        self.tensor.allocator.free(self.idx);
+    }
+
+    fn next(self: *@This()) ?usize {
+        if (self.done) return null;
+
+        var offset: usize = self.tensor._storage_offset;
+        for (self.idx, 0..) |i, d| {
+            offset += i * self.tensor.strides()[d];
+        }
+
+        var d: usize = self.tensor.ndim();
+        while (d > 0) : (d -= 1) {
+            self.idx[d - 1] += 1;
+
+            if (self.idx[d - 1] < self.tensor.shapes()[d - 1]) {
+                break;
+            }
+            self.idx[d - 1] = 0;
+
+            if (d == 1) self.done = true;
+        }
+
+        return offset;
+    }
+};
+
 const Self = @This();
 
 allocator: std.mem.Allocator,
@@ -19,7 +64,7 @@ storage: Storage,
 layout: Layout,
 _storage_offset: usize = 0,
 
-pub fn item(self: *const Self) !Scalar {
+pub fn scalarItem(self: *const Self) !Scalar {
     if (self.ndim() == 0) {
         return self.getWithIndices(&.{});
     } else {
@@ -159,20 +204,47 @@ pub fn unbind(self: *const Self, dim: usize) ![]const Self {
 }
 
 // elementwise method
-pub fn map_(self: *Self, comptime data_type: DataType, func: fn (*data_type.toTypeComp()) void) !void {
-    const cartesian_product = try utils.cartesianProduct(self.allocator, self.shapes());
+pub fn map_(self: *Self, comptime data_type: DataType, func: fn (data_type.toTypeComp()) data_type.toTypeComp()) !void {
+    var iter = try self.dataIter();
 
-    for (cartesian_product.items) |indices| {
-        const v = try self.getWithIndicesCompType(data_type, indices.items);
-        func(v);
+    const data_slice = self.dataSlice(data_type.toTypeComp());
+    while (iter.next()) |idx| {
+        const x = &data_slice[idx];
+        x.* = func(x.*);
+    }
+}
+
+pub fn binaryOp_(self: *Self, b: Self, comptime data_type: DataType, op_func: fn (x: data_type.toTypeComp(), y: data_type.toTypeComp()) data_type.toTypeComp()) !void {
+    // inplace method: need broadcast to self shape
+    var b_i = b;
+    try b_i.broadcast_to(self.shapes());
+
+    var iter = try self.dataIter();
+    while (iter.next()) |idx| {
+        const x = &self.dataSlice(data_type.toTypeComp())[idx];
+        const y = b_i.dataSlice(data_type.toTypeComp())[idx];
+        x.* = op_func(x.*, y);
+    }
+}
+
+pub fn binaryOp(self: *Self, b: Self, comptime data_type: DataType, op_func: fn (x: data_type.toTypeComp(), y: data_type.toTypeComp()) data_type.toTypeComp()) !Self {
+    // inplace method: need broadcast to self shape
+    var b_i = b;
+    try b_i.broadcast_to(self.shapes());
+
+    var iter = try self.dataIter();
+    while (iter.next()) |idx| {
+        const x = &self.dataSlice(data_type.toTypeComp())[idx];
+        const y = b_i.dataSlice(data_type.toTypeComp())[idx];
+        x.* = op_func(x.*, y);
     }
 }
 
 pub fn clamp_(self: *Self, min_a: anytype, max_a: anytype) !void {
     const DT = comptime DataType.typeToDataType(@TypeOf(min_a));
     const scope = struct {
-        fn call(v: *DT.toTypeComp()) void {
-            v.* = std.math.clamp(v.*, min_a, max_a);
+        fn call(v: DT.toTypeComp()) DT.toTypeComp() {
+            return std.math.clamp(v, min_a, max_a);
         }
     }.call;
 
@@ -180,10 +252,24 @@ pub fn clamp_(self: *Self, min_a: anytype, max_a: anytype) !void {
 }
 
 pub fn add_(self: *Self, value: anytype) !void {
+    if (@TypeOf(value) == @This()) {
+        switch (self.dtype()) {
+            inline else => |dt| {
+                const scope = struct {
+                    fn call(v: dt.toTypeComp(), other: dt.toTypeComp()) dt.toTypeComp() {
+                        return v + other;
+                    }
+                }.call;
+
+                return try self.binaryOp_(@as(@This(), value), dt, scope);
+            },
+        }
+    }
+
     const DT = comptime DataType.typeToDataType(@TypeOf(value));
     const scope = struct {
-        fn call(v: *DT.toTypeComp()) void {
-            v.* += value;
+        fn call(v: DT.toTypeComp()) DT.toTypeComp() {
+            return v + value;
         }
     }.call;
 
@@ -203,9 +289,11 @@ pub fn sub_(self: *Self, value: anytype) !void {
 
 pub fn mul_(self: *Self, value: anytype) !void {
     const DT = comptime DataType.typeToDataType(@TypeOf(value));
+
+    const T = DT.toTypeComp();
     const func = struct {
-        fn call(v: *DT.toTypeComp()) void {
-            v.* *= value;
+        fn call(v: T) T {
+            return v * value;
         }
     }.call;
 
@@ -214,9 +302,11 @@ pub fn mul_(self: *Self, value: anytype) !void {
 
 pub fn div_(self: *Self, value: anytype) !void {
     const DT = comptime DataType.typeToDataType(@TypeOf(value));
+    const T = DT.toTypeComp();
+
     const func = struct {
-        fn call(v: *DT.toTypeComp()) void {
-            v.* /= value;
+        fn call(v: T) T {
+            return v / value;
         }
     }.call;
 
@@ -227,8 +317,8 @@ pub fn sin_(self: *Self) !void {
     switch (self.dtype()) {
         inline .f16, .f32 => |DT| {
             const func = struct {
-                fn call(v: *DT.toTypeComp()) void {
-                    v.* = @sin(v.*);
+                fn call(v: DT.toTypeComp()) DT.toTypeComp() {
+                    return @sin(v);
                 }
             }.call;
             try self.map_(DT, func);
@@ -241,8 +331,8 @@ pub fn exp_(self: *Self) !void {
     switch (self.dtype()) {
         inline .f16, .f32 => |DT| {
             const func = struct {
-                fn call(v: *DT.toTypeComp()) void {
-                    v.* = @exp(v.*);
+                fn call(v: DT.toTypeComp()) DT.toTypeComp() {
+                    return @exp(v);
                 }
             }.call;
             try self.map_(DT, func);
@@ -455,6 +545,11 @@ pub fn matmul(self: *const Self, other: *const Self) anyerror!Self {
     return try Self.fromDataRaw(lhs.allocator, DataType.f32, &.{ m, n }, Storage.Device.Cpu, data, m * n * @sizeOf(f32));
 }
 
+// iterate method
+pub fn dataIter(self: *const Self) !TensorIterator {
+    return try TensorIterator.init(self);
+}
+
 // create method
 pub fn fromDataImpl(allocator: std.mem.Allocator, layout_a: Layout, storage_a: Storage, storage_offset_a: usize) !Self {
     const layout_bytes_zie = layout_a.size() * layout_a.dtypeSize();
@@ -638,14 +733,10 @@ pub fn getWithIndices(self: *const Self, indices: []const usize) !Scalar {
 
     return switch (self.dtype()) {
         inline else => |v| Scalar.from(self.dataSlice(v.toTypeComp())[idx]),
-        // .f16 => Scalar{ .f16 = self.dataSlice(DataType.f16.toType())[idx] },
-        // .f32 => Scalar{ .f32 = self.dataSlice(DataType.f32.toType())[idx] },
-        // .i32 => Scalar{ .i32 = self.dataSlice(DataType.i32.toType())[idx] },
-        // .u32 => Scalar{ .u32 = self.dataSlice(DataType.u32.toType())[idx] },
     };
 }
 
-pub fn broadcast_to(self: *const Self, target_shape: []const usize) !Self {
+pub fn broadcast_to(self: *Self, target_shape: []const usize) !void {
     if (self.ndim() > target_shape.len) return error.ShapeMismatch;
 
     var new_strides = try self.allocator.alloc(usize, target_shape.len);
@@ -676,10 +767,14 @@ pub fn broadcast_to(self: *const Self, target_shape: []const usize) !Self {
         }
     }
 
-    const layout = try Layout.initRaw(self.allocator, self.dtype(), target_shape, new_strides);
-    const storage = self.storage.clone();
+    var new_shapes = try std.ArrayList(usize).initCapacity(self.allocator, target_shape.len);
+    try new_shapes.appendSlice(self.allocator, target_shape);
+    var new_strides_i = try std.ArrayList(usize).initCapacity(self.allocator, target_shape.len);
+    try new_strides_i.appendSlice(self.allocator, new_strides);
 
-    return Self.fromDataImpl(self.allocator, layout, storage, self._storage_offset);
+    const layout = try Layout.initRaw(self.allocator, self.dtype(), new_shapes, new_strides_i);
+
+    self.layout = layout;
 }
 
 pub fn getWithIndicesCompType(self: *const Self, comptime data_type: DataType, indices: []const usize) !*data_type.toTypeComp() {
@@ -1251,14 +1346,15 @@ test "map" {
     var t = try Self.arange(allocator, DataType.f32, .{ .end = 10 });
 
     const func = struct {
-        fn call(x: *f32) void {
-            x.* *= 3;
+        fn call(x: f32) f32 {
+            return x * 3;
         }
     }.call;
     try t.map_(DataType.f32, func);
     std.debug.print("t: {f}\n", .{t});
 
     try t.add_(11.0);
+    try t.add_(t);
     std.debug.print("add t: {f}\n", .{t});
 
     try t.mul_(2.0);
@@ -1293,7 +1389,7 @@ test "reduce" {
         const t1 = try Self.arange(allocator, DataType.f32, .{ .end = 10 });
         const t2 = try t1.sum(DataType.f32, 0);
         const t3 = try t1.mean(DataType.f32, 0);
-        std.debug.print("t1: {f} t2: {f} t2 item: {f} t3: {f}\n", .{ t1, t2, try t2.item(), t3 });
+        std.debug.print("t1: {f} t2: {f} t2 item: {f} t3: {f}\n", .{ t1, t2, try t2.scalarItem(), t3 });
     }
 
     {
@@ -1302,4 +1398,37 @@ test "reduce" {
         const t3 = try t1.mean(DataType.f32, 1);
         std.debug.print("t1: {f} t2: {f} t3: {f}\n", .{ t1, t2, t3 });
     }
+}
+
+test "binary op" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+
+    const t = try Self.arange(allocator, DataType.f32, .{ .end = 10 });
+    std.debug.print("typ: {any}\n", .{@typeInfo(@TypeOf(&t))});
+}
+
+test "iterator" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+
+    const t = try Self.arange(allocator, DataType.f32, .{ .end = 10 });
+    const t1 = try t.reshape(&.{ 2, 5 });
+
+    var iter1 = try t1.dataIter();
+    while (iter1.next()) |item| {
+        std.debug.print("item: {}\n", .{item});
+    }
+    // std.debug.print("typ: {any}\n", .{@typeInfo(@TypeOf(&t))});
+
 }
