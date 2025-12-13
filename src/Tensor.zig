@@ -215,6 +215,12 @@ pub fn map_(self: *Self, comptime data_type: DataType, func: fn (data_type.toTyp
 }
 
 pub fn map(self: *const Self, comptime data_type: DataType, func: fn (data_type.toTypeComp()) data_type.toTypeComp()) !Self {
+    switch (self.dtype()) {
+        inline else => |dt| if (dt != data_type) {
+            return error.UnsupportedType;
+        },
+    }
+
     var a = try self.contiguous();
 
     try a.map_(data_type, func);
@@ -300,10 +306,15 @@ pub fn binaryOp_(self: *Self, b: Self, comptime data_type: DataType, op_func: fn
     var iter = try self.dataIter();
     defer iter.deinit();
 
+    var b_iter = try b_i.dataIter();
+    defer b_iter.deinit();
+
     while (iter.next()) |idx| {
-        const x = &self.dataSlice(data_type.toTypeComp())[idx];
-        const y = b_i.dataSlice(data_type.toTypeComp())[idx];
-        x.* = op_func(x.*, y);
+        if (b_iter.next()) |b_idx| {
+            const x = &self.dataSlice(data_type.toTypeComp())[idx];
+            const y = b_i.dataSlice(data_type.toTypeComp())[b_idx];
+            x.* = op_func(x.*, y);
+        }
     }
 }
 
@@ -355,6 +366,7 @@ pub fn clamp_(self: *Self, min_a: anytype, max_a: anytype) !void {
 pub fn add_(self: *Self, value: anytype) !void {
     if (@TypeOf(value) == @This()) {
         switch (self.dtype()) {
+            inline .bool => return error.UnsupportedType,
             inline else => |dt| {
                 const scope = struct {
                     fn call(v: dt.toTypeComp(), other: dt.toTypeComp()) dt.toTypeComp() {
@@ -380,6 +392,7 @@ pub fn add_(self: *Self, value: anytype) !void {
 pub fn add(self: *const Self, value: anytype) !Self {
     if (@TypeOf(value) == @This()) {
         switch (self.dtype()) {
+            inline .bool => return error.UnsupportedType,
             inline else => |dt| {
                 const scope = struct {
                     fn call(v: dt.toTypeComp(), other: dt.toTypeComp()) dt.toTypeComp() {
@@ -403,6 +416,20 @@ pub fn add(self: *const Self, value: anytype) !Self {
 }
 
 pub fn sub_(self: *Self, value: anytype) !void {
+    if (@TypeOf(value) == @This()) {
+        switch (self.dtype()) {
+            inline else => |dt| {
+                const scope = struct {
+                    fn call(v: dt.toTypeComp(), other: dt.toTypeComp()) dt.toTypeComp() {
+                        return v - other;
+                    }
+                }.call;
+
+                return try self.binaryOp_(@as(@This(), value), dt, scope);
+            },
+        }
+    }
+
     const DT = comptime DataType.typeToDataType(@TypeOf(value));
     const scope = struct {
         fn call(v: *DT.toTypeComp()) void {
@@ -413,7 +440,72 @@ pub fn sub_(self: *Self, value: anytype) !void {
     try self.map_(DT, scope);
 }
 
+pub fn sub(self: *const Self, value: anytype) !Self {
+    if (@TypeOf(value) == @This()) {
+        switch (self.dtype()) {
+            inline .bool => return error.InvalidType,
+            inline else => |dt| {
+                const scope = struct {
+                    fn call(v: dt.toTypeComp(), other: dt.toTypeComp()) dt.toTypeComp() {
+                        return v - other;
+                    }
+                }.call;
+
+                return try self.binaryOp(@as(@This(), value), dt, scope);
+            },
+        }
+    }
+
+    const DT = comptime DataType.typeToDataType(@TypeOf(value));
+    const scope = struct {
+        fn call(v: DT.toTypeComp()) DT.toTypeComp() {
+            return v - value;
+        }
+    }.call;
+
+    return try self.map(DT, scope);
+}
+
+pub fn mul(self: *const Self, value: anytype) !Self {
+    if (@TypeOf(value) == @This()) {
+        switch (self.dtype()) {
+            inline else => |dt| {
+                const scope = struct {
+                    fn call(v: dt.toTypeComp(), other: dt.toTypeComp()) dt.toTypeComp() {
+                        return v * other;
+                    }
+                }.call;
+
+                return try self.binaryOp(@as(@This(), value), dt, scope);
+            },
+        }
+    }
+
+    const DT = comptime DataType.typeToDataType(@TypeOf(value));
+    const scope = struct {
+        fn call(v: DT.toTypeComp()) DT.toTypeComp() {
+            return v * value;
+        }
+    }.call;
+
+    return try self.map(DT, scope);
+}
+
 pub fn mul_(self: *Self, value: anytype) !void {
+    if (@TypeOf(value) == @This()) {
+        switch (self.dtype()) {
+            inline else => |dt| {
+                const scope = struct {
+                    fn call(v: dt.toTypeComp(), other: dt.toTypeComp()) dt.toTypeComp() {
+                        return v * other;
+                    }
+                }.call;
+
+                return try self.binaryOp_(@as(@This(), value), dt, scope);
+            },
+        }
+    }
+
     const DT = comptime DataType.typeToDataType(@TypeOf(value));
 
     const T = DT.toTypeComp();
@@ -427,6 +519,21 @@ pub fn mul_(self: *Self, value: anytype) !void {
 }
 
 pub fn div_(self: *Self, value: anytype) !void {
+    if (@TypeOf(value) == @This()) {
+        switch (self.dtype()) {
+            inline .f16, .f32 => |dt| {
+                const scope = struct {
+                    fn call(v: dt.toTypeComp(), other: dt.toTypeComp()) dt.toTypeComp() {
+                        return v / other;
+                    }
+                }.call;
+
+                return try self.binaryOp_(@as(@This(), value), dt, scope);
+            },
+            inline else => return error.UnsupportedType,
+        }
+    }
+
     const DT = comptime DataType.typeToDataType(@TypeOf(value));
     const T = DT.toTypeComp();
 
@@ -495,12 +602,36 @@ pub fn relu(self: *const Self) !Self {
     }
 }
 
+pub fn softmax(self: *const Self) !Self {
+    const dims = self.ndim();
+
+    if (dims == 0) {
+        return error.InvalidDimension;
+    }
+    const a = try self.max(dims - 1);
+    var v = try self.sub(try a.unsqueeze(dims - 1));
+    try v.exp_();
+
+    const v1 = try (try v.sum(dims - 1)).unsqueeze(dims - 1);
+
+    std.debug.print("v: {f} v1: {f}\n", .{ v, v1 });
+    try v.div_(v1);
+
+    return v;
+}
+
 //
 //
 //
 // reduce method
-pub fn reduce(self: *const Self, comptime data_type: DataType, dim: ?usize, op_init: data_type.toTypeComp(), op_func: fn (acc: data_type.toTypeComp(), x: data_type.toTypeComp()) data_type.toTypeComp(), post_func: ?fn (acc: data_type.toTypeComp(), count: usize) data_type.toTypeComp()) !Self {
+pub fn reduce(self: *const Self, comptime data_type: DataType, dim: ?usize, op_func: fn (acc: data_type.toTypeComp(), x: data_type.toTypeComp()) data_type.toTypeComp(), post_func: ?fn (acc: data_type.toTypeComp(), count: usize) data_type.toTypeComp()) !Self {
     const T = data_type.toTypeComp();
+
+    const indices_init = try self.allocator.alloc(usize, self.ndim());
+    defer self.allocator.free(indices_init);
+    for (indices_init) |*i| i.* = 0;
+
+    const op_init = (try self.getWithIndicesCompType(data_type, indices_init)).*;
 
     if (dim) |dm| {
         var shapes_i = try std.ArrayList(usize).initCapacity(self.allocator, self.ndim() - 1);
@@ -522,7 +653,10 @@ pub fn reduce(self: *const Self, comptime data_type: DataType, dim: ?usize, op_i
             var acc: T = op_init;
             for (0..self.shapes()[dm]) |k| {
                 indices[dm] = k;
-                acc = op_func(acc, (try self.getWithIndicesCompType(data_type, indices)).*);
+
+                if (!std.mem.eql(usize, indices, indices_init)) {
+                    acc = op_func(acc, (try self.getWithIndicesCompType(data_type, indices)).*);
+                }
             }
 
             if (post_func) |pf| {
@@ -532,24 +666,37 @@ pub fn reduce(self: *const Self, comptime data_type: DataType, dim: ?usize, op_i
             new_buf[out_i] = acc;
             out_i += 1;
 
-            var j = self.shapes().len - 1;
+            var j = self.shapes().len;
 
             if (j == 0) {
                 break;
             }
 
+            std.debug.print("before ascend indices: {any} shapes: {any} dim= {?}\n", .{ indices, self.shapes(), dim });
             while (j > 0) : (j -= 1) {
-                if (j - 1 == dm) continue;
+                std.debug.print("while ascend indices: {any} shapes: {any} j= {} dim= {?}\n", .{ indices, self.shapes(), j, dim });
 
-                indices[j - 1] += 1;
-                if (indices[j - 1] < self.shapes()[j - 1]) {
+                if (j - 1 == dm) {
+                    if (dm == 0) {
+                        done = true;
+                    }
+                    continue;
+                }
+
+                if (indices[j - 1] < self.shapes()[j - 1] - 1) {
+                    indices[j - 1] += 1;
                     break;
-                } else if (j == 1) {
-                    done = true;
                 } else {
                     indices[j - 1] = 0;
+
+                    if (j - 1 == 0) {
+                        done = true;
+                    }
                 }
             }
+
+            std.debug.print("indices: {any} shapes: {any} dim= {?}\n", .{ indices, self.shapes(), dim });
+            std.debug.print("j: {} new_buf: {any} done: {}\n", .{ j, new_buf, done });
         }
 
         const layout = try Layout.init(self.allocator, data_type, shapes_i.items);
@@ -568,7 +715,9 @@ pub fn reduce(self: *const Self, comptime data_type: DataType, dim: ?usize, op_i
 
         var count: usize = 0;
         while (!done) {
-            total = op_func(total, (try self.getWithIndicesCompType(data_type, idx)).*);
+            if (!std.mem.eql(usize, idx, indices_init)) {
+                total = op_func(total, (try self.getWithIndicesCompType(data_type, idx)).*);
+            }
 
             count += 1;
 
@@ -600,64 +749,83 @@ pub fn reduce(self: *const Self, comptime data_type: DataType, dim: ?usize, op_i
     }
 }
 
-pub fn sum(self: *const Self, comptime data_type: DataType, dim: ?usize) !Self {
-    const T = data_type.toTypeComp();
-    const scope = struct {
-        fn op_func(acc: T, val: T) T {
-            return acc + val;
-        }
-    };
-    return try self.reduce(data_type, dim, 0, scope.op_func, null);
-}
-
-pub fn max(self: *const Self, comptime data_type: DataType, dim: ?usize) !Self {
-    const T = data_type.toTypeComp();
-    const scope = struct {
-        fn op_func(acc: T, val: T) T {
-            return @max(acc, val);
-        }
-    };
-    return try self.reduce(data_type, dim, -std.math.inf(T), scope.op_func, null);
-}
-
-pub fn min(self: *const Self, comptime data_type: DataType, dim: ?usize) !Self {
-    const T = data_type.toTypeComp();
-    const scope = struct {
-        fn op_func(acc: T, val: T) T {
-            return @min(acc, val);
-        }
-    };
-    return try self.reduce(data_type, dim, std.math.inf(T), scope.op_func, null);
-}
-
-pub fn prod(self: *const Self, comptime data_type: DataType, dim: ?usize) !Self {
-    const T = data_type.toTypeComp();
-    const scope = struct {
-        fn op_func(acc: T, val: T) T {
-            return acc * val;
-        }
-    };
-    return try self.reduce(data_type, dim, std.math.inf(T), scope.op_func, null);
-}
-
-pub fn mean(self: *const Self, comptime data_type: DataType, dim: ?usize) !Self {
-    const T = data_type.toTypeComp();
-
-    // std.debug.print("type info: {any}\n", .{@typeInfo())})
-    if (@typeInfo(T) != .float) {
-        @compileError("only support float");
+pub fn sum(self: *const Self, dim: ?usize) !Self {
+    switch (self.dtype()) {
+        inline .f16, .f32, .i32, .u32 => |dt| {
+            const T = dt.toTypeComp();
+            const scope = struct {
+                fn op_func(acc: T, val: T) T {
+                    return acc + val;
+                }
+            };
+            return try self.reduce(dt, dim, scope.op_func, null);
+        },
+        inline else => return error.UnsupportedType,
     }
+}
 
-    const scope = struct {
-        fn op_func(acc: T, val: T) T {
-            return acc + val;
-        }
-        fn post_func(acc: T, count: usize) T {
-            return acc / @as(T, @floatFromInt(count));
-        }
-    };
+pub fn max(self: *const Self, dim: ?usize) !Self {
+    switch (self.dtype()) {
+        inline else => |v| {
+            const T = v.toTypeComp();
+            const scope = struct {
+                fn op_func(acc: T, val: T) T {
+                    return @max(acc, val);
+                }
+            };
+            return try self.reduce(v, dim, scope.op_func, null);
+        },
+        inline .bool => return error.UnsupportedType,
+    }
+}
 
-    return try self.reduce(data_type, dim, 0, scope.op_func, scope.post_func);
+pub fn min(self: *const Self, dim: ?usize) !Self {
+    switch (self.dtype()) {
+        inline .bool => return error.UnsupportedType,
+        inline else => |dt| {
+            const T = dt.toTypeComp();
+            const scope = struct {
+                fn op_func(acc: T, val: T) T {
+                    return @min(acc, val);
+                }
+            };
+            return try self.reduce(dt, dim, std.math.inf(T), scope.op_func, null);
+        },
+    }
+}
+
+pub fn prod(self: *const Self, dim: ?usize) !Self {
+    switch (self.dtype()) {
+        inline .bool => return error.UnsupportedType,
+        inline else => |dt| {
+            const T = dt.toTypeComp();
+            const scope = struct {
+                fn op_func(acc: T, val: T) T {
+                    return acc * val;
+                }
+            };
+            return try self.reduce(dt, dim, std.math.inf(T), scope.op_func, null);
+        },
+    }
+}
+
+pub fn mean(self: *const Self, dim: ?usize) !Self {
+    switch (self.dtype()) {
+        inline else => return error.UnsupportedType,
+        inline .f16, .f32 => |dt| {
+            const T = dt.toTypeComp();
+            const scope = struct {
+                fn op_func(acc: T, val: T) T {
+                    return acc + val;
+                }
+                fn post_func(acc: T, count: usize) T {
+                    return acc / @as(T, @floatFromInt(count));
+                }
+            };
+
+            return try self.reduce(dt, dim, scope.op_func, scope.post_func);
+        },
+    }
 }
 
 // op method
@@ -1608,15 +1776,15 @@ test "reduce" {
 
     {
         const t1 = try Self.arange(allocator, DataType.f32, .{ .end = 10 });
-        const t2 = try t1.sum(DataType.f32, 0);
-        const t3 = try t1.mean(DataType.f32, 0);
+        const t2 = try t1.sum(0);
+        const t3 = try t1.mean(0);
         std.debug.print("t1: {f} t2: {f} t2 item: {f} t3: {f}\n", .{ t1, t2, try t2.scalarItem(), t3 });
     }
 
     {
         const t1 = try (try Self.arange(allocator, DataType.f32, .{ .end = 10 })).reshape(&.{ 2, 5 });
-        const t2 = try t1.sum(DataType.f32, 1);
-        const t3 = try t1.mean(DataType.f32, 1);
+        const t2 = try t1.sum(1);
+        const t3 = try t1.mean(1);
         std.debug.print("t1: {f} t2: {f} t3: {f}\n", .{ t1, t2, t3 });
     }
 }
@@ -1706,5 +1874,13 @@ test "activation function" {
     const t1 = try Self.rand(allocator, &.{ 2, 5 }, -1.0, 1.0);
     const t2 = try t1.sigmoid();
     const t3 = try t1.relu();
-    std.debug.print("t1: {f} t2: {f} t3: {f}\n", .{ t1, t2, t3 });
+    const t4 = try t1.max(1);
+    const t5 = try t1.max(0);
+    std.debug.print("t1: {f} t2: {f} t3: {f} t4: {f} t5: {f}\n", .{ t1, t2, t3, t4, t5 });
+
+    const arr = [3]f32{ 0.3, 2.9, 4.0 };
+    const v = try Self.fromShapedData(allocator, &arr);
+    const v1 = try v.softmax();
+    const v2 = try v1.sum(null);
+    std.debug.print("v: {f} v1: {f} v2: {f}\n", .{ v, v1, v2 });
 }
