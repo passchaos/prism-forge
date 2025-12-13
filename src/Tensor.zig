@@ -467,6 +467,34 @@ pub fn exp_(self: *Self) !void {
     }
 }
 
+pub fn sigmoid(self: *const Self) !Self {
+    switch (self.dtype()) {
+        inline .f16, .f32 => |DT| {
+            const func = struct {
+                fn call(v: DT.toTypeComp()) DT.toTypeComp() {
+                    return 1.0 / (1.0 + @exp(-v));
+                }
+            }.call;
+            return try self.map(DT, func);
+        },
+        inline else => return error.UnsupportedType,
+    }
+}
+
+pub fn relu(self: *const Self) !Self {
+    switch (self.dtype()) {
+        inline .f16, .f32, .i32, .u32 => |DT| {
+            const func = struct {
+                fn call(v: DT.toTypeComp()) DT.toTypeComp() {
+                    return @max(v, @as(DT.toTypeComp(), 0));
+                }
+            }.call;
+            return try self.map(DT, func);
+        },
+        inline else => return error.UnsupportedType,
+    }
+}
+
 //
 //
 //
@@ -713,7 +741,7 @@ pub fn to(self: *const Self, data_type: DataType) !Self {
         const layout = try self.layout.clone();
         const storage = self.storage.clone();
 
-        return Self.fromDataImpl(self.allocator, layout, storage, self._storage_offset);
+        return try Self.fromDataImpl(self.allocator, layout, storage, self._storage_offset);
     } else {
         switch (data_type) {
             inline else => |dt| {
@@ -1664,4 +1692,19 @@ test "to" {
     const t3 = try t2.to(DataType.bool);
 
     std.debug.print("t3: {f}\n", .{t3});
+}
+
+test "activation function" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+
+    const t1 = try Self.rand(allocator, &.{ 2, 5 }, -1.0, 1.0);
+    const t2 = try t1.sigmoid();
+    const t3 = try t1.relu();
+    std.debug.print("t1: {f} t2: {f} t3: {f}\n", .{ t1, t2, t3 });
 }
