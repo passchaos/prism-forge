@@ -574,7 +574,21 @@ pub fn exp_(self: *Self) !void {
     }
 }
 
-pub fn sigmoid(self: *const Self) !Self {
+pub fn log_(self: *Self) !void {
+    switch (self.dtype()) {
+        inline .f16, .f32 => |DT| {
+            const func = struct {
+                fn call(v: DT.toTypeComp()) DT.toTypeComp() {
+                    return @log(v);
+                }
+            }.call;
+            try self.map_(DT, func);
+        },
+        inline else => return error.UnsupportedType,
+    }
+}
+
+pub fn sigmoid_(self: *Self) !void {
     switch (self.dtype()) {
         inline .f16, .f32 => |DT| {
             const func = struct {
@@ -582,13 +596,13 @@ pub fn sigmoid(self: *const Self) !Self {
                     return 1.0 / (1.0 + @exp(-v));
                 }
             }.call;
-            return try self.map(DT, func);
+            return try self.map_(DT, func);
         },
         inline else => return error.UnsupportedType,
     }
 }
 
-pub fn relu(self: *const Self) !Self {
+pub fn relu_(self: *Self) !void {
     switch (self.dtype()) {
         inline .f16, .f32, .i32, .u32 => |DT| {
             const func = struct {
@@ -596,7 +610,35 @@ pub fn relu(self: *const Self) !Self {
                     return @max(v, @as(DT.toTypeComp(), 0));
                 }
             }.call;
-            return try self.map(DT, func);
+            return try self.map_(DT, func);
+        },
+        inline else => return error.UnsupportedType,
+    }
+}
+
+pub fn powi_(self: *const Self, value: anytype) !Self {
+    switch (self.dtype()) {
+        inline .f16, .f32, .i32, .u32 => |DT| {
+            const func = struct {
+                fn call(v: DT.toTypeComp()) DT.toTypeComp() {
+                    return std.math.pow(DT.toTypeComp(), v, value);
+                }
+            }.call;
+            return try self.map_(DT, func);
+        },
+        inline else => return error.UnsupportedType,
+    }
+}
+
+pub fn sqrt_(self: *const Self) !Self {
+    switch (self.dtype()) {
+        inline .f16, .f32 => |DT| {
+            const func = struct {
+                fn call(v: DT.toTypeComp()) DT.toTypeComp() {
+                    return @sqrt(v);
+                }
+            }.call;
+            return try self.map_(DT, func);
         },
         inline else => return error.UnsupportedType,
     }
@@ -618,6 +660,39 @@ pub fn softmax(self: *const Self) !Self {
     try v.div_(v1);
 
     return v;
+}
+
+// loss
+pub fn mean_squared_error(self: *const Self, other: *const Self) !Scalar {
+    const a = try self.sub(other);
+    try a.powi_(2);
+
+    return try (try a.sum(null)).scalarItem();
+}
+
+pub fn cross_entropy_error(self: *const Self, other: *const Self) !Scalar {
+    switch (self.dtype()) {
+        .f16, .f32 => |dt| {
+            const scope = struct {
+                fn call(v: dt.toTypeComp()) dt.toTypeComp() {
+                    return -(v + 0.00001).log();
+                }
+            };
+
+            const a = try self.map(dt, scope.func);
+            const a1 = try a.mul(other);
+            const value = try a1.sum(null);
+
+            const batch_size = switch (self.ndim()) {
+                1 => 1,
+                2 => self.shapes()[0],
+                else => return error.InvalidDimension,
+            };
+
+            return value.getDataWithIdx(dt, 0) / @as(dt.toTypeComp(), @floatFromInt(batch_size));
+        },
+        inline else => return error.InvalidDataType,
+    }
 }
 
 //
@@ -1872,8 +1947,11 @@ test "activation function" {
     const allocator = arena.allocator();
 
     const t1 = try Self.rand(allocator, &.{ 2, 5 }, -1.0, 1.0);
-    const t2 = try t1.sigmoid();
-    const t3 = try t1.relu();
+
+    var t2 = try t1.clone();
+    try t2.sigmoid_();
+    var t3 = try t1.clone();
+    try t3.relu_();
     const t4 = try t1.max(1);
     const t5 = try t1.max(0);
     std.debug.print("t1: {f} t2: {f} t3: {f} t4: {f} t5: {f}\n", .{ t1, t2, t3, t4, t5 });
