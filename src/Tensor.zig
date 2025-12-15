@@ -177,17 +177,22 @@ pub fn map_(self: *Self, comptime data_type: DataType, func: fn (data_type.toTyp
     }
 }
 
-pub fn map(self: *const Self, comptime data_type: DataType, func: fn (data_type.toTypeComp()) data_type.toTypeComp()) !Self {
-    switch (self.dtype()) {
-        inline else => |dt| if (dt != data_type) {
-            return error.UnsupportedType;
-        },
+pub fn map(self: *const Self, comptime data_type: DataType, comptime return_type: DataType, func: fn (data_type.toTypeComp()) return_type.toTypeComp()) !Self {
+    var new_buf = try self.allocator.alloc(return_type.toTypeComp(), self.layout.size());
+
+    var iter = try self.dataIter();
+
+    var i: usize = 0;
+    while (iter.next()) |idx| {
+        const x = try self.getWithIndicesCompType(data_type, idx);
+        new_buf[i] = func(x.*);
+        i += 1;
     }
 
-    var a = try self.contiguous();
+    const layout = try Layout.init(self.allocator, return_type, self.shapes());
+    const storage = Storage.init(self.allocator, Storage.Device.Cpu, @ptrCast(new_buf.ptr), new_buf.len * return_type.dtypeSize());
 
-    try a.map_(data_type, func);
-    return a;
+    return try Self.fromDataImpl(self.allocator, layout, storage, 0);
 }
 
 pub fn mapBool(self: *const Self, comptime data_type: DataType, func: fn (data_type.toTypeComp()) bool) !Self {
@@ -385,7 +390,12 @@ pub fn add(self: *const Self, value: anytype) !Self {
 
     const DT = comptime DataType.typeToDataType(@TypeOf(value));
     const scope = struct {
-        fn call(v: DT.toTypeComp()) DT.toTypeComp() {
+        fn call(v: Scalar) DT.toTypeComp() {
+            switch (v) {
+                inline else => |d| {
+                    return v + dtype_o.toDType(@TypeOf(d), value);
+                },
+            }
             return v + value;
         }
     }.call;
@@ -1279,6 +1289,22 @@ pub fn broadcastTo_(self: *Self, target_shape: []const usize) !void {
     const layout = try Layout.initRaw(self.allocator, self.dtype(), new_shapes, new_strides);
 
     self.layout = layout;
+}
+
+pub fn set(self: *Self, indices: []const usize, value: anytype) !void {
+    var idx = try utils.indices_to_flat(indices, self.shapes(), self.strides());
+    idx += self._storage_offset;
+
+    const data_type = self.dtype();
+    switch (data_type) {
+        inline else => |dt| {
+            const T = dt.toTypeComp();
+            const data = self.dataSlice(T);
+
+            const v = dtype_o.toDType(T, value);
+            data[idx] = v;
+        },
+    }
 }
 
 pub fn getWithIndicesCompType(self: *const Self, comptime data_type: DataType, indices: []const usize) !*data_type.toTypeComp() {

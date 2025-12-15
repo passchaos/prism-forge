@@ -28,6 +28,7 @@ pub fn toDType(comptime Target: type, value: anytype) Target {
 pub const DataType = enum {
     f16,
     f32,
+    u8,
     i32,
     u32,
     bool,
@@ -36,6 +37,7 @@ pub const DataType = enum {
         return switch (T) {
             f16 => .f16,
             f32, comptime_float => .f32,
+            u8 => .u8,
             i32 => .i32,
             u32, comptime_int => .u32,
             bool => .bool,
@@ -47,6 +49,7 @@ pub const DataType = enum {
         return switch (self) {
             .f16 => f16,
             .f32 => f32,
+            .u8 => u8,
             .i32 => i32,
             .u32 => u32,
             .bool => bool,
@@ -57,6 +60,7 @@ pub const DataType = enum {
         return switch (self) {
             .f16 => f16,
             .f32 => f32,
+            .u8 => u8,
             .i32 => i32,
             .u32 => u32,
             .bool => bool,
@@ -72,6 +76,7 @@ pub const DataType = enum {
 pub const Scalar = union(DataType) {
     f16: f16,
     f32: f32,
+    u8: u8,
     i32: i32,
     u32: u32,
     bool: bool,
@@ -80,6 +85,7 @@ pub const Scalar = union(DataType) {
         return switch (self) {
             .f16 => |v| v == other.f16,
             .f32 => |v| v == other.f32,
+            .u8 => |v| v == other.u8,
             .i32 => |v| v == other.i32,
             .u32 => |v| v == other.u32,
             .bool => |v| v == other.bool,
@@ -90,6 +96,7 @@ pub const Scalar = union(DataType) {
         return switch (@TypeOf(value)) {
             f16 => .{ .f16 = value },
             f32 => .{ .f32 = value },
+            u8 => .{ .u8 = value },
             i32 => .{ .i32 = value },
             u32 => .{ .u32 = value },
             bool => .{ .bool = value },
@@ -99,8 +106,7 @@ pub const Scalar = union(DataType) {
 
     pub fn format(self: @This(), writer: *std.io.Writer) std.Io.Writer.Error!void {
         return switch (self) {
-            inline .bool => |v| writer.print("{}", .{v}),
-            inline else => |v| writer.print("{d}", .{v}),
+            inline else => |v| writer.print("{}", .{v}),
         };
     }
 };

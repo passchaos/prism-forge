@@ -8,7 +8,7 @@ const ShapeIterator = @import("../Layout.zig").ShapeIterator;
 
 pub fn oneHot(self: Tensor, args: struct { num_classes: ?usize = null }) !Tensor {
     switch (self.dtype()) {
-        inline .i32, .u32 => |v| {
+        inline .u8, .i32, .u32 => |v| {
             const T = v.toTypeComp();
             const nc: usize = if (args.num_classes) |nc| nc else blk: {
                 const max_t = try self.max(null);
