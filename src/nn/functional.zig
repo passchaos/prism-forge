@@ -1,7 +1,10 @@
 const std = @import("std");
 
 const Tensor = @import("../Tensor.zig");
-const DataType = @import("../dtype.zig").DataType;
+const dtype = @import("../dtype.zig");
+const DataType = dtype.DataType;
+const utils = @import("../utils.zig");
+const ShapeIterator = @import("../Layout.zig").ShapeIterator;
 
 pub fn oneHot(self: Tensor, args: struct { num_classes: ?usize = null }) !Tensor {
     switch (self.dtype()) {
@@ -35,5 +38,57 @@ pub fn oneHot(self: Tensor, args: struct { num_classes: ?usize = null }) !Tensor
             return result;
         },
         else => return error.InvalidDataType,
+    }
+}
+
+pub fn pad(self: Tensor, pads: []const usize, value: anytype) !Tensor {
+    switch (self.dtype()) {
+        inline else => |dt| {
+            const T = dt.toTypeComp();
+
+            const vv = comptime dtype.toDType(T, value);
+
+            const dims = self.ndim();
+            const pad_dims = pads.len / 2;
+
+            var new_shapes = try std.ArrayList(usize).initCapacity(self.allocator, dims);
+            try new_shapes.appendSlice(self.allocator, self.shapes());
+
+            for (new_shapes.items, 0..) |*shape, i| {
+                const idx_to_pad_idx = dims - i - 1;
+
+                if (idx_to_pad_idx < pad_dims) {
+                    const left_add = pads[2 * idx_to_pad_idx];
+                    const right_add = pads[2 * idx_to_pad_idx + 1];
+                    shape.* += left_add + right_add;
+                }
+            }
+
+            var result = try Tensor.full(self.allocator, new_shapes.items, vv);
+
+            var shape_iter = try ShapeIterator.init(self.allocator, self.shapes());
+            while (shape_iter.next()) |idx| {
+                var dst_idx = try self.allocator.alloc(usize, dims);
+
+                for (idx, 0..) |dim, i| {
+                    // judge if need to set value from orig tensor
+                    const idx_to_pad_idx = dims - i - 1;
+
+                    if (idx_to_pad_idx < pad_dims) {
+                        const left_add = pads[2 * idx_to_pad_idx];
+                        dst_idx[i] = dim + left_add;
+                    } else {
+                        dst_idx[i] = dim;
+                    }
+                }
+
+                const dst_v = try result.getWithIndicesCompType(dt, dst_idx);
+                const src_v = try self.getWithIndicesCompType(dt, idx);
+
+                dst_v.* = src_v.*;
+            }
+
+            return result;
+        },
     }
 }

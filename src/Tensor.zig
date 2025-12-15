@@ -7,58 +7,11 @@ const DataType = dtype_o.DataType;
 const Scalar = dtype_o.Scalar;
 
 const Layout = @import("./Layout.zig");
+const ShapeIterator = Layout.ShapeIterator;
 
 const Storage = @import("./Storage.zig");
 
 const asSlice = utils.asSlice;
-
-pub const TensorIterator = struct {
-    tensor: *const Self,
-
-    idx: []usize,
-    done: bool,
-
-    fn init(tensor: *const Self) !@This() {
-        var idx = try tensor.allocator.alloc(usize, tensor.ndim());
-        for (idx, 0..) |_, i| idx[i] = 0;
-
-        return @This(){
-            .tensor = tensor,
-            .idx = idx,
-            .done = false,
-        };
-    }
-
-    pub fn deinit(self: *@This()) void {
-        self.tensor.allocator.free(self.idx);
-    }
-
-    pub fn next(self: *@This()) ?[]const usize {
-        if (self.done) return null;
-
-        const outer_indices = self.tensor.allocator.alloc(usize, self.tensor.ndim()) catch unreachable;
-        @memcpy(outer_indices, self.idx);
-
-        // var offset: usize = self.tensor._storage_offset;
-        // for (self.idx, 0..) |i, d| {
-        //     offset += i * self.tensor.strides()[d];
-        // }
-
-        var d: usize = self.tensor.ndim();
-        while (d > 0) : (d -= 1) {
-            self.idx[d - 1] += 1;
-
-            if (self.idx[d - 1] < self.tensor.shapes()[d - 1]) {
-                break;
-            }
-            self.idx[d - 1] = 0;
-
-            if (d == 1) self.done = true;
-        }
-
-        return outer_indices;
-    }
-};
 
 const Self = @This();
 
@@ -968,8 +921,8 @@ pub fn matmul(self: *const Self, other: *const Self) anyerror!Self {
 }
 
 // iterate method
-pub fn dataIter(self: *const Self) !TensorIterator {
-    return try TensorIterator.init(self);
+pub fn dataIter(self: *const Self) !ShapeIterator {
+    return try ShapeIterator.init(self.allocator, self.shapes());
 }
 
 // create method
@@ -1360,6 +1313,13 @@ pub fn permute(self: *const Self, perm: []const usize) anyerror!Self {
     };
 }
 
+pub fn reshape_(self: *Self, new_shapes: []const usize) anyerror!void {
+    if (!self.layout.isContiguous()) return error.NotContiguous;
+
+    const new_layout = try self.layout.reshape(new_shapes);
+    self.layout = new_layout;
+}
+
 pub fn reshape(self: *const Self, new_shapes: []const usize) anyerror!Self {
     const obj = if (!self.layout.isContiguous()) &(try self.contiguous()) else self;
 
@@ -1446,7 +1406,7 @@ pub fn equal(self: *const Self, other: *const Self) bool {
 
     while (self_iter.next()) |idx| {
         const sv = self.getWithIndices(idx) catch unreachable;
-        const ov = self.getWithIndices(idx) catch unreachable;
+        const ov = other.getWithIndices(idx) catch unreachable;
 
         if (!sv.equal(ov)) return false;
     }

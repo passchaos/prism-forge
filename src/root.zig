@@ -29,18 +29,80 @@ test "one_hot" {
 
     // const F =
 
-    const t1 = try Tensor.arange(allocator, DataType.i32, .{ .end = 10, .step = 3 });
+    {
+        const t1 = try Tensor.arange(allocator, DataType.i32, .{ .end = 10, .step = 3 });
 
-    const t2 = try F.oneHot(t1, .{});
+        const t2 = try F.oneHot(t1, .{});
 
-    const arr1 = [4][10]i32{
-        .{ 1, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
-        .{ 0, 0, 0, 1, 0, 0, 0, 0, 0, 0 },
-        .{ 1, 0, 0, 0, 0, 0, 1, 0, 0, 0 },
-        .{ 1, 0, 0, 0, 0, 0, 0, 0, 0, 1 },
-    };
+        const arr1 = [4][10]i32{
+            .{ 1, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+            .{ 0, 0, 0, 1, 0, 0, 0, 0, 0, 0 },
+            .{ 0, 0, 0, 0, 0, 0, 1, 0, 0, 0 },
+            .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 },
+        };
 
-    const r1 = try Tensor.fromShapedData(allocator, &arr1);
-    try std.testing.expect(t2.equal(&r1));
-    std.debug.print("t1: {f} t2: {f}\n", .{ t1, t2 });
+        const r1 = try Tensor.fromShapedData(allocator, &arr1);
+        try std.testing.expect(t2.equal(&r1));
+        std.debug.print("t1: {f} t2: {f}\n", .{ t1, t2 });
+    }
+
+    {
+        var t1 = try Tensor.arange(allocator, DataType.i32, .{ .end = 10, .step = 3 });
+        try t1.reshape_(&.{ 2, 2 });
+
+        const t2 = try F.oneHot(t1, .{ .num_classes = 15 });
+
+        std.debug.print("t2: {f}\n", .{t2});
+
+        const arr1 = [2][2][15]i32{
+            .{ .{ 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, .{ 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 } },
+            .{ .{ 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0 }, .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0 } },
+        };
+
+        const r1 = try Tensor.fromShapedData(allocator, &arr1);
+
+        try std.testing.expect(t2.equal(&r1));
+        std.debug.print("r1: {f} t2: {f}\n", .{ r1, t2 });
+    }
+}
+
+test "pad" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+
+    {
+        const t1 = try Tensor.arange(allocator, DataType.i32, .{ .end = 10, .step = 3 });
+        const t2 = try F.pad(t1, &.{ 1, 2 }, 100);
+        std.debug.print("t1: {f} t2: {f}\n", .{ t1, t2 });
+        const arr1 = [7]i32{ 100, 0, 3, 6, 9, 100, 100 };
+        const r1 = try Tensor.fromShapedData(allocator, &arr1);
+        try std.testing.expect(t2.equal(&r1));
+        // std.debug.print("r1: {f} t2: {f}\n", .{ r1, t2 });
+    }
+
+    {
+        var t1 = try Tensor.arange(allocator, DataType.i32, .{ .end = 10, .step = 3 });
+        try t1.reshape_(&.{ 2, 2 });
+
+        const t2 = try F.pad(t1, &.{ 1, 2, 3, 2 }, 100);
+        std.debug.print("t1: {f} t2: {f}\n", .{ t1, t2 });
+
+        const arr1 = [7][5]i32{
+            .{ 100, 100, 100, 100, 100 },
+            .{ 100, 100, 100, 100, 100 },
+            .{ 100, 100, 100, 100, 100 },
+            .{ 100, 0, 3, 100, 100 },
+            .{ 100, 6, 9, 100, 100 },
+            .{ 100, 100, 100, 100, 100 },
+            .{ 100, 100, 100, 100, 100 },
+        };
+        const r1 = try Tensor.fromShapedData(allocator, &arr1);
+        try std.testing.expect(t2.equal(&r1));
+        // std.debug.print("r1: {f} t2: {f}\n", .{ r1, t2 });
+    }
 }

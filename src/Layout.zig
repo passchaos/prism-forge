@@ -11,6 +11,51 @@ _is_contiguous: bool = true,
 
 const Self = @This();
 
+pub const ShapeIterator = struct {
+    _shapes: []const usize,
+
+    idx: []usize,
+    done: bool,
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator, shapes_a: []const usize) !@This() {
+        var idx = try allocator.alloc(usize, shapes_a.len);
+        for (idx, 0..) |_, i| idx[i] = 0;
+
+        return @This(){
+            ._shapes = shapes_a,
+            .idx = idx,
+            .done = false,
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *@This()) void {
+        self.allocator.free(self.idx);
+    }
+
+    pub fn next(self: *@This()) ?[]const usize {
+        if (self.done) return null;
+
+        const outer_indices = self.allocator.alloc(usize, self._shapes.len) catch unreachable;
+        @memcpy(outer_indices, self.idx);
+
+        var d: usize = self._shapes.len;
+        while (d > 0) : (d -= 1) {
+            self.idx[d - 1] += 1;
+
+            if (self.idx[d - 1] < self._shapes[d - 1]) {
+                break;
+            }
+            self.idx[d - 1] = 0;
+
+            if (d == 1) self.done = true;
+        }
+
+        return outer_indices;
+    }
+};
+
 fn checkContiguous(shapes_a: []const usize, strides_a: []const usize) bool {
     var expected_stride: usize = 1;
     var i: usize = shapes_a.len;
