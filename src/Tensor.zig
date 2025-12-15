@@ -455,8 +455,9 @@ pub fn sub(self: *const Self, value: anytype) !Self {
 }
 
 pub fn mul(self: *const Self, value: anytype) !Self {
-    if (@TypeOf(value) == @This()) {
+    if (comptime @TypeOf(value) == @This()) {
         switch (self.dtype()) {
+            inline .bool => return error.InvalidType,
             inline else => |dt| {
                 const scope = struct {
                     fn call(v: dt.toTypeComp(), other: dt.toTypeComp()) dt.toTypeComp() {
@@ -509,7 +510,7 @@ pub fn mul_(self: *Self, value: anytype) !void {
 pub fn div_(self: *Self, value: anytype) !void {
     if (@TypeOf(value) == @This()) {
         switch (self.dtype()) {
-            inline .f16, .f32 => |dt| {
+            inline .f32 => |dt| {
                 const scope = struct {
                     fn call(v: dt.toTypeComp(), other: dt.toTypeComp()) dt.toTypeComp() {
                         return v / other;
@@ -523,10 +524,9 @@ pub fn div_(self: *Self, value: anytype) !void {
     }
 
     const DT = comptime DataType.typeToDataType(@TypeOf(value));
-    const T = DT.toTypeComp();
 
     const func = struct {
-        fn call(v: T) T {
+        fn call(v: DT.toTypeComp()) DT.toTypeComp() {
             return v / value;
         }
     }.call;
@@ -536,7 +536,7 @@ pub fn div_(self: *Self, value: anytype) !void {
 
 pub fn sin_(self: *Self) !void {
     switch (self.dtype()) {
-        inline .f16, .f32 => |DT| {
+        inline .f32 => |DT| {
             const func = struct {
                 fn call(v: DT.toTypeComp()) DT.toTypeComp() {
                     return @sin(v);
@@ -550,7 +550,7 @@ pub fn sin_(self: *Self) !void {
 
 pub fn exp_(self: *Self) !void {
     switch (self.dtype()) {
-        inline .f16, .f32 => |DT| {
+        inline .f32 => |DT| {
             const func = struct {
                 fn call(v: DT.toTypeComp()) DT.toTypeComp() {
                     return @exp(v);
@@ -564,7 +564,7 @@ pub fn exp_(self: *Self) !void {
 
 pub fn log_(self: *Self) !void {
     switch (self.dtype()) {
-        inline .f16, .f32 => |DT| {
+        inline .f32 => |DT| {
             const func = struct {
                 fn call(v: DT.toTypeComp()) DT.toTypeComp() {
                     return @log(v);
@@ -578,7 +578,7 @@ pub fn log_(self: *Self) !void {
 
 pub fn sigmoid_(self: *Self) !void {
     switch (self.dtype()) {
-        inline .f16, .f32 => |DT| {
+        inline .f32 => |DT| {
             const func = struct {
                 fn call(v: DT.toTypeComp()) DT.toTypeComp() {
                     return 1.0 / (1.0 + @exp(-v));
@@ -592,7 +592,7 @@ pub fn sigmoid_(self: *Self) !void {
 
 pub fn relu_(self: *Self) !void {
     switch (self.dtype()) {
-        inline .f16, .f32, .i32, .u32 => |DT| {
+        inline .f32, .i32, .u32 => |DT| {
             const func = struct {
                 fn call(v: DT.toTypeComp()) DT.toTypeComp() {
                     return @max(v, @as(DT.toTypeComp(), 0));
@@ -604,9 +604,9 @@ pub fn relu_(self: *Self) !void {
     }
 }
 
-pub fn powi_(self: *const Self, value: anytype) !Self {
+pub fn powi_(self: *Self, value: anytype) !void {
     switch (self.dtype()) {
-        inline .f16, .f32, .i32, .u32 => |DT| {
+        inline .f32, .i32, .u32 => |DT| {
             const func = struct {
                 fn call(v: DT.toTypeComp()) DT.toTypeComp() {
                     return std.math.pow(DT.toTypeComp(), v, value);
@@ -620,7 +620,7 @@ pub fn powi_(self: *const Self, value: anytype) !Self {
 
 pub fn sqrt_(self: *const Self) !Self {
     switch (self.dtype()) {
-        inline .f16, .f32 => |DT| {
+        inline .f32 => |DT| {
             const func = struct {
                 fn call(v: DT.toTypeComp()) DT.toTypeComp() {
                     return @sqrt(v);
@@ -648,39 +648,6 @@ pub fn softmax(self: *const Self) !Self {
     try v.div_(v1);
 
     return v;
-}
-
-// loss
-pub fn mean_squared_error(self: *const Self, other: *const Self) !Scalar {
-    const a = try self.sub(other);
-    try a.powi_(2);
-
-    return try (try a.sum(null)).scalarItem();
-}
-
-pub fn cross_entropy_error(self: *const Self, other: *const Self) !Scalar {
-    switch (self.dtype()) {
-        .f16, .f32 => |dt| {
-            const scope = struct {
-                fn call(v: dt.toTypeComp()) dt.toTypeComp() {
-                    return -(v + 0.00001).log();
-                }
-            };
-
-            const a = try self.map(dt, scope.func);
-            const a1 = try a.mul(other);
-            const value = try a1.sum(null);
-
-            const batch_size = switch (self.ndim()) {
-                1 => 1,
-                2 => self.shapes()[0],
-                else => return error.InvalidDimension,
-            };
-
-            return value.getDataWithIdx(dt, 0) / @as(dt.toTypeComp(), @floatFromInt(batch_size));
-        },
-        inline else => return error.InvalidDataType,
-    }
 }
 
 //
@@ -814,7 +781,7 @@ pub fn reduce(self: *const Self, comptime data_type: DataType, dim: ?usize, op_f
 
 pub fn sum(self: *const Self, dim: ?usize) !Self {
     switch (self.dtype()) {
-        inline .f16, .f32, .i32, .u32 => |dt| {
+        inline .f32, .i32, .u32 => |dt| {
             const T = dt.toTypeComp();
             const scope = struct {
                 fn op_func(acc: T, val: T) T {
@@ -1867,7 +1834,9 @@ test "map" {
     try t.map_(DataType.f32, func);
     std.debug.print("t: {f}\n", .{t});
 
-    try t.add_(11.0);
+    const a: f32 = 11.0;
+
+    try t.add_(a);
     try t.add_(t);
     std.debug.print("add t: {f}\n", .{t});
 
@@ -2033,8 +2002,9 @@ test "activation function" {
 
     const arr = [3]f32{ 0.3, 2.9, 4.0 };
     const v = try Self.fromShapedData(allocator, &arr);
-    const v1 = try v.softmax();
+    var v1 = try v.softmax();
     const v2 = try v1.sum(null);
+
     std.debug.print("v: {f} v1: {f} v2: {f}\n", .{ v, v1, v2 });
 }
 

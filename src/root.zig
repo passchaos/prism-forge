@@ -141,3 +141,21 @@ test "mnist" {
     std.debug.print("read n: {} magic number: {} ns: {} samples: {} nr: {} rows: {} nc: {} columns: {}\n", .{ nm, magic_number, ns, samples, nr, rows, nc, columns });
     std.debug.print("data size: {}\n", .{data.len});
 }
+
+test "loss" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+
+    const a = try Tensor.rand(allocator, &.{ 2, 5 }, -1.0, 1.0);
+    const b = try Tensor.rand(allocator, &.{ 2, 5 }, 0.0, 1.0);
+
+    const mse_loss = try F.mseLoss(a, b);
+    const cross_entropy = try F.crossEntropy(a, b);
+
+    std.debug.print("mse_loss: {f} cross_entropy: {f}\n", .{ mse_loss, cross_entropy });
+}

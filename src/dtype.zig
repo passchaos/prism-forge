@@ -26,20 +26,20 @@ pub fn toDType(comptime Target: type, value: anytype) Target {
 }
 
 pub const DataType = enum {
-    f16,
     f32,
     u8,
     i32,
     u32,
+    usize,
     bool,
 
     pub fn typeToDataType(comptime T: type) DataType {
         return switch (T) {
-            f16 => .f16,
             f32, comptime_float => .f32,
             u8 => .u8,
             i32 => .i32,
             u32, comptime_int => .u32,
+            usize => .usize,
             bool => .bool,
             else => @compileError("Unsupported type: " ++ @typeName(T)),
         };
@@ -47,22 +47,22 @@ pub const DataType = enum {
 
     pub fn toType(self: DataType) type {
         return switch (self) {
-            .f16 => f16,
             .f32 => f32,
             .u8 => u8,
             .i32 => i32,
             .u32 => u32,
+            .usize => usize,
             .bool => bool,
         };
     }
 
     pub fn toTypeComp(comptime self: DataType) type {
         return switch (self) {
-            .f16 => f16,
             .f32 => f32,
             .u8 => u8,
             .i32 => i32,
             .u32 => u32,
+            .usize => usize,
             .bool => bool,
         };
     }
@@ -74,31 +74,31 @@ pub const DataType = enum {
 };
 
 pub const Scalar = union(DataType) {
-    f16: f16,
     f32: f32,
     u8: u8,
     i32: i32,
     u32: u32,
+    usize: usize,
     bool: bool,
 
     pub fn equal(self: @This(), other: @This()) bool {
         return switch (self) {
-            .f16 => |v| v == other.f16,
             .f32 => |v| v == other.f32,
             .u8 => |v| v == other.u8,
             .i32 => |v| v == other.i32,
             .u32 => |v| v == other.u32,
+            .usize => |v| v == other.usize,
             .bool => |v| v == other.bool,
         };
     }
 
     pub fn from(value: anytype) Scalar {
         return switch (@TypeOf(value)) {
-            f16 => .{ .f16 = value },
             f32 => .{ .f32 = value },
             u8 => .{ .u8 = value },
             i32 => .{ .i32 = value },
             u32 => .{ .u32 = value },
+            usize => .{ .usize = value },
             bool => .{ .bool = value },
             else => @compileError("Unsupported type: " ++ @typeName(@TypeOf(value))),
         };
