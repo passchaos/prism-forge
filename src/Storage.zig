@@ -81,3 +81,14 @@ fn release(self: *Self) void {
         }
     }
 }
+
+pub fn format(
+    self: @This(),
+    writer: *std.Io.Writer,
+) std.Io.Writer.Error!void {
+    try writer.print("Storage {{\n", .{});
+    try writer.print("  device: {any},\n", .{self._device});
+    try writer.print("  bytes_size: {d},\n", .{self._bytes_size});
+    try writer.print("  ref_count: {d}\n", .{self._ref_count});
+    try writer.print("}}\n", .{});
+}

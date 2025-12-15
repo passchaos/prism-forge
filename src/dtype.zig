@@ -1,5 +1,30 @@
 const std = @import("std");
 
+pub fn toDType(comptime Target: type, value: anytype) Target {
+    const T = @TypeOf(value);
+
+    return switch (@typeInfo(Target)) {
+        .float => switch (@typeInfo(T)) {
+            .int, .comptime_int => @as(Target, @floatFromInt(value)),
+            .float, .comptime_float => @as(Target, @floatCast(value)),
+            .bool => if (value) 1.0 else 0.0,
+            else => @compileError("Unsupported type: " ++ @typeName(T)),
+        },
+        .int => switch (@typeInfo(T)) {
+            .int, .comptime_int => @as(Target, @intCast(value)),
+            .float, .comptime_float => @as(Target, @intFromFloat(value)),
+            .bool => @as(Target, @intFromBool(value)),
+            else => @compileError("Unsupported type: " ++ @typeName(@TypeOf(value))),
+        },
+        .bool => switch (@typeInfo(T)) {
+            .int, .comptime_int, .float, .comptime_float => if (value > 0) true else false,
+            .bool => value,
+            else => @compileError("Unsupported type: " ++ @typeName(@TypeOf(value))),
+        },
+        else => @compileError("Unsupported type: " ++ @typeName(Target)),
+    };
+}
+
 pub const DataType = enum {
     f16,
     f32,
