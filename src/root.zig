@@ -106,3 +106,38 @@ test "pad" {
         // std.debug.print("r1: {f} t2: {f}\n", .{ r1, t2 });
     }
 }
+
+test "mnist" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+
+    const env_home = std.posix.getenv("HOME").?;
+
+    const path = try std.fs.path.join(allocator, &.{ env_home, "Work/mnist/t10k-images.idx3-ubyte" });
+    const file = try std.fs.openFileAbsolute(path, .{ .mode = .read_only });
+
+    var buf = [_]u8{0} ** 4;
+
+    const nm = try file.read(buf[0..]);
+    const magic_number = std.mem.readInt(u32, &buf, .big);
+
+    const ns = try file.read(buf[0..]);
+    const samples = std.mem.readInt(u32, &buf, .big);
+
+    const nr = try file.read(buf[0..]);
+    const rows = std.mem.readInt(u32, &buf, .big);
+
+    const nc = try file.read(buf[0..]);
+    const columns = std.mem.readInt(u32, &buf, .big);
+
+    const data_size = samples * rows * columns;
+    const data = try file.readToEndAlloc(allocator, data_size);
+
+    std.debug.print("read n: {} magic number: {} ns: {} samples: {} nr: {} rows: {} nc: {} columns: {}\n", .{ nm, magic_number, ns, samples, nr, rows, nc, columns });
+    std.debug.print("data size: {}\n", .{data.len});
+}
