@@ -111,6 +111,7 @@ pub fn crossEntropy(self: Tensor, other: Tensor) !Tensor {
             };
 
             const a = try self.map(dt, dt, scope.call);
+
             const a1 = try a.mul(other);
             var value = try a1.sum(null);
 

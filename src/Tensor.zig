@@ -168,12 +168,13 @@ pub fn unbind(self: *const Self, dim: usize) ![]const Self {
 }
 
 // elementwise method
-pub fn map_(self: *Self, comptime data_type: DataType, func: fn (data_type.toTypeComp()) data_type.toTypeComp()) !void {
+pub fn map_(self: *Self, comptime data_type: DataType, ctx: anytype, func: fn (data_type.toTypeComp(), @TypeOf(ctx)) data_type.toTypeComp()) !void {
     var iter = try self.dataIter();
 
     while (iter.next()) |idx| {
+        std.debug.print("idx: {any}\n", .{idx});
         const x = try self.getWithIndicesCompType(data_type, idx);
-        x.* = func(x.*);
+        x.* = func(x.*, ctx);
     }
 }
 
@@ -337,13 +338,18 @@ pub fn binaryOp(self: *const Self, b: Self, comptime data_type: DataType, op_fun
 
 pub fn clamp_(self: *Self, min_a: anytype, max_a: anytype) !void {
     const DT = comptime DataType.typeToDataType(@TypeOf(min_a));
+
+    const ctx_i = .{
+        .min = min_a,
+        .max = max_a,
+    };
     const scope = struct {
-        fn call(v: DT.toTypeComp()) DT.toTypeComp() {
-            return std.math.clamp(v, min_a, max_a);
+        fn call(v: DT.toTypeComp(), ctx: @TypeOf(ctx_i)) DT.toTypeComp() {
+            return std.math.clamp(v, ctx.min, ctx.max);
         }
     }.call;
 
-    try self.map_(DT, scope);
+    try self.map_(DT, ctx_i, scope);
 }
 
 pub fn add_(self: *Self, value: anytype) !void {
@@ -362,14 +368,20 @@ pub fn add_(self: *Self, value: anytype) !void {
         }
     }
 
-    const DT = comptime DataType.typeToDataType(@TypeOf(value));
-    const scope = struct {
-        fn call(v: DT.toTypeComp()) DT.toTypeComp() {
-            return v + value;
-        }
-    }.call;
+    switch (self.dtype()) {
+        inline .bool => return error.UnsupportedType,
+        inline else => |DT| {
+            const vv = dtype_o.toDType(DT.toTypeComp(), value);
 
-    try self.map_(DT, scope);
+            const scope = struct {
+                fn call(v: DT.toTypeComp(), ctx: DT.toTypeComp()) DT.toTypeComp() {
+                    return v + ctx;
+                }
+            }.call;
+
+            try self.map_(DT, vv, scope);
+        },
+    }
 }
 
 pub fn add(self: *const Self, value: anytype) !Self {
@@ -495,16 +507,20 @@ pub fn mul_(self: *Self, value: anytype) !void {
         }
     }
 
-    const DT = comptime DataType.typeToDataType(@TypeOf(value));
+    switch (self.dtype()) {
+        inline .bool => return error.UnsupportedType,
+        inline else => |DT| {
+            const vv = dtype_o.toDType(DT.toTypeComp(), value);
 
-    const T = DT.toTypeComp();
-    const func = struct {
-        fn call(v: T) T {
-            return v * value;
-        }
-    }.call;
+            const scope = struct {
+                fn call(v: DT.toTypeComp(), ctx: DT.toTypeComp()) DT.toTypeComp() {
+                    return v * ctx;
+                }
+            }.call;
 
-    try self.map_(DT, func);
+            return try self.map_(DT, vv, scope);
+        },
+    }
 }
 
 pub fn div_(self: *Self, value: anytype) !void {
@@ -523,26 +539,32 @@ pub fn div_(self: *Self, value: anytype) !void {
         }
     }
 
-    const DT = comptime DataType.typeToDataType(@TypeOf(value));
+    switch (self.dtype()) {
+        inline .f32 => |DT| {
+            const T = DT.toTypeComp();
+            const ctx_i = dtype_o.toDType(T, value);
 
-    const func = struct {
-        fn call(v: DT.toTypeComp()) DT.toTypeComp() {
-            return v / value;
-        }
-    }.call;
+            const func = struct {
+                fn call(v: T, ctx: T) T {
+                    return v / ctx;
+                }
+            }.call;
 
-    try self.map_(DT, func);
+            try self.map_(DT, ctx_i, func);
+        },
+        inline else => return error.UnsupportedType,
+    }
 }
 
 pub fn sin_(self: *Self) !void {
     switch (self.dtype()) {
         inline .f32 => |DT| {
             const func = struct {
-                fn call(v: DT.toTypeComp()) DT.toTypeComp() {
+                fn call(v: DT.toTypeComp(), _: void) DT.toTypeComp() {
                     return @sin(v);
                 }
             }.call;
-            try self.map_(DT, func);
+            try self.map_(DT, void{}, func);
         },
         inline else => return error.UnsupportedType,
     }
@@ -552,11 +574,11 @@ pub fn exp_(self: *Self) !void {
     switch (self.dtype()) {
         inline .f32 => |DT| {
             const func = struct {
-                fn call(v: DT.toTypeComp()) DT.toTypeComp() {
+                fn call(v: DT.toTypeComp(), _: void) DT.toTypeComp() {
                     return @exp(v);
                 }
             }.call;
-            try self.map_(DT, func);
+            try self.map_(DT, void{}, func);
         },
         inline else => return error.UnsupportedType,
     }
@@ -607,12 +629,14 @@ pub fn relu_(self: *Self) !void {
 pub fn powi_(self: *Self, value: anytype) !void {
     switch (self.dtype()) {
         inline .f32, .i32, .u32 => |DT| {
+            const ctx_i = dtype_o.toDType(DT.toTypeComp(), value);
+
             const func = struct {
-                fn call(v: DT.toTypeComp()) DT.toTypeComp() {
-                    return std.math.pow(DT.toTypeComp(), v, value);
+                fn call(v: DT.toTypeComp(), ctx: DT.toTypeComp()) DT.toTypeComp() {
+                    return std.math.pow(DT.toTypeComp(), v, ctx);
                 }
             }.call;
-            return try self.map_(DT, func);
+            return try self.map_(DT, ctx_i, func);
         },
         inline else => return error.UnsupportedType,
     }
@@ -702,10 +726,7 @@ pub fn reduce(self: *const Self, comptime data_type: DataType, dim: ?usize, op_f
                 break;
             }
 
-            std.debug.print("before ascend indices: {any} shapes: {any} dim= {?}\n", .{ indices, self.shapes(), dim });
             while (j > 0) : (j -= 1) {
-                std.debug.print("while ascend indices: {any} shapes: {any} j= {} dim= {?}\n", .{ indices, self.shapes(), j, dim });
-
                 if (j - 1 == dm) {
                     if (dm == 0) {
                         done = true;
@@ -724,9 +745,6 @@ pub fn reduce(self: *const Self, comptime data_type: DataType, dim: ?usize, op_f
                     }
                 }
             }
-
-            std.debug.print("indices: {any} shapes: {any} dim= {?}\n", .{ indices, self.shapes(), dim });
-            std.debug.print("j: {} new_buf: {any} done: {}\n", .{ j, new_buf, done });
         }
 
         const layout = try Layout.init(self.allocator, data_type, shapes_i.items);
@@ -1827,11 +1845,11 @@ test "map" {
     var t = try Self.arange(allocator, DataType.f32, .{ .end = 10 });
 
     const func = struct {
-        fn call(x: f32) f32 {
+        fn call(x: f32, _: void) f32 {
             return x * 3;
         }
     }.call;
-    try t.map_(DataType.f32, func);
+    try t.map_(DataType.f32, void{}, func);
     std.debug.print("t: {f}\n", .{t});
 
     const a: f32 = 11.0;
