@@ -76,6 +76,16 @@ pub const Scalar = union(DataType) {
     u32: u32,
     bool: bool,
 
+    pub fn equal(self: @This(), other: @This()) bool {
+        return switch (self) {
+            .f16 => |v| v == other.f16,
+            .f32 => |v| v == other.f32,
+            .i32 => |v| v == other.i32,
+            .u32 => |v| v == other.u32,
+            .bool => |v| v == other.bool,
+        };
+    }
+
     pub fn from(value: anytype) Scalar {
         return switch (@TypeOf(value)) {
             f16 => .{ .f16 = value },

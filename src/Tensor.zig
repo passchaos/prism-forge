@@ -12,7 +12,7 @@ const Storage = @import("./Storage.zig");
 
 const asSlice = utils.asSlice;
 
-const TensorIterator = struct {
+pub const TensorIterator = struct {
     tensor: *const Self,
 
     idx: []usize,
@@ -29,11 +29,11 @@ const TensorIterator = struct {
         };
     }
 
-    fn deinit(self: *@This()) void {
+    pub fn deinit(self: *@This()) void {
         self.tensor.allocator.free(self.idx);
     }
 
-    fn next(self: *@This()) ?[]const usize {
+    pub fn next(self: *@This()) ?[]const usize {
         if (self.done) return null;
 
         const outer_indices = self.tensor.allocator.alloc(usize, self.tensor.ndim()) catch unreachable;
@@ -70,6 +70,14 @@ _storage_offset: usize = 0,
 pub fn scalarItem(self: *const Self) !Scalar {
     if (self.ndim() == 0) {
         return self.getWithIndices(&.{});
+    } else {
+        return error.ShapeMismatch;
+    }
+}
+
+pub fn scalarItemComp(self: *const Self, comptime data_type: DataType) !data_type.toTypeComp() {
+    if (self.ndim() == 0) {
+        return (try self.getWithIndicesCompType(data_type, &.{})).*;
     } else {
         return error.ShapeMismatch;
     }
@@ -834,7 +842,7 @@ pub fn reduce(self: *const Self, comptime data_type: DataType, dim: ?usize, op_f
         var new_buf = try self.allocator.alloc(T, 1);
         new_buf[0] = total;
 
-        const layout = try Layout.init(self.allocator, data_type, &.{1});
+        const layout = try Layout.init(self.allocator, data_type, &.{});
         const storage = Storage.init(self.allocator, Storage.Device.Cpu, @ptrCast(new_buf.ptr), @sizeOf(T));
 
         return try Self.fromDataImpl(self.allocator, layout, storage, 0);
@@ -1431,12 +1439,19 @@ pub fn strides(self: *const Self) []const usize {
 }
 
 pub fn equal(self: *const Self, other: *const Self) bool {
-    if (!self.layout.equal(other.layout)) return false;
+    if (!self.layout.equal(&other.layout)) return false;
+    if (self.dtype() != other.dtype()) return false;
 
-    const self_data_slice = self.dataSlice(self.layout.dtype());
-    const other_data_slice = other.dataSlice(other.layout.dtype());
+    var self_iter = self.dataIter() catch unreachable;
 
-    return std.mem.eql(self.layout.dtype(), self_data_slice, other_data_slice);
+    while (self_iter.next()) |idx| {
+        const sv = self.getWithIndices(idx) catch unreachable;
+        const ov = self.getWithIndices(idx) catch unreachable;
+
+        if (!sv.equal(ov)) return false;
+    }
+
+    return true;
 }
 
 pub fn approxEqual(self: *const Self, other: *const Self, comptime dtype_i: DataType, relEps: dtype_i.toType(), absEps: dtype_i.toType()) bool {
@@ -1911,7 +1926,7 @@ test "reduce" {
         const t1 = try Self.arange(allocator, DataType.f32, .{ .end = 10 });
         const t2 = try t1.sum(0);
         const t3 = try t1.mean(0);
-        std.debug.print("t1: {f} t2: {f} t2 item: {f} t3: {f}\n", .{ t1, t2, try t2.scalarItem(), t3 });
+        std.debug.print("t1: {f} t2: {f} t2 item: {} t3: {f}\n", .{ t1, t2, try t2.scalarItemComp(DataType.f32), t3 });
     }
 
     {
