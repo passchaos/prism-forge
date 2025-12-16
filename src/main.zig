@@ -41,7 +41,7 @@ pub fn main() !void {
 
 fn generateXY() !void {
     var val: f64 = 0.0;
-    for (0..1000) |_| {
+    for (0..100) |_| {
         const y = @sin(val);
         const y1 = @cos(val);
         try plot.appendData("sin", &.{val}, &.{y});
