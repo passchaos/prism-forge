@@ -43,7 +43,9 @@ fn generateXY() !void {
     var val: f64 = 0.0;
     for (0..1000) |_| {
         const y = @sin(val);
-        try plot.appendData(&.{val}, &.{y});
+        const y1 = @cos(val);
+        try plot.appendData("sin", &.{val}, &.{y});
+        try plot.appendData("cos", &.{val}, &.{y1});
 
         std.posix.nanosleep(0, 100_000_000);
 
