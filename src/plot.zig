@@ -28,8 +28,12 @@ const Pair = struct {
 };
 
 var datasets: std.StringHashMap(Pair) = undefined;
+var rwlock: std.Thread.RwLock = std.Thread.RwLock{};
 
 pub fn appendData(key: []const u8, xval_s: []const f64, yval_s: []const f64) !void {
+    rwlock.lock();
+    defer rwlock.unlock();
+
     var entry = try datasets.getOrPutValue(key, try Pair.init(allocator));
     try entry.value_ptr.x.appendSlice(allocator, xval_s);
     try entry.value_ptr.y.appendSlice(allocator, yval_s);
@@ -59,7 +63,7 @@ pub fn beginPlotLoop(allocator_a: std.mem.Allocator) !void {
         _ = SDLBackend.c.SDL_SetRenderDrawColor(backend.renderer, 255, 255, 255, 255);
         _ = SDLBackend.c.SDL_RenderClear(backend.renderer);
 
-        plotImpl();
+        try plotImpl();
 
         for (dvui.events()) |event| {
             switch (event.evt) {
@@ -86,8 +90,12 @@ pub fn beginPlotLoop(allocator_a: std.mem.Allocator) !void {
     }
 }
 
-fn plotImpl() void {
-    var data_iter = datasets.iterator();
+fn plotImpl() !void {
+    rwlock.lockShared();
+    const datasets_i = try datasets.clone();
+    rwlock.unlockShared();
+
+    var data_iter = datasets_i.iterator();
 
     var axis_info = if (data_iter.next()) |entry| entry.value_ptr.axisInfo() else return;
 
@@ -109,7 +117,7 @@ fn plotImpl() void {
     }, .gridline_color = gridline_color, .subtick_gridline_color = subtick_gridline_color };
     var y_axis: dvui.PlotWidget.Axis = .{ .name = "Y Axis", .min = axis_info.y_min, .max = axis_info.y_max, .ticks = .{ .side = .both, .subticks = true }, .gridline_color = gridline_color, .subtick_gridline_color = subtick_gridline_color };
 
-    var data_iter_n = datasets.iterator();
+    var data_iter_n = datasets_i.iterator();
 
     var plot = dvui.plot(@src(), .{
         .x_axis = &x_axis,
