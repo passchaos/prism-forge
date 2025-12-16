@@ -170,15 +170,23 @@ pub fn unbind(self: *const Self, dim: usize) ![]const Self {
 // elementwise method
 pub fn map_(self: *Self, comptime data_type: DataType, ctx: anytype, func: fn (data_type.toTypeComp(), @TypeOf(ctx)) data_type.toTypeComp()) !void {
     var iter = try self.dataIter();
+    std.debug.print("begin while loop\n", .{});
 
     while (iter.next()) |idx| {
-        std.debug.print("idx: {any}\n", .{idx});
+        // std.debug.print("idx: {any}\n", .{idx});
         const x = try self.getWithIndicesCompType(data_type, idx);
-        x.* = func(x.*, ctx);
+        // std.debug.print("x: {}\n", .{x.*});
+        const res = func(x.*, ctx);
+        std.debug.print("res: {} x: {}\n", .{ res, x });
+        // std.debug.print("self: {f}\n", .{self});
+        // try self.set(idx, res);
+        x.* = res;
+
+        std.debug.print("after func x: {}\n", .{x.*});
     }
 }
 
-pub fn map(self: *const Self, comptime data_type: DataType, comptime return_type: DataType, func: fn (data_type.toTypeComp()) return_type.toTypeComp()) !Self {
+pub fn map(self: *const Self, comptime data_type: DataType, comptime return_type: DataType, ctx: anytype, func: fn (data_type.toTypeComp(), @TypeOf(ctx)) return_type.toTypeComp()) !Self {
     var new_buf = try self.allocator.alloc(return_type.toTypeComp(), self.layout.size());
 
     var iter = try self.dataIter();
@@ -186,7 +194,7 @@ pub fn map(self: *const Self, comptime data_type: DataType, comptime return_type
     var i: usize = 0;
     while (iter.next()) |idx| {
         const x = try self.getWithIndicesCompType(data_type, idx);
-        new_buf[i] = func(x.*);
+        new_buf[i] = func(x.*, ctx);
         i += 1;
     }
 
@@ -196,7 +204,7 @@ pub fn map(self: *const Self, comptime data_type: DataType, comptime return_type
     return try Self.fromDataImpl(self.allocator, layout, storage, 0);
 }
 
-pub fn mapBool(self: *const Self, comptime data_type: DataType, func: fn (data_type.toTypeComp()) bool) !Self {
+pub fn mapBool(self: *const Self, comptime data_type: DataType, ctx: anytype, func: fn (data_type.toTypeComp(), @TypeOf(ctx)) bool) !Self {
     var new_buf = try self.allocator.alloc(bool, self.layout.size());
 
     var iter = try self.dataIter();
@@ -205,7 +213,7 @@ pub fn mapBool(self: *const Self, comptime data_type: DataType, func: fn (data_t
     var tmp: usize = 0;
     while (iter.next()) |idx| {
         const v = try self.getWithIndicesCompType(data_type, idx);
-        new_buf[tmp] = func(v.*);
+        new_buf[tmp] = func(v.*, ctx);
 
         tmp += 1;
     }
@@ -217,55 +225,51 @@ pub fn mapBool(self: *const Self, comptime data_type: DataType, func: fn (data_t
 }
 
 pub fn eql(self: *const Self, value: anytype) !Self {
-    const DT = comptime DataType.typeToDataType(@TypeOf(value));
     switch (self.dtype()) {
-        inline DT => {
+        inline else => |DT| {
+            const T = comptime DT.toTypeComp();
+            const vv = dtype_o.toDType(T, value);
+
             const scope = struct {
-                fn call(v: DT.toTypeComp()) bool {
-                    return v == value;
+                fn call(v: DT.toTypeComp(), ctx: DT.toTypeComp()) bool {
+                    return v == ctx;
                 }
             }.call;
-            return try self.mapBool(DT, scope);
-        },
-        else => |dt| {
-            std.debug.print("Unsupported data type: self= {}\n", .{dt});
-            return error.UnsupportedDataType;
+            return try self.mapBool(DT, vv, scope);
         },
     }
 }
 
 pub fn lt(self: *const Self, value: anytype) !Self {
-    const DT = comptime DataType.typeToDataType(@TypeOf(value));
     switch (self.dtype()) {
-        inline DT => {
+        inline .bool => return error.InvalidType,
+        inline else => |DT| {
+            const T = comptime DT.toTypeComp();
+            const vv = dtype_o.toDType(T, value);
+
             const scope = struct {
-                fn call(v: DT.toTypeComp()) bool {
-                    return v < value;
+                fn call(v: DT.toTypeComp(), ctx: DT.toTypeComp()) bool {
+                    return v < ctx;
                 }
             }.call;
-            return try self.mapBool(DT, scope);
-        },
-        else => |dt| {
-            std.debug.print("Unsupported data type: self= {}\n", .{dt});
-            return error.UnsupportedDataType;
+            return try self.mapBool(DT, vv, scope);
         },
     }
 }
 
 pub fn gt(self: *const Self, value: anytype) !Self {
-    const DT = comptime DataType.typeToDataType(@TypeOf(value));
     switch (self.dtype()) {
-        inline DT => {
+        inline .bool => return error.InvalidType,
+        inline else => |DT| {
+            const T = comptime DT.toTypeComp();
+            const vv = dtype_o.toDType(T, value);
+
             const scope = struct {
-                fn call(v: DT.toTypeComp()) bool {
-                    return v > value;
+                fn call(v: T, ctx: T) bool {
+                    return v > ctx;
                 }
             }.call;
-            return try self.mapBool(DT, scope);
-        },
-        else => |dt| {
-            std.debug.print("Unsupported data type: self= {}\n", .{dt});
-            return error.UnsupportedDataType;
+            return try self.mapBool(DT, vv, scope);
         },
     }
 }
@@ -400,19 +404,21 @@ pub fn add(self: *const Self, value: anytype) !Self {
         }
     }
 
-    const DT = comptime DataType.typeToDataType(@TypeOf(value));
-    const scope = struct {
-        fn call(v: Scalar) DT.toTypeComp() {
-            switch (v) {
-                inline else => |d| {
-                    return v + dtype_o.toDType(@TypeOf(d), value);
-                },
-            }
-            return v + value;
-        }
-    }.call;
+    switch (self.dtype()) {
+        inline .bool => return error.UnsupportedType,
+        inline else => |DT| {
+            const T = DT.toTypeComp();
+            const vv = dtype_o.toDType(T, value);
 
-    return try self.map(DT, scope);
+            const scope = struct {
+                fn call(v: T, ctx: T) T {
+                    return v + ctx;
+                }
+            }.call;
+
+            return try self.map(DT, DT, vv, scope);
+        },
+    }
 }
 
 pub fn sub_(self: *Self, value: anytype) !void {
@@ -456,14 +462,21 @@ pub fn sub(self: *const Self, value: anytype) !Self {
         }
     }
 
-    const DT = comptime DataType.typeToDataType(@TypeOf(value));
-    const scope = struct {
-        fn call(v: DT.toTypeComp()) DT.toTypeComp() {
-            return v - value;
-        }
-    }.call;
+    switch (self.dtype()) {
+        inline .bool => return error.InvalidType,
+        inline else => |DT| {
+            const T = DT.toTypeComp();
+            const vv = dtype_o.toDType(T, value);
 
-    return try self.map(DT, scope);
+            const scope = struct {
+                fn call(v: T, ctx: T) T {
+                    return v - ctx;
+                }
+            }.call;
+
+            return try self.map(DT, DT, vv, scope);
+        },
+    }
 }
 
 pub fn mul(self: *const Self, value: anytype) !Self {
@@ -482,14 +495,21 @@ pub fn mul(self: *const Self, value: anytype) !Self {
         }
     }
 
-    const DT = comptime DataType.typeToDataType(@TypeOf(value));
-    const scope = struct {
-        fn call(v: DT.toTypeComp()) DT.toTypeComp() {
-            return v * value;
-        }
-    }.call;
+    switch (self.dtype()) {
+        inline .bool => return error.InvalidType,
+        inline else => |DT| {
+            const T = DT.toTypeComp();
+            const vv = dtype_o.toDType(T, value);
 
-    return try self.map(DT, scope);
+            const scope = struct {
+                fn call(v: T, ctx: T) T {
+                    return v * ctx;
+                }
+            }.call;
+
+            return try self.map(DT, DT, vv, scope);
+        },
+    }
 }
 
 pub fn mul_(self: *Self, value: anytype) !void {
@@ -653,6 +673,122 @@ pub fn sqrt_(self: *const Self) !Self {
             return try self.map_(DT, func);
         },
         inline else => return error.UnsupportedType,
+    }
+}
+
+// check
+pub fn isNan(self: *const Self) !Self {
+    switch (self.dtype()) {
+        inline else => |DT| {
+            const T = DT.toTypeComp();
+            const func = struct {
+                fn call(v: T, _: void) bool {
+                    return std.math.isNan(v);
+                }
+            }.call;
+            return self.mapBool(DT, void{}, func);
+        },
+    }
+}
+
+pub fn isInf(self: *const Self) !Self {
+    switch (self.dtype()) {
+        inline .f32 => |DT| {
+            const T = DT.toTypeComp();
+            const func = struct {
+                fn call(v: T, _: void) bool {
+                    return std.math.isInf(v);
+                }
+            }.call;
+            return self.mapBool(DT, void{}, func);
+        },
+        inline else => return error.InvalidType,
+    }
+}
+
+pub fn isPositiveInf(self: *const Self) !Self {
+    switch (self.dtype()) {
+        inline .f32 => |DT| {
+            const T = DT.toTypeComp();
+            const func = struct {
+                fn call(v: T, _: void) bool {
+                    return std.math.isPositiveInf(v);
+                }
+            }.call;
+            return self.mapBool(DT, void{}, func);
+        },
+        inline else => return error.InvalidType,
+    }
+}
+
+pub fn isNegativeInf(self: *const Self) !Self {
+    switch (self.dtype()) {
+        inline .f32 => |DT| {
+            const T = DT.toTypeComp();
+            const func = struct {
+                fn call(v: T, _: void) bool {
+                    return std.math.isNegativeInf(v);
+                }
+            }.call;
+            return self.mapBool(DT, void{}, func);
+        },
+        inline else => return error.InvalidType,
+    }
+}
+
+pub fn isFinite(self: *const Self) !Self {
+    switch (self.dtype()) {
+        inline .f32 => |DT| {
+            const T = DT.toTypeComp();
+            const func = struct {
+                fn call(v: T, _: void) bool {
+                    return std.math.isFinite(v);
+                }
+            }.call;
+            return self.mapBool(DT, void{}, func);
+        },
+        inline else => return error.InvalidType,
+    }
+}
+
+// may meet bug when use inplace
+pub fn nanToNum(self: *Self, nan: anytype, args: struct { posinf: ?@TypeOf(nan) = null, neginf: ?@TypeOf(nan) = null }) !Self {
+    switch (self.dtype()) {
+        inline else => return error.InvalidType,
+        inline .f32 => |DT| {
+            const T = DT.toTypeComp();
+
+            const Ctx = struct {
+                nan: T,
+                posinf: ?T,
+                neginf: ?T,
+            };
+
+            const ctx_i = Ctx{
+                .nan = dtype_o.toDType(T, nan),
+                .posinf = if (args.posinf) |posinf| dtype_o.toDType(T, posinf) else null,
+                .neginf = if (args.neginf) |neginf| dtype_o.toDType(T, neginf) else null,
+            };
+
+            const func = struct {
+                fn call(v: T, ctx: Ctx) T {
+                    // std.debug.print("v: {} ctx: {}\n", .{ v, ctx });
+                    if (std.math.isNan(v)) {
+                        return ctx.nan;
+                    } else if (std.math.isPositiveInf(v)) {
+                        return if (ctx.posinf) |posinf| posinf else v;
+                    } else if (std.math.isNegativeInf(v)) {
+                        return if (ctx.neginf) |neginf| neginf else v;
+                    } else {
+                        // std.debug.print("don't do change\n", .{});
+                        return v;
+                    }
+                    // return v;
+                    // std.debug.print("unreachable\n", .{});
+                }
+            }.call;
+            return try self.map(DT, DT, ctx_i, func);
+        },
     }
 }
 
@@ -872,6 +1008,36 @@ pub fn mean(self: *const Self, dim: ?usize) !Self {
             };
 
             return try self.reduce(dt, dim, scope.op_func, scope.post_func);
+        },
+    }
+}
+
+pub fn any(self: *const Self, dim: ?usize) !Self {
+    switch (self.dtype()) {
+        inline else => return error.UnsupportedType,
+        inline .bool => |dt| {
+            const scope = struct {
+                fn op_func(acc: bool, val: bool) bool {
+                    return acc or val;
+                }
+            };
+
+            return try self.reduce(dt, dim, scope.op_func, null);
+        },
+    }
+}
+
+pub fn all(self: *const Self, dim: ?usize) !Self {
+    switch (self.dtype()) {
+        inline else => return error.UnsupportedType,
+        inline .bool => |dt| {
+            const scope = struct {
+                fn op_func(acc: bool, val: bool) bool {
+                    return acc and val;
+                }
+            };
+
+            return try self.reduce(dt, dim, scope.op_func, null);
         },
     }
 }
@@ -1877,6 +2043,15 @@ test "map" {
 
     const a3 = try a1.add(a2);
     std.debug.print("a1: {f} a2: {f} a3: {f}\n", .{ a1, a2, a3 });
+
+    const a4 = try a3.add(10);
+    std.debug.print("a4: {f}\n", .{a4});
+
+    const a5 = try a4.sub(10);
+    std.debug.print("a5: {f}\n", .{a5});
+
+    const a6 = try a5.mul(10);
+    std.debug.print("a6: {f}\n", .{a6});
 }
 
 test "reduce" {
@@ -2044,4 +2219,33 @@ test "masked" {
 
     try t1.maskedFill_(m1, 0.0);
     std.debug.print("masked t1: {f}\n", .{t1});
+}
+
+test "nan inf" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+
+    const arr1 = [5]f32{ 1.0, std.math.inf(f32), std.math.nan(f32), -std.math.inf(f32), -2.3 };
+    var t1 = try Self.fromShapedData(allocator, &arr1);
+
+    const is_inf = try t1.isInf();
+    const is_pos_inf = try t1.isPositiveInf();
+    const is_neg_inf = try t1.isNegativeInf();
+    const is_nan = try t1.isNan();
+    const is_finite = try t1.isFinite();
+    const is_finite_any = try is_finite.any(null);
+    const is_finite_all = try is_finite.all(null);
+
+    std.debug.print("t1: {f} is_inf: {f} is_pos_inf: {f} is_neg_inf: {f} is_nan: {f} is_finite: {f}\n", .{ t1, is_inf, is_pos_inf, is_neg_inf, is_nan, is_finite });
+    std.debug.print("is finite: {f} any: {f} all: {f}\n", .{ is_finite, is_finite_any, is_finite_all });
+
+    const t2 = try t1.nanToNum(0.0, .{});
+    std.debug.print("nan_to_num: {f}\n", .{t2});
+    const t3 = try t1.nanToNum(0.0, .{ .posinf = 1.0, .neginf = -3.0 });
+    std.debug.print("inf_to_num: {f}\n", .{t3});
 }

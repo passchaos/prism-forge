@@ -41,6 +41,8 @@ pub const ShapeIterator = struct {
         @memcpy(outer_indices, self.idx);
 
         var d: usize = self._shapes.len;
+
+        // handle zero-demension
         if (d == 0) {
             self.done = true;
             return outer_indices;
