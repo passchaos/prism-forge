@@ -4,6 +4,7 @@ const std = @import("std");
 const Tensor = @import("Tensor.zig");
 const DataType = @import("dtype.zig").DataType;
 const F = @import("nn/functional.zig");
+const B = @import("nn/basic.zig");
 
 pub fn bufferedPrint() !void {
     // Stdout is for the actual output of your application, for example if you
@@ -163,4 +164,22 @@ test "loss" {
     const cross_entropy = try F.crossEntropy(a1, b1);
 
     std.debug.print("mse_loss: {f} cross_entropy: {f}\n", .{ mse_loss, cross_entropy });
+}
+
+fn Fh(T: type) type {
+    return struct {
+        fn call(x: T) T {
+            return 0.01 * x * x + 0.1 * x;
+        }
+    };
+}
+
+test "differential" {
+    const Ft = f64;
+    const fh = Fh(Ft);
+
+    for ([2]Ft{ 5.0, 10.0 }) |x| {
+        const df1 = B.numericalDiff(x, fh.call);
+        std.debug.print("df1: {}\n", .{df1});
+    }
 }
