@@ -110,28 +110,6 @@ pub fn getArrayRefItemType(comptime Ptr: type) type {
     return elementType(Deref);
 }
 
-pub fn flattenAsBytes(comptime T: type, arr: T) []const u8 {
-    const info = @typeInfo(T);
-    switch (info) {
-        .pointer => |ptr| switch (@typeInfo(ptr.child)) {
-            .array => |a| {
-                const child = a.child;
-                if (@typeInfo(child) == .array) {
-                    // 多维数组，递归展开
-                    const flat: [*]child = @ptrCast(@constCast(arr));
-                    @compileLog("flat info: child= {} flat= {}\n", .{ @typeInfo(child), @TypeOf(flat) });
-                    return flattenAsBytes(child, flat[0..a.len]);
-                } else {
-                    // 一维数组，直接转
-                    return std.mem.asBytes(arr);
-                }
-            },
-            else => @compileError("Expected array type" ++ std.fmt.comptimePrint("{}", .{info})),
-        },
-        else => @compileError("Expected pointer type" ++ std.fmt.comptimePrint("{}", .{info})),
-    }
-}
-
 pub fn getArrayRefShapes(comptime T: type) []const usize {
     switch (@typeInfo(T)) {
         .pointer => |p| switch (p.size) {

@@ -34,19 +34,6 @@ pub fn byteSize(self: *const Self) usize {
     return self._bytes_size;
 }
 
-pub fn clone(self: *const Self) Self {
-    const v_s = @constCast(self);
-    v_s.retain();
-
-    return Self{
-        .allocator = self.allocator,
-        ._device = self._device,
-        ._buf = self._buf,
-        ._bytes_size = self._bytes_size,
-        ._ref_count = self._ref_count,
-    };
-}
-
 pub fn deepCopy(self: *const Self) !Self {
     const new_buf = try self.allocator.alloc(u8, self._bytes_size);
     @memcpy(new_buf, self._buf);

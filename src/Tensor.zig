@@ -752,7 +752,7 @@ pub fn isFinite(self: *const Self) !Self {
 }
 
 // may meet bug when use inplace
-pub fn nanToNum(self: *Self, nan: anytype, args: struct { posinf: ?@TypeOf(nan) = null, neginf: ?@TypeOf(nan) = null }) !Self {
+pub fn nanToNum_(self: *Self, nan: anytype, args: struct { posinf: ?@TypeOf(nan) = null, neginf: ?@TypeOf(nan) = null }) !void {
     switch (self.dtype()) {
         inline else => return error.InvalidType,
         inline .f32 => |DT| {
@@ -772,7 +772,6 @@ pub fn nanToNum(self: *Self, nan: anytype, args: struct { posinf: ?@TypeOf(nan) 
 
             const func = struct {
                 fn call(v: T, ctx: Ctx) T {
-                    // std.debug.print("v: {} ctx: {}\n", .{ v, ctx });
                     if (std.math.isNan(v)) {
                         return ctx.nan;
                     } else if (std.math.isPositiveInf(v)) {
@@ -780,14 +779,11 @@ pub fn nanToNum(self: *Self, nan: anytype, args: struct { posinf: ?@TypeOf(nan) 
                     } else if (std.math.isNegativeInf(v)) {
                         return if (ctx.neginf) |neginf| neginf else v;
                     } else {
-                        // std.debug.print("don't do change\n", .{});
                         return v;
                     }
-                    // return v;
-                    // std.debug.print("unreachable\n", .{});
                 }
             }.call;
-            return try self.map(DT, DT, ctx_i, func);
+            return try self.map_(DT, ctx_i, func);
         },
     }
 }
@@ -1213,12 +1209,13 @@ pub fn fromShapedData(allocator: std.mem.Allocator, comptime arr: anytype) anyer
     const dtype_i = comptime DataType.typeToDataType(T);
 
     const shapes_i = utils.getArrayRefShapes(@TypeOf(arr));
+    const data_len = utils.product(shapes_i);
+    const new_buf = try allocator.alloc(T, data_len);
 
-    const buf_r: []u8 = @ptrCast(@constCast(arr));
+    const arr1: [*]const T = @ptrCast(arr);
+    @memcpy(new_buf, arr1);
 
-    const bytes_size = buf_r.len;
-
-    return Self.fromDataRaw(allocator, dtype_i, shapes_i, Storage.Device.Cpu, buf_r.ptr, bytes_size);
+    return Self.fromDataRaw(allocator, dtype_i, shapes_i, Storage.Device.Cpu, @ptrCast(new_buf.ptr), new_buf.len * @sizeOf(T));
 }
 
 pub fn contiguous(self: *const Self) !Self {
@@ -1546,12 +1543,11 @@ pub fn deinit(self: *const Self) void {
 }
 
 fn getDataWithIdx(self: *const Self, dtype_i: DataType, idx: usize) Scalar {
-    const c_s = @constCast(self);
     return switch (dtype_i) {
-        .f16 => Scalar{ .f16 = c_s.dataSlice(DataType.f16.toType())[idx] },
-        .f32 => Scalar{ .f32 = c_s.dataSlice(DataType.f32.toType())[idx] },
-        .i32 => Scalar{ .i32 = c_s.dataSlice(DataType.i32.toType())[idx] },
-        .u32 => Scalar{ .u32 = c_s.dataSlice(DataType.u32.toType())[idx] },
+        .f16 => Scalar{ .f16 = self.dataSlice(DataType.f16.toType())[idx] },
+        .f32 => Scalar{ .f32 = self.dataSlice(DataType.f32.toType())[idx] },
+        .i32 => Scalar{ .i32 = self.dataSlice(DataType.i32.toType())[idx] },
+        .u32 => Scalar{ .u32 = self.dataSlice(DataType.u32.toType())[idx] },
     };
 }
 
@@ -1765,27 +1761,6 @@ fn fmt1dSlice(self: *const Self, writer: *std.Io.Writer, base_indices: []const u
     }
 
     _ = try writer.write("]");
-}
-
-fn getArrayRefBuf(comptime arr: anytype) struct { [*]u8, usize } {
-    const info = @typeInfo(@TypeOf(arr));
-
-    const buf: []u8 = switch (info) {
-        .pointer => |ptr| switch (ptr.size) {
-            .one => switch (@typeInfo(ptr.child)) {
-                .array => @as([]u8, @ptrCast(@constCast(arr)))[0..],
-                .pointer => |pp| switch (pp.size) {
-                    .slice => arr.*,
-                    else => @compileError("only support pointer to one"),
-                },
-                else => @compileError(std.fmt.comptimePrint("only support pointer to one: data_type= {any}", .{info})),
-            },
-            else => @compileError("only support pointer to one"),
-        },
-        else => @compileError("only support pointer to one"),
-    };
-
-    return .{ buf.ptr, buf.len };
 }
 
 test "dyn tensor create" {
@@ -2231,7 +2206,12 @@ test "nan inf" {
     const allocator = arena.allocator();
 
     const arr1 = [5]f32{ 1.0, std.math.inf(f32), std.math.nan(f32), -std.math.inf(f32), -2.3 };
+
+    // var arr2 = [5]f32{ 1.0, std.math.inf(f32), std.math.nan(f32), -std.math.inf(f32), -2.3 };
+
     var t1 = try Self.fromShapedData(allocator, &arr1);
+
+    // arr1[1] = 2.0;
 
     const is_inf = try t1.isInf();
     const is_pos_inf = try t1.isPositiveInf();
@@ -2244,8 +2224,12 @@ test "nan inf" {
     std.debug.print("t1: {f} is_inf: {f} is_pos_inf: {f} is_neg_inf: {f} is_nan: {f} is_finite: {f}\n", .{ t1, is_inf, is_pos_inf, is_neg_inf, is_nan, is_finite });
     std.debug.print("is finite: {f} any: {f} all: {f}\n", .{ is_finite, is_finite_any, is_finite_all });
 
-    const t2 = try t1.nanToNum(0.0, .{});
-    std.debug.print("nan_to_num: {f}\n", .{t2});
-    const t3 = try t1.nanToNum(0.0, .{ .posinf = 1.0, .neginf = -3.0 });
-    std.debug.print("inf_to_num: {f}\n", .{t3});
+    const ds = t1.dataSlice(f32);
+    std.debug.print("ds: {any}\n", .{ds});
+    ds[1] = 2.0;
+
+    try t1.nanToNum_(0.0, .{});
+    std.debug.print("nan_to_num: {f}\n", .{t1});
+    try t1.nanToNum_(0.0, .{ .posinf = 1.0, .neginf = -3.0 });
+    std.debug.print("inf_to_num: {f}\n", .{t1});
 }

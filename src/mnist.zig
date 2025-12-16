@@ -77,11 +77,11 @@ pub fn loadDatas(allocator: std.mem.Allocator) !struct {
     var train_images = try loadImages(allocator, path_images);
 
     const func = struct {
-        fn call(v: u8) f32 {
+        fn call(v: u8, _: void) f32 {
             return @as(f32, @floatFromInt(v)) / 255.0;
         }
     }.call;
-    const train_images_one = try train_images.map(DataType.u8, DataType.f32, func);
+    const train_images_one = try train_images.map(DataType.u8, DataType.f32, void{}, func);
 
     const path_labels = try std.fs.path.join(allocator, &.{ env_home, "Work/mnist/train-labels.idx1-ubyte" });
     const train_labels = try loadLabels(allocator, path_labels);
@@ -89,7 +89,7 @@ pub fn loadDatas(allocator: std.mem.Allocator) !struct {
 
     const path_test_images = try std.fs.path.join(allocator, &.{ env_home, "Work/mnist/t10k-images.idx3-ubyte" });
     var test_images = try loadImages(allocator, path_test_images);
-    const test_images_one = try test_images.map(DataType.u8, DataType.f32, func);
+    const test_images_one = try test_images.map(DataType.u8, DataType.f32, void{}, func);
 
     const path_test_labels = try std.fs.path.join(allocator, &.{ env_home, "Work/mnist/t10k-labels.idx1-ubyte" });
     const test_labels = try loadLabels(allocator, path_test_labels);
