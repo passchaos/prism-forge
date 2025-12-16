@@ -151,16 +151,16 @@ test "loss" {
 
     const allocator = arena.allocator();
 
-    const a = try Tensor.rand(allocator, &.{ 2, 5 }, -1.0, 1.0);
+    const a = try Tensor.rand(allocator, f32, &.{ 2, 5 }, -1.0, 1.0);
 
-    // const a1 = try a.softmax();
-    const b = try Tensor.rand(allocator, &.{ 2, 5 }, 0.0, 1.0);
-    // const b1 = try b.softmax();
+    const a1 = try a.softmax();
+    const b = try Tensor.rand(allocator, f32, &.{ 2, 5 }, 0.0, 1.0);
+    const b1 = try b.softmax();
 
     // std.debug.print("a: {f} a1: {f} b: {f} b1: {f}\n", .{ a, a1, b, b1 });
 
-    const mse_loss = try F.mseLoss(a, b);
-    const cross_entropy = try F.crossEntropy(a, b);
+    const mse_loss = try F.mseLoss(a1, b1);
+    const cross_entropy = try F.crossEntropy(a1, b1);
 
     std.debug.print("mse_loss: {f} cross_entropy: {f}\n", .{ mse_loss, cross_entropy });
 }

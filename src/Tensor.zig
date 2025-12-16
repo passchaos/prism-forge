@@ -16,6 +16,7 @@ const asSlice = utils.asSlice;
 const Self = @This();
 
 allocator: std.mem.Allocator,
+_base: ?*const Self = null,
 storage: Storage,
 layout: Layout,
 _storage_offset: usize = 0,
@@ -170,19 +171,10 @@ pub fn unbind(self: *const Self, dim: usize) ![]const Self {
 // elementwise method
 pub fn map_(self: *Self, comptime data_type: DataType, ctx: anytype, func: fn (data_type.toTypeComp(), @TypeOf(ctx)) data_type.toTypeComp()) !void {
     var iter = try self.dataIter();
-    std.debug.print("begin while loop\n", .{});
 
     while (iter.next()) |idx| {
-        // std.debug.print("idx: {any}\n", .{idx});
         const x = try self.getWithIndicesCompType(data_type, idx);
-        // std.debug.print("x: {}\n", .{x.*});
-        const res = func(x.*, ctx);
-        std.debug.print("res: {} x: {}\n", .{ res, x });
-        // std.debug.print("self: {f}\n", .{self});
-        // try self.set(idx, res);
-        x.* = res;
-
-        std.debug.print("after func x: {}\n", .{x.*});
+        x.* = func(x.*, ctx);
     }
 }
 
@@ -1184,24 +1176,9 @@ pub fn to(self: *const Self, data_type: DataType) !Self {
 
 pub fn clone(self: *const Self) !Self {
     const layout = try self.layout.clone();
+    const storage = try self.storage.deepCopy();
 
-    switch (self.dtype()) {
-        inline else => |dt| {
-            var new_buf = try self.allocator.alloc(dt.toTypeComp(), self.layout.size());
-
-            var iter = try self.dataIter();
-
-            var i: usize = 0;
-            while (iter.next()) |idx| {
-                new_buf[i] = (try self.getWithIndicesCompType(dt, idx)).*;
-                i += 1;
-            }
-
-            const storage = Storage.init(self.allocator, Storage.Device.Cpu, @ptrCast(new_buf.ptr), new_buf.len * self.dtype().dtypeSize());
-
-            return Self.fromDataImpl(self.allocator, layout, storage, 0);
-        },
-    }
+    return try Self.fromDataImpl(self.allocator, layout, storage, 0);
 }
 
 pub fn fromShapedData(allocator: std.mem.Allocator, comptime arr: anytype) anyerror!Self {
@@ -1218,10 +1195,10 @@ pub fn fromShapedData(allocator: std.mem.Allocator, comptime arr: anytype) anyer
     return Self.fromDataRaw(allocator, dtype_i, shapes_i, Storage.Device.Cpu, @ptrCast(new_buf.ptr), new_buf.len * @sizeOf(T));
 }
 
-pub fn contiguous(self: *const Self) !Self {
-    // if (self.layout.isContiguous()) {
-    //     return self.dupe();
-    // }
+pub fn contiguous(self: Self) !Self {
+    if (self.layout.isContiguous()) {
+        return self;
+    }
 
     const elem_size = self.dtype().dtypeSize();
 
@@ -1255,7 +1232,7 @@ pub fn contiguous(self: *const Self) !Self {
         }
     };
 
-    inner_scope.copyRecursive(self, indices, 0, new_buf, &idx, elem_size);
+    inner_scope.copyRecursive(&self, indices, 0, new_buf, &idx, elem_size);
 
     var shapes_a = try std.ArrayList(usize).initCapacity(self.allocator, self.ndim());
     try shapes_a.appendSlice(self.allocator, self.shapes());
@@ -1358,43 +1335,53 @@ pub fn eye(allocator: std.mem.Allocator, comptime data_type: DataType, row: usiz
     return tensor;
 }
 
-pub fn rand(allocator: std.mem.Allocator, shapes_a: []const usize, low: f32, high: f32) !Self {
+pub fn rand(allocator: std.mem.Allocator, comptime T: type, shapes_a: []const usize, low: T, high: T) !Self {
+    if (comptime T != f32 and T != f64 and T != comptime_float) {
+        @compileError("Unsupported type" ++ @typeName(T));
+    }
+    const data_type = DataType.typeToDataType(T);
+
     const total = utils.product(shapes_a);
 
-    const buf = try allocator.alloc(f32, total);
+    const buf = try allocator.alloc(T, total);
 
     var rpng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
     const rng = rpng.random();
 
     for (buf) |*x| {
-        const u = rng.float(f32);
+        const u = rng.float(T);
         x.* = low + (high - low) * u;
     }
 
     return Self{
         .allocator = allocator,
-        .storage = Storage.init(allocator, Storage.Device.Cpu, @as([*]u8, @ptrCast(buf.ptr)), total * @sizeOf(f32)),
-        .layout = try Layout.init(allocator, DataType.f32, shapes_a),
+        .storage = Storage.init(allocator, Storage.Device.Cpu, @as([*]u8, @ptrCast(buf.ptr)), total * data_type.dtypeSize()),
+        .layout = try Layout.init(allocator, data_type, shapes_a),
     };
 }
 
-pub fn randNorm(allocator: std.mem.Allocator, shapes_a: []const usize, mean_a: f32, stddev: f32) !Self {
+pub fn randNorm(allocator: std.mem.Allocator, comptime T: type, shapes_a: []const usize, mean_a: T, stddev: T) !Self {
+    if (comptime T != f32 and T != f64 and T != comptime_float) {
+        @compileError("Unsupported type" ++ @typeName(T));
+    }
+
+    const data_type = DataType.typeToDataType(T);
     const total = utils.product(shapes_a);
 
-    const buf = try allocator.alloc(f32, total);
+    const buf = try allocator.alloc(T, total);
 
     var rpng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
     const rng = rpng.random();
 
     for (buf) |*x| {
-        const u = rng.floatNorm(f32);
+        const u = rng.floatNorm(T);
         x.* = mean_a + stddev * u;
     }
 
     return Self{
         .allocator = allocator,
-        .storage = Storage.init(allocator, Storage.Device.Cpu, @as([*]u8, @ptrCast(buf.ptr)), total * @sizeOf(f32)),
-        .layout = try Layout.init(allocator, DataType.f32, shapes_a),
+        .storage = Storage.init(allocator, Storage.Device.Cpu, @as([*]u8, @ptrCast(buf.ptr)), total * data_type.dtypeSize()),
+        .layout = try Layout.init(allocator, data_type, shapes_a),
     };
 }
 
@@ -1417,15 +1404,9 @@ pub fn getWithIndices(self: *const Self, indices: []const usize) !Scalar {
 }
 
 pub fn broadcastTo(self: *const Self, target_shape: []const usize) !Self {
-    const new_strides = try utils.broadcastShapes(self.allocator, self.shapes(), self.strides(), target_shape);
-
-    var new_shapes = try std.ArrayList(usize).initCapacity(self.allocator, target_shape.len);
-    try new_shapes.appendSlice(self.allocator, target_shape);
-
-    const layout = try Layout.initRaw(self.allocator, self.dtype(), new_shapes, new_strides);
-    const storage = self.storage.clone();
-
-    return try Self.fromDataImpl(self.allocator, layout, storage, self._storage_offset);
+    var t = try self.clone();
+    try t.broadcastTo_(target_shape);
+    return t;
 }
 
 pub fn broadcastTo_(self: *Self, target_shape: []const usize) !void {
@@ -1469,9 +1450,15 @@ pub fn transpose(self: *const Self) anyerror!Self {
 
     return Self{
         .allocator = self.allocator,
+        ._base = self,
         .storage = new_storage,
         .layout = new_layout,
     };
+}
+
+pub fn transpose_(self: *Self) anyerror!void {
+    const new_layout = try self.layout.transpose(0, 1);
+    self.layout = new_layout;
 }
 
 pub fn permute(self: *const Self, perm: []const usize) anyerror!Self {
@@ -1482,6 +1469,7 @@ pub fn permute(self: *const Self, perm: []const usize) anyerror!Self {
 
     return Self{
         .allocator = obj.allocator,
+        ._base = obj,
         .storage = new_storage,
         .layout = new_layout,
     };
@@ -1502,6 +1490,7 @@ pub fn reshape(self: *const Self, new_shapes: []const usize) anyerror!Self {
 
     return Self{
         .allocator = obj.allocator,
+        ._base = obj,
         .storage = new_storage,
         .layout = new_layout,
     };
@@ -1816,7 +1805,7 @@ test "shape test" {
     };
     const t111 = try Self.fromShapedData(allocator, &arr1);
 
-    const t111_transposed = try t111.transpose();
+    const t111_transposed = try t111.transpose_();
 
     try std.testing.expect(t111.shapes()[0] == t111_transposed.shapes()[1]);
     try std.testing.expect(t111.shapes()[1] == t111_transposed.shapes()[0]);
@@ -1847,10 +1836,10 @@ test "random test" {
 
     const allocator = arena.allocator();
 
-    const t1 = try Self.rand(allocator, &.{ 3000, 3000 }, 0.0, 1.0);
+    const t1 = try Self.rand(allocator, f32, &.{ 3000, 3000 }, 0.0, 1.0);
     std.debug.print("t1: {f}\n", .{t1});
 
-    const t2 = try Self.randNorm(allocator, &.{ 3000, 3000 }, 0.0, 1.0);
+    var t2 = try Self.randNorm(allocator, f32, &.{ 3000, 3000 }, 0.0, 1.0);
     std.debug.print("t2: {f}\n", .{t2});
 
     const t2_tc = try (try t2.transpose()).contiguous();
@@ -1893,7 +1882,7 @@ test "contiguous test" {
 
     std.debug.print("t1 ds: {any}\n", .{t1_ds});
 
-    const t1t = try t1.transpose();
+    const t1t = try t1.transpose_();
     std.debug.print("t1t: {f}\n", .{t1t});
 
     const t1tc = try t1t.contiguous();

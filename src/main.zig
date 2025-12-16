@@ -16,10 +16,10 @@ pub fn main() !void {
 
     const allocator = arena.allocator();
 
-    const t1 = try Tensor.rand(allocator, &.{ 3000, 3000 }, 0.0, 1.0);
+    const t1 = try Tensor.rand(allocator, f32, &.{ 3000, 3000 }, 0.0, 1.0);
     std.debug.print("t1: {f}\n", .{t1.layout});
 
-    const t2 = try Tensor.randNorm(allocator, &.{ 3000, 3000 }, 0.0, 1.0);
+    var t2 = try Tensor.randNorm(allocator, f32, &.{ 3000, 3000 }, 0.0, 1.0);
     std.debug.print("t2: {f}\n", .{t2.layout});
 
     const t2_tc = try (try t2.transpose()).contiguous();

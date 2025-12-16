@@ -105,12 +105,12 @@ pub fn crossEntropy(self: Tensor, other: Tensor) !Tensor {
     switch (self.dtype()) {
         inline .f32 => |dt| {
             const scope = struct {
-                fn call(v: dt.toTypeComp()) dt.toTypeComp() {
+                fn call(v: dt.toTypeComp(), _: void) dt.toTypeComp() {
                     return -@log(v + 0.0001);
                 }
             };
 
-            const a = try self.map(dt, dt, scope.call);
+            const a = try self.map(dt, dt, void{}, scope.call);
 
             const a1 = try a.mul(other);
             var value = try a1.sum(null);
