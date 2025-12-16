@@ -76,6 +76,14 @@ pub fn build(b: *std.Build) void {
         else => {},
     }
 
+    const dvui_dep = b.dependency("dvui", .{ .target = target, .optimize = optimize, .backend = .sdl3 });
+
+    mod.addImport("dvui", dvui_dep.module("dvui_sdl3"));
+    mod.addImport("sdl-backend", dvui_dep.module("sdl3"));
+
+    exe_mod.addImport("dvui", dvui_dep.module("dvui_sdl3"));
+    exe_mod.addImport("sdl-backend", dvui_dep.module("sdl3"));
+
     // Here we define an executable. An executable needs to have a root module
     // which needs to expose a `main` function. While we could add a main function
     // to the module defined above, it's sometimes preferable to split business
