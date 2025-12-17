@@ -72,7 +72,14 @@ pub fn cat(allocator: std.mem.Allocator, tensors: []const Self, dim: usize) !Sel
         offset += bytes.len;
     }
 
-    return Self.fromDataRaw(allocator, dtype_i, new_shape, Storage.Device.Cpu, @ptrCast(new_buf), new_buf.len);
+    return Self.fromDataRaw(
+        allocator,
+        dtype_i,
+        new_shape,
+        Storage.Device.Cpu,
+        @ptrCast(new_buf),
+        new_buf.len,
+    );
 }
 
 pub fn stack(allocator: std.mem.Allocator, tensors: []const Self, dim: usize) !Self {
@@ -305,8 +312,17 @@ pub fn binaryOp_(self: *Self, b: Self, comptime data_type: DataType, op_func: fn
     }
 }
 
-pub fn binaryOp(self: *const Self, b: Self, comptime data_type: DataType, op_func: fn (x: data_type.toTypeComp(), y: data_type.toTypeComp()) data_type.toTypeComp()) !Self {
-    const target_shapes = try utils.compatibleBroacastShapes(self.allocator, self.shapes(), b.shapes());
+pub fn binaryOp(
+    self: *const Self,
+    b: Self,
+    comptime data_type: DataType,
+    op_func: fn (x: data_type.toTypeComp(), y: data_type.toTypeComp()) data_type.toTypeComp(),
+) !Self {
+    const target_shapes = try utils.compatibleBroacastShapes(
+        self.allocator,
+        self.shapes(),
+        b.shapes(),
+    );
 
     const a = try self.broadcastTo(target_shapes.items);
     const c = try b.broadcastTo(target_shapes.items);
@@ -327,7 +343,12 @@ pub fn binaryOp(self: *const Self, b: Self, comptime data_type: DataType, op_fun
     }
 
     const layout = try Layout.init(self.allocator, data_type, target_shapes.items);
-    const storage = Storage.init(self.allocator, Storage.Device.Cpu, @ptrCast(new_buf.ptr), new_buf.len * data_type.dtypeSize());
+    const storage = Storage.init(
+        self.allocator,
+        Storage.Device.Cpu,
+        @ptrCast(new_buf.ptr),
+        new_buf.len * data_type.dtypeSize(),
+    );
 
     return try Self.fromDataImpl(self.allocator, layout, storage, 0);
 }

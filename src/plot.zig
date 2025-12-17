@@ -2,9 +2,9 @@ const std = @import("std");
 const dvui = @import("dvui");
 const SDLBackend = @import("sdl-backend");
 
-var win: dvui.Window = undefined;
+var win: ?dvui.Window = null;
 
-var allocator: std.mem.Allocator = undefined;
+var allocator: ?std.mem.Allocator = null;
 
 const Pair = struct {
     x: std.ArrayList(f64),
@@ -23,45 +23,65 @@ const Pair = struct {
         const y_min_i = minInSlice(self.y.items);
         const y_max_i = maxInSlice(self.y.items);
 
-        return .{ .x_min = x_min_i - @abs(x_min_i) * 0.1, .x_max = x_max_i + @abs(x_max_i) * 0.1, .y_min = y_min_i - @abs(y_min_i) * 0.1, .y_max = y_max_i + @abs(y_max_i) * 0.1 };
+        return .{
+            .x_min = x_min_i - @abs(x_min_i) * 0.1,
+            .x_max = x_max_i + @abs(x_max_i) * 0.1,
+            .y_min = y_min_i - @abs(y_min_i) * 0.1,
+            .y_max = y_max_i + @abs(y_max_i) * 0.1,
+        };
     }
 };
 
-var datasets: std.StringHashMap(Pair) = undefined;
+var datasets: ?std.StringHashMap(Pair) = null;
 var rwlock: std.Thread.RwLock = std.Thread.RwLock{};
 
 pub fn appendData(key: []const u8, xval_s: []const f64, yval_s: []const f64) !void {
     rwlock.lock();
     defer rwlock.unlock();
 
-    var entry = try datasets.getOrPutValue(key, try Pair.init(allocator));
-    try entry.value_ptr.x.appendSlice(allocator, xval_s);
-    try entry.value_ptr.y.appendSlice(allocator, yval_s);
+    if (datasets) |*ds| {
+        if (allocator) |ac| {
+            var entry = try ds.getOrPutValue(key, try Pair.init(ac));
+            try entry.value_ptr.x.appendSlice(ac, xval_s);
+            try entry.value_ptr.y.appendSlice(ac, yval_s);
 
-    dvui.refresh(&win, @src(), null);
+            if (win) |*win_r| {
+                dvui.refresh(win_r, @src(), null);
+            }
+        }
+    }
 }
 
 pub fn beginPlotLoop(allocator_a: std.mem.Allocator) !void {
     allocator = allocator_a;
 
-    datasets = std.StringHashMap(Pair).init(allocator);
+    datasets = std.StringHashMap(Pair).init(allocator_a);
 
-    var backend = try SDLBackend.initWindow(.{ .allocator = allocator, .size = .{ .w = 800.0, .h = 600.0 }, .vsync = true, .title = "prism plot" });
+    var backend = try SDLBackend.initWindow(
+        .{
+            .allocator = allocator_a,
+            .size = .{ .w = 800.0, .h = 600.0 },
+            .vsync = true,
+            .title = "prism plot",
+        },
+    );
     defer backend.deinit();
 
-    win = try dvui.Window.init(@src(), allocator, backend.backend(), .{ .theme = dvui.Theme.builtin.adwaita_light });
-    defer win.deinit();
+    win = try dvui.Window.init(
+        @src(),
+        allocator_a,
+        backend.backend(),
+        .{ .theme = dvui.Theme.builtin.adwaita_light },
+    );
+    defer win.?.deinit();
 
     var interrupted = false;
 
     main_loop: while (true) {
-        const nstime = win.beginWait(interrupted);
+        const nstime = win.?.beginWait(interrupted);
 
-        try win.begin(nstime);
-        try backend.addAllEvents(&win);
-
-        _ = SDLBackend.c.SDL_SetRenderDrawColor(backend.renderer, 255, 255, 255, 255);
-        _ = SDLBackend.c.SDL_RenderClear(backend.renderer);
+        try win.?.begin(nstime);
+        try backend.addAllEvents(&win.?);
 
         try plotImpl();
 
@@ -79,20 +99,18 @@ pub fn beginPlotLoop(allocator_a: std.mem.Allocator) !void {
             }
         }
 
-        const end_micros = try win.end(.{});
+        const end_micros = try win.?.end(.{});
 
-        try backend.setCursor(win.cursorRequested());
-        try backend.textInputRect(win.textInputRequested());
         try backend.renderPresent();
 
-        const wait_event_micros = win.waitTime(end_micros);
+        const wait_event_micros = win.?.waitTime(end_micros);
         interrupted = try backend.waitEventTimeout(wait_event_micros);
     }
 }
 
 fn plotImpl() !void {
     rwlock.lockShared();
-    const datasets_i = try datasets.clone();
+    const datasets_i = if (datasets) |ds| try ds.clone() else return error.NoDatasets;
     rwlock.unlockShared();
 
     var data_iter = datasets_i.iterator();
@@ -111,11 +129,25 @@ fn plotImpl() !void {
     const gridline_color = dvui.Color.fromHSLuv(0, 0, 0, 100);
     const subtick_gridline_color = dvui.Color.fromHSLuv(0, 0, 0, 30);
 
-    var x_axis: dvui.PlotWidget.Axis = .{ .name = "X Axis", .min = axis_info.x_min, .max = axis_info.x_max, .ticks = .{
-        .side = .left_or_top,
-        .subticks = true,
-    }, .gridline_color = gridline_color, .subtick_gridline_color = subtick_gridline_color };
-    var y_axis: dvui.PlotWidget.Axis = .{ .name = "Y Axis", .min = axis_info.y_min, .max = axis_info.y_max, .ticks = .{ .side = .both, .subticks = true }, .gridline_color = gridline_color, .subtick_gridline_color = subtick_gridline_color };
+    var x_axis: dvui.PlotWidget.Axis = .{
+        .name = "X Axis",
+        .min = axis_info.x_min,
+        .max = axis_info.x_max,
+        .ticks = .{
+            .side = .left_or_top,
+            .subticks = true,
+        },
+        .gridline_color = gridline_color,
+        .subtick_gridline_color = subtick_gridline_color,
+    };
+    var y_axis: dvui.PlotWidget.Axis = .{
+        .name = "Y Axis",
+        .min = axis_info.y_min,
+        .max = axis_info.y_max,
+        .ticks = .{ .side = .both, .subticks = true },
+        .gridline_color = gridline_color,
+        .subtick_gridline_color = subtick_gridline_color,
+    };
 
     var data_iter_n = datasets_i.iterator();
 
