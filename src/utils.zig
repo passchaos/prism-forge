@@ -110,6 +110,13 @@ pub fn getArrayRefItemType(comptime Ptr: type) type {
     return elementType(Deref);
 }
 
+pub fn getCompArrayLen(comptime T: type) usize {
+    return switch (@typeInfo(T)) {
+        .array => |info| info.len,
+        else => @compileError("Unsupported type"),
+    };
+}
+
 pub fn getArrayRefShapes(comptime T: type) []const usize {
     switch (@typeInfo(T)) {
         .pointer => |p| switch (p.size) {
@@ -177,6 +184,21 @@ pub fn allStatic(comptime dims: ?[]const ?usize) bool {
         if (dim == null) return false;
     }
     return true;
+}
+
+pub fn computeArrayShapeStrides(comptime N: usize, shapes: [N]usize) [N]usize {
+    var strides = [_]usize{0} ** N;
+
+    var acc: usize = 1;
+    var i: usize = N - 1;
+    while (i != 0) : (i -= 1) {
+        strides[i] = acc;
+        acc *= shapes[i];
+    }
+
+    strides[0] = acc;
+
+    return strides;
 }
 
 pub fn computeStrides(allocator: std.mem.Allocator, dims: []const usize) !std.ArrayList(usize) {
@@ -317,4 +339,15 @@ test "cartesian product" {
     for (res.items) |item| {
         std.debug.print("item: {any}\n", .{item});
     }
+}
+
+test "get array len" {
+    var array = [_]i32{ 1, 2, 3 };
+    array[2] = 10;
+
+    const len = comptime getCompArrayLen(@TypeOf(array));
+
+    array[1] = -10;
+
+    try std.testing.expectEqual(len, 3);
 }
