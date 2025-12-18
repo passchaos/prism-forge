@@ -20,8 +20,8 @@ pub fn Storage(comptime T: type, comptime D: Device) type {
         // generate method
         pub fn arange(allocator: std.mem.Allocator, args: struct {
             start: T = @as(T, 0),
-            end: T,
             step: T = @as(T, 1),
+            end: T,
         }) !Self {
             var arr_list = try std.ArrayList(T).initCapacity(allocator, 10);
 
@@ -34,35 +34,41 @@ pub fn Storage(comptime T: type, comptime D: Device) type {
                 tmp += step;
             }
 
-            return try Self.initImpl(allocator, arr_list.items);
+            return try Self.initImpl(allocator, try arr_list.toOwnedSlice(allocator));
         }
 
         pub fn linspace(allocator: std.mem.Allocator, args: struct {
             start: T,
             end: T,
-            steps: usize,
+            num: usize,
         }) !Self {
-            var arr_list = try std.ArrayList(T).initCapacity(allocator, num);
+            switch (@typeInfo(T)) {
+                .float => {
+                    const start = args.start;
+                    const end = args.end;
+                    const num = args.num;
 
-            const start = args.start;
-            const end = args.end;
-            const steps = args.steps;
+                    var buf = try allocator.alloc(T, num);
 
-            const step = (end - start) / @as(T, num);
+                    const step = (end - start) / @as(T, @floatFromInt(num));
 
-            var tmp = start;
-            for (0..steps) |i| {
-                try arr_list.append(allocator, tmp);
-                tmp += step;
+                    var tmp = start;
+                    for (0..num) |i| {
+                        buf[i] = tmp;
+                        tmp += step;
+                    }
+
+                    return try Self.initImpl(allocator, buf);
+                },
+                else => @compileError("Unsupported data type " ++ @typeName(T)),
             }
-
-            return try Self.initImpl(allocator, arr_list.items);
         }
 
         // init
         fn initImpl(allocator: std.mem.Allocator, buf: []T) !Self {
             const ref_count = try allocator.create(RefCount);
             ref_count.count = 1;
+            std.debug.print("init storage: buf= {*}", .{buf.ptr});
 
             return Self{
                 .allocator = allocator,
@@ -75,7 +81,7 @@ pub fn Storage(comptime T: type, comptime D: Device) type {
             return self._buf;
         }
 
-        pub fn bufLen(self: *const Self) usize {
+        pub fn len(self: *const Self) usize {
             return self._buf.len;
         }
 
@@ -113,7 +119,7 @@ pub fn Storage(comptime T: type, comptime D: Device) type {
             };
         }
 
-        pub fn deinit(self: *Self) void {
+        pub fn deinit(self: *const Self) void {
             self.release();
 
             if (self._ref_count.count == 0) {
@@ -129,7 +135,7 @@ pub fn Storage(comptime T: type, comptime D: Device) type {
             self._ref_count.count += 1;
         }
 
-        fn release(self: *Self) void {
+        fn release(self: *const Self) void {
             if (self._ref_count.count > 0) {
                 self._ref_count.count -= 1;
             }
@@ -141,7 +147,7 @@ pub fn Storage(comptime T: type, comptime D: Device) type {
         ) std.Io.Writer.Error!void {
             try writer.print("Storage {{\n", .{});
             try writer.print("  device: {},\n", .{D});
-            try writer.print("  buf_len: {},\n", .{self.bufLen()});
+            try writer.print("  buf_len: {},\n", .{self.len()});
             try writer.print("  ref_count: {d}\n", .{self._ref_count.count});
             try writer.print("}}\n", .{});
         }
@@ -180,8 +186,25 @@ test "arange" {
     var s1 = try StorageI32.arange(allocator, .{ .end = 10 });
     defer s1.deinit();
 
-    try std.testing.expect(s1.bufLen() == 10);
+    try std.testing.expect(s1.len() == 10);
     try std.testing.expect(s1.dataSlice()[0] == 0);
     try std.testing.expect(s1.dataSlice()[9] == 9);
     std.debug.print("s1: {f}\n", .{s1});
+}
+
+test "linspace" {
+    const allocator = std.testing.allocator;
+
+    const StorageI32 = Storage(f32, .Cpu);
+
+    var s1 = try StorageI32.linspace(allocator, .{
+        .start = 1,
+        .num = 10,
+        .end = 30,
+    });
+    defer s1.deinit();
+
+    std.debug.print("s1: {f} data_slice: {any}\n", .{ s1, s1.dataSlice() });
+
+    try std.testing.expect(s1.len() == 10);
 }

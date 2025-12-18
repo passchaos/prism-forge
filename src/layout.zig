@@ -133,6 +133,10 @@ pub fn Layout(comptime N: usize) type {
             return Layout(N - 1).init(new_shapes);
         }
 
+        pub fn iter(self: *const Self) ShapeIterator(N) {
+            return ShapeIterator(N).init(self.shapes());
+        }
+
         pub fn clone(self: *const Self) Self {
             return Self{
                 ._shapes = self._shapes,
@@ -225,7 +229,7 @@ pub fn ShapeIterator(comptime N: usize) type {
         idx: [N]usize,
         done: bool,
 
-        pub fn init(shapes_a: [N]usize) !@This() {
+        pub fn init(shapes_a: [N]usize) @This() {
             const idx = [_]usize{0} ** N;
 
             return @This(){
@@ -262,4 +266,15 @@ pub fn ShapeIterator(comptime N: usize) type {
             return outer_indices;
         }
     };
+}
+
+test "shape iter" {
+    const Layout3 = Layout(3);
+    const layout = Layout3.init([_]usize{ 2, 3, 4 });
+
+    var iter = layout.iter();
+
+    while (iter.next()) |idx| {
+        std.debug.print("idx: {any}\n", .{idx});
+    }
 }
