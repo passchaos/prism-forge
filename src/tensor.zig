@@ -1320,6 +1320,22 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             return Self.fromDataImpl(layout, storage, 0);
         }
 
+        pub fn linspace(allocator: std.mem.Allocator, args: struct {
+            start: T,
+            end: T,
+            steps: usize,
+        }) !Self {
+            if (N != 1) @compileError("arange is only supported for 1D tensors");
+            const storage = try Storage.linspace(allocator, .{
+                .start = args.start,
+                .end = args.end,
+                .steps = args.steps,
+            });
+            const layout = Layout.init([1]usize{storage.len()});
+
+            return Self.fromDataImpl(layout, storage, 0);
+        }
+
         // core method
         pub fn deinit(self: *const Self) void {
             self.storage.deinit();
@@ -1608,17 +1624,6 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
     };
 }
 
-// pub fn linspace(allocator: std.mem.Allocator, args: struct {
-//     start: T,
-//     end: T,
-//     num: usize,
-// }) !Self {
-//     const storage = try Storage.linspace(allocator, args);
-//     const layout = Layout.init([1]usize{storage.bufLen()});
-
-//     return Self.fromDataImpl(allocator, layout, storage, 0);
-// }
-
 // pub fn full(allocator: std.mem.Allocator, shapes_a: []const usize, value: anytype) !Self {
 //     const element_count = utils.product(shapes_a);
 
@@ -1733,9 +1738,14 @@ test "tensor create" {
     // std.debug.print("t2: {f}\n", .{t2});
 
     const Tensor1 = Tensor(1, .{ .T = f32 });
+
     const t1 = try Tensor1.arange(allocator, .{ .start = 0, .step = 2, .end = 10 });
     defer t1.deinit();
     std.debug.print("t1: {f}\n", .{t1});
+
+    const t2 = try Tensor1.linspace(allocator, .{ .start = 7, .end = 30, .steps = 5 });
+    defer t2.deinit();
+    std.debug.print("t2: {f}\n", .{t2});
 
     // const t1 = arange(allocator, 10, .{});
     // std.debug.print("t1: {f}\n", .{t1});

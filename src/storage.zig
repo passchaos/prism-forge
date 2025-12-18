@@ -40,13 +40,13 @@ pub fn Storage(comptime T: type, comptime D: Device) type {
         pub fn linspace(allocator: std.mem.Allocator, args: struct {
             start: T,
             end: T,
-            num: usize,
+            steps: usize,
         }) !Self {
             switch (@typeInfo(T)) {
                 .float => {
                     const start = args.start;
                     const end = args.end;
-                    const num = args.num;
+                    const num = args.steps;
 
                     var buf = try allocator.alloc(T, num);
 
@@ -199,7 +199,7 @@ test "linspace" {
 
     var s1 = try StorageI32.linspace(allocator, .{
         .start = 1,
-        .num = 10,
+        .steps = 10,
         .end = 30,
     });
     defer s1.deinit();
