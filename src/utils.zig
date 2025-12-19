@@ -30,7 +30,7 @@ pub fn isFloat(comptime T: type) bool {
 pub fn floatBasicType(comptime T: type) type {
     return comptime switch (@typeInfo(T)) {
         inline .float => |_| T,
-        inline .comptime_float => f64,
+        inline .comptime_float => f32,
         inline else => @compileError("only support f32 and f64"),
     };
 }
@@ -231,19 +231,14 @@ pub fn computeStrides(allocator: std.mem.Allocator, dims: []const usize) !std.Ar
     return dyn_strides;
 }
 
-pub fn indices_to_flat(indices: []const usize, shape: []const usize, strides_a: []const usize) anyerror!usize {
-    if (indices.len == 0) {
-        return 0;
-        // return error.EmptyIndices;
-    }
-
+pub fn indices_to_flat(indices: []const usize, shape: []const usize, stride_a: []const usize) anyerror!usize {
     var flat_index: usize = 0;
     for (indices, shape, 0..) |index, dim, idx| {
         if (index >= dim) {
             return error.OutOfBounds;
         }
 
-        flat_index += index * strides_a[idx];
+        flat_index += index * stride_a[idx];
     }
     return flat_index;
 }

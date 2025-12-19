@@ -14,11 +14,10 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
     T: type = f32,
     comptime D: Device = .Cpu,
 }) type {
-    // const ShapeIterator = layout_t.ShapeIterator(N);
-
     return struct {
         const StorageArgs = storage_args;
         const Storage = storage_t.Storage(storage_args.T, storage_args.D);
+        const ShapeIterator = layout_t.ShapeIterator(N);
 
         const T = storage_args.T;
         const D = storage_args.D;
@@ -113,82 +112,85 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             return result;
         }
 
-        // // elementwise method
-        // pub fn map_(self: *Self, comptime data_type: DataType, ctx: anytype, func: fn (data_type.toTypeComp(), @TypeOf(ctx)) data_type.toTypeComp()) !void {
-        //     var iter = try self.dataIter();
+        // elementwise method
+        pub fn map_(self: *Self, ctx: anytype, func: fn (T, utils.floatBasicType(@TypeOf(ctx))) T) void {
+            var iter = self.dataIter();
 
-        //     while (iter.next()) |idx| {
-        //         const x = try self.getWithIndicesCompType(data_type, idx);
-        //         x.* = func(x.*, ctx);
-        //     }
-        // }
+            while (iter.next()) |idx| {
+                self.setData(idx, func(self.getData(idx) catch unreachable, ctx)) catch unreachable;
+            }
+        }
 
-        // pub fn map(self: *const Self, comptime data_type: DataType, comptime return_type: DataType, ctx: anytype, func: fn (data_type.toTypeComp(), @TypeOf(ctx)) return_type.toTypeComp()) !Self {
-        //     var new_buf = try self.allocator.alloc(return_type.toTypeComp(), self.layout.size());
+        pub fn map(
+            self: *const Self,
+            comptime RT: type,
+            ctx: anytype,
+            func: fn (T, utils.floatBasicType(@TypeOf(ctx))) RT,
+        ) !Tensor(N, .{ .T = RT }) {
+            const TI = Tensor(N, .{ .T = RT });
 
-        //     var iter = try self.dataIter();
+            var new_buf = try self.storage.allocator.alloc(RT, self.size());
 
-        //     var i: usize = 0;
-        //     while (iter.next()) |idx| {
-        //         const x = try self.getWithIndicesCompType(data_type, idx);
-        //         new_buf[i] = func(x.*, ctx);
-        //         i += 1;
-        //     }
+            var iter = self.dataIter();
 
-        //     const layout = try Layout.init(self.allocator, return_type, self.shapes());
-        //     const storage = Storage.init(self.allocator, Storage.Device.Cpu, @ptrCast(new_buf.ptr), new_buf.len * return_type.dtypeSize());
+            var i: usize = 0;
+            while (iter.next()) |idx| {
+                new_buf[i] = func(self.getData(idx) catch unreachable, ctx);
+                i += 1;
+            }
 
-        //     return try Self.fromDataImpl(self.allocator, layout, storage, 0);
-        // }
+            const layout = Layout.init(self.shape());
+            const storage = try storage_t.Storage(RT, .Cpu).initImpl(self.storage.allocator, new_buf);
 
-        // pub fn mapBool(self: *const Self, ctx: anytype, func: fn (T, @TypeOf(ctx)) bool) !Tensor(bool) {
-        //     var new_buf = try self.allocator.alloc(bool, self.layout.size());
+            return try TI.fromDataImpl(layout, storage, 0);
+        }
 
-        //     var iter = try self.dataIter();
-        //     defer iter.deinit();
+        pub fn eql(self: *const Self, value: T) !Tensor(N, .{ .T = bool }) {
+            const func = struct {
+                fn call(v: T, ctx: T) bool {
+                    return v == ctx;
+                }
+            }.call;
+            return try self.map(bool, value, func);
+        }
 
-        //     var tmp: usize = 0;
-        //     while (iter.next()) |idx| {
-        //         const v = try self.get(idx);
-        //         new_buf[tmp] = func(v, ctx);
+        pub fn lt(self: *const Self, value: T) !Tensor(N, .{ .T = bool }) {
+            const func = struct {
+                fn call(v: T, ctx: T) bool {
+                    return v < ctx;
+                }
+            }.call;
+            return try self.map(bool, value, func);
+        }
 
-        //         tmp += 1;
-        //     }
+        pub fn le(self: *const Self, value: T) !Tensor(N, .{ .T = bool }) {
+            const func = struct {
+                fn call(v: T, ctx: T) bool {
+                    return v <= ctx;
+                }
+            }.call;
+            return try self.map(bool, value, func);
+        }
 
-        //     const layout = try Layout.init(self.allocator, DataType.bool, self.shapes());
-        //     const storage = Storage.init(self.allocator, Storage.Device.Cpu, @ptrCast(new_buf.ptr), new_buf.len * @sizeOf(bool));
+        pub fn gt(self: *const Self, value: T) !Tensor(N, .{ .T = bool }) {
+            const func = struct {
+                fn call(v: T, ctx: T) bool {
+                    return v > ctx;
+                }
+            }.call;
+            return try self.map(bool, value, func);
+        }
 
-        //     return Self.fromDataImpl(self.allocator, layout, storage, self._storage_offset);
-        // }
+        pub fn ge(self: *const Self, value: T) !Tensor(N, .{ .T = bool }) {
+            const func = struct {
+                fn call(v: T, ctx: T) bool {
+                    return v >= ctx;
+                }
+            }.call;
+            return try self.map(bool, value, func);
+        }
 
-        // pub fn eql(self: *const Self, value: T) !Tensor(bool) {
-        //     const scope = struct {
-        //         fn call(v: T, ctx: T) bool {
-        //             return v == ctx;
-        //         }
-        //     }.call;
-        //     return try self.mapBool(value, scope);
-        // }
-
-        // pub fn lt(self: *const Self, value: T) !Tensor(bool) {
-        //     const scope = struct {
-        //         fn call(v: T, ctx: T) bool {
-        //             return v < ctx;
-        //         }
-        //     }.call;
-        //     return try self.mapBool(value, scope);
-        // }
-
-        // pub fn gt(self: *const Self, value: T) !Tensor(bool) {
-        //     const scope = struct {
-        //         fn call(v: T, ctx: T) bool {
-        //             return v > ctx;
-        //         }
-        //     }.call;
-        //     return try self.mapBool(value, scope);
-        // }
-
-        // pub fn maskedFill_(self: *Self, mask: Tensor(bool), value: T) !void {
+        // pub fn maskedFill_(self: *Self, mask: Tensor(N, .{ .T = bool }), value: T) !void {
         //     const a = try mask.broadcastTo(self.shapes());
 
         //     var iter = try self.dataIter();
@@ -1189,15 +1191,15 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
         //     self.layout = layout;
         // }
 
-        pub fn get(self: *const Self, indices: [N]usize) !T {
+        pub fn getData(self: *const Self, indices: [N]usize) !T {
             var idx = try utils.indices_to_flat(&indices, &self.shape(), &self.stride());
             idx += self._storage_offset;
 
             return self.storage.dataSlice()[idx];
         }
 
-        pub fn set(self: *Self, indices: [N]usize, value: T) !void {
-            var idx = try utils.indices_to_flat(indices, self.shape(), self.stride());
+        pub fn setData(self: *Self, indices: [N]usize, value: T) !void {
+            var idx = try utils.indices_to_flat(&indices, &self.shape(), &self.stride());
             idx += self._storage_offset;
 
             self.storage.dataSlice()[idx] = value;
@@ -1234,40 +1236,11 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             self.layout = try self.layout.squeeze(dim);
         }
 
-        // create factory method
-        pub fn arange(allocator: std.mem.Allocator, args: struct {
-            start: T = @as(T, 0),
-            step: T = @as(T, 1),
-            end: T,
-        }) !Self {
-            if (N != 1) @compileError("arange is only supported for 1D tensors");
-            const storage = try Storage.arange(allocator, .{
-                .start = args.start,
-                .step = args.step,
-                .end = args.end,
-            });
-            const layout = Layout.init([1]usize{storage.len()});
-
-            return Self.fromDataImpl(layout, storage, 0);
-        }
-
-        pub fn linspace(allocator: std.mem.Allocator, args: struct {
-            start: T,
-            end: T,
-            steps: usize,
-        }) !Self {
-            if (N != 1) @compileError("arange is only supported for 1D tensors");
-            const storage = try Storage.linspace(allocator, .{
-                .start = args.start,
-                .end = args.end,
-                .steps = args.steps,
-            });
-            const layout = Layout.init([1]usize{storage.len()});
-
-            return Self.fromDataImpl(layout, storage, 0);
-        }
-
         // core method
+        pub fn dataIter(self: *const Self) ShapeIterator {
+            return ShapeIterator.init(self.shape());
+        }
+
         pub fn deinit(self: *const Self) void {
             self.storage.deinit();
         }
@@ -1324,8 +1297,9 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                 \\Tensor{{
                 \\.DType = {}
                 \\.{f}
+                \\.{f}
                 \\.Data =
-            , .{ T, self.layout });
+            , .{ T, self.storage, self.layout });
 
             _ = try writer.write("\n");
 
@@ -1341,7 +1315,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             const dims = self.ndim();
 
             if (depth == dims) {
-                try writer.print("{}", .{try self.get(indices)});
+                try writer.print("{}", .{try self.getData(indices)});
             } else if (depth == dims - 1) {
                 try self.fmt1dSlice(writer, depth, indices);
             } else {
@@ -1449,7 +1423,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                     var idx = base_indices;
                     idx[depth] = i;
 
-                    try writer.print("{}", .{try self.get(idx)});
+                    try writer.print("{}", .{try self.getData(idx)});
                 }
             } else {
                 for (0..pad_show_count) |i| {
@@ -1460,7 +1434,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                     var idx = base_indices;
                     idx[depth] = i;
 
-                    try writer.print("{}", .{try self.get(idx)});
+                    try writer.print("{}", .{try self.getData(idx)});
                 }
                 _ = try writer.write(" ... ");
 
@@ -1468,7 +1442,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                     var idx = base_indices;
                     idx[depth] = i;
 
-                    try writer.print("{}", .{try self.get(idx)});
+                    try writer.print("{}", .{try self.getData(idx)});
 
                     if (i < current_dim_size - 1) {
                         _ = try writer.write(" ");
@@ -1479,6 +1453,40 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             _ = try writer.write("]");
         }
     };
+}
+
+// create factory method
+pub fn arange(
+    allocator: std.mem.Allocator,
+    comptime T: type,
+    args: struct { start: T = @as(T, 0), step: T = @as(T, 1), end: T },
+) !Tensor(1, .{ .T = T }) {
+    const storage = try storage_t.Storage(T, .Cpu)
+        .arange(allocator, .{
+        .start = args.start,
+        .step = args.step,
+        .end = args.end,
+    });
+    const layout = layout_t.Layout(1).init([1]usize{storage.len()});
+
+    return Tensor(1, .{ .T = T }).fromDataImpl(layout, storage, 0);
+}
+
+pub fn linspace(allocator: std.mem.Allocator, comptime T: type, args: struct {
+    start: T,
+    end: T,
+    steps: usize,
+}) !Tensor(1, .{ .T = T }) {
+    const storage = try storage_t.Storage(T, .Cpu)
+        .linspace(allocator, .{
+        .start = args.start,
+        .end = args.end,
+        .steps = args.steps,
+    });
+    const layout = layout_t.Layout(1).init([1]usize{storage.len()});
+
+    return Tensor(1, .{ .T = T })
+        .fromDataImpl(layout, storage, 0);
 }
 
 pub fn full(allocator: std.mem.Allocator, shapes_a: anytype, value: anytype) !Tensor(
@@ -1536,7 +1544,7 @@ pub fn eye(allocator: std.mem.Allocator, row: usize, column: usize, value: anyty
     var tensor = try zeros(allocator, [2]usize{ row, column });
 
     for (0..@min(row, column)) |i| {
-        tensor.set([2]usize{ i, i }, value);
+        tensor.setData([2]usize{ i, i }, value);
     }
 
     return tensor;
@@ -1547,17 +1555,22 @@ pub fn rand(allocator: std.mem.Allocator, shapes_a: anytype, low: anytype, high:
     .{ .T = utils.floatBasicType(@TypeOf(low)) },
 ) {
     const N = comptime utils.getCompArrayLen(@TypeOf(shapes_a));
-    const T = comptime switch (@typeInfo(@TypeOf(low))) {
-        inline .float => |DT| DT,
-        inline .comptime_float => f64,
-        inline else => @compileError("only support f32 and f64"),
-    };
+    const T = utils.floatBasicType(@TypeOf(low));
 
     const layout = layout_t.Layout(N).init(shapes_a);
     const size = layout.size();
 
-    const storage = try storage_t.Storage(T, .Cpu).rand(allocator, size, low, high);
-    return try Tensor(N, .{ .T = T }).fromDataImpl(layout, storage, 0);
+    const storage = try storage_t.Storage(T, .Cpu).rand(
+        allocator,
+        size,
+        low,
+        high,
+    );
+    return try Tensor(N, .{ .T = T }).fromDataImpl(
+        layout,
+        storage,
+        0,
+    );
 }
 
 pub fn randNorm(allocator: std.mem.Allocator, shapes_a: anytype, mean_a: anytype, stddev: @TypeOf(mean_a)) !Tensor(
@@ -1618,16 +1631,14 @@ pub fn stack(allocator: std.mem.Allocator, tensors: anytype, dim: usize) !Tensor
 test "tensor create" {
     const allocator = std.testing.allocator;
 
-    const Tensor1 = Tensor(1, .{ .T = f32 });
-
     {
-        const t1 = try Tensor1.arange(allocator, .{ .start = 0, .step = 2, .end = 10 });
+        const t1 = try arange(allocator, i32, .{ .start = 0, .step = 2, .end = 10 });
         defer t1.deinit();
         std.debug.print("t1: {f}\n", .{t1});
     }
 
     {
-        const t2 = try Tensor1.linspace(allocator, .{ .start = 7, .end = 30, .steps = 5 });
+        const t2 = try linspace(allocator, f32, .{ .start = 7, .end = 30, .steps = 5 });
         defer t2.deinit();
         std.debug.print("t2: {f}\n", .{t2});
     }
@@ -1718,89 +1729,17 @@ test "split" {
     {
         const result = try t1.unbind(allocator, 0);
         defer allocator.free(result);
-        for (result) |t| {
+
+        for (result, 0..) |t, i| {
             defer t.deinit();
-            std.debug.print("unbind t: {f}\n", .{t});
+            try std.testing.expectEqual(t.storage.refCount(), 6 - i);
+        }
+
+        for (result) |t| {
+            std.debug.print("unbind t: {f} storage refcount: {*}\n", .{ t, &t.storage._ref_count });
         }
     }
 }
-
-// test "shape test" {
-//     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-//     defer _ = gpa.deinit();
-
-//     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
-//     defer arena.deinit();
-
-//     const allocator = arena.allocator();
-
-//     const arr1 = [3][2]f32{
-//         [2]f32{ 1.0, 2.0 },
-//         [2]f32{ 3.0, 4.0 },
-//         [2]f32{ 5.0, 6.0 },
-//     };
-//     const t111 = try Self.fromShapedData(allocator, &arr1);
-
-//     const t111_transposed = try t111.transpose_();
-
-//     try std.testing.expect(t111.shapes()[0] == t111_transposed.shapes()[1]);
-//     try std.testing.expect(t111.shapes()[1] == t111_transposed.shapes()[0]);
-//     try std.testing.expectEqual(t111.getWithIndices(&.{ 0, 1 }), t111_transposed.getWithIndices(&.{ 1, 0 }));
-
-//     std.debug.print("t111: {f} t111 transposed: {f}\n", .{ t111, t111_transposed });
-
-//     // const arr2 = [2][4]f32{
-//     //
-//     //     [4]f32{ 3.0, 4.0, 5.0, 6.0 },
-//     //     [4]f32{ 5.0, 6.0, 7.0, 8.0 },
-//     // };
-//     // const t112 = try Tensor.fromShapedData(allocator, &arr2);
-//     const t111_unsqueezed = try t111.unsqueeze(1);
-//     try std.testing.expectEqualSlices(usize, t111_unsqueezed.shapes(), &.{ 3, 1, 2 });
-//     const t111_squeezed = try t111_unsqueezed.squeeze(null);
-//     try std.testing.expectEqualSlices(usize, t111_squeezed.shapes(), &.{ 3, 2 });
-
-//     std.debug.print("unsqueezed: {f} squeezed: {f}\n", .{ t111_unsqueezed, t111_squeezed });
-// }
-
-// test "random test" {
-//     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-//     defer _ = gpa.deinit();
-
-//     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
-//     defer arena.deinit();
-
-//     const allocator = arena.allocator();
-
-//     const t1 = try Self.rand(allocator, f32, &.{ 3000, 3000 }, 0.0, 1.0);
-//     std.debug.print("t1: {f}\n", .{t1});
-
-//     var t2 = try Self.randNorm(allocator, f32, &.{ 3000, 3000 }, 0.0, 1.0);
-//     std.debug.print("t2: {f}\n", .{t2});
-
-//     const t2_tc = try (try t2.transpose()).contiguous();
-
-//     const begin = std.time.milliTimestamp();
-//     const t3 = try t1.matmul(&t2_tc);
-//     const end = std.time.milliTimestamp();
-
-//     std.debug.print("t3: {f}\nelapsed: {d} microseconds\n", .{ t3, end - begin });
-// }
-
-// test "permute test" {
-//     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-//     defer _ = gpa.deinit();
-
-//     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
-//     defer arena.deinit();
-
-//     const allocator = arena.allocator();
-
-//     const t1 = try Self.rand(allocator, &.{ 1, 2, 3, 4, 5, 6 }, 0.0, 2.0);
-//     const t1p = try t1.permute(&.{ 5, 4, 3, 2, 1, 0 });
-
-//     std.debug.print("t1: {f}\nt1p: {f}\n", .{ t1.layout, t1p.layout });
-// }
 
 // test "contiguous test" {
 //     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -1836,123 +1775,89 @@ test "split" {
 //     // const t1 = try Tensor.fromData(allocator: Allocator, comptime dtype_i: DataType, shapes_a: Aligned(usize), data: Aligned(either type))
 // }
 
-// test "cat stack" {
-//     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-//     defer _ = gpa.deinit();
+test "map basic" {
+    const allocator = std.testing.allocator;
 
-//     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
-//     defer arena.deinit();
+    var t = try rand(allocator, [3]usize{ 2, 3, 4 }, 0.0, 1.0);
+    defer t.deinit();
 
-//     const allocator = arena.allocator();
+    const func1 = struct {
+        fn call(x: f32, ctx: f32) f32 {
+            return x * ctx;
+        }
+    }.call;
+    var t1 = try t.map(f32, 7.0, func1);
+    defer t1.deinit();
+    std.debug.print("t1: {f}\n", .{t1});
 
-//     const t1 = try Self.rand(allocator, &.{ 1, 2, 2 }, 0.0, 2.0);
+    const func2 = struct {
+        fn call(x: f32, ctx: f32) bool {
+            return x >= ctx;
+        }
+    }.call;
+    const t2 = try t1.map(bool, 2.0, func2);
+    defer t2.deinit();
+    std.debug.print("t2: {f}\n", .{t2});
 
-//     const t2 = try Self.rand(allocator, &.{ 1, 2, 2 }, 0.0, 2.0);
+    const func3 = struct {
+        fn call(x: f32, ctx: f32) f32 {
+            return x * ctx;
+        }
+    }.call;
+    t1.map_(-1.0, func3);
+    std.debug.print("t1: {f}\n", .{t1});
+}
 
-//     const t3 = try Self.cat(allocator, &.{ t1, t2 }, 2);
+test "map bool" {
+    const allocator = std.testing.allocator;
 
-//     const t4 = try Self.stack(allocator, &.{ t1, t2 }, 2);
-//     std.debug.print("t1: {f} t2: {f} t3: {f} t4: {f}\n", .{ t1.layout, t2.layout, t3.layout, t4.layout });
-// }
+    const t1 = try randNorm(allocator, [3]usize{ 3, 2, 4 }, 0.0, 1.0);
+    defer t1.deinit();
 
-// test "split unbind" {
-//     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-//     defer _ = gpa.deinit();
+    const t2 = try t1.ge(0.0);
+    defer t2.deinit();
 
-//     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
-//     defer arena.deinit();
+    std.debug.print("t1: {f} t2: {f}\n", .{ t1, t2 });
+}
 
-//     const allocator = arena.allocator();
+test "map single op" {
+    // const allocator = std.testing.allocator;
 
-//     const t = try Self.arange(allocator, DataType.f32, .{ .end = 20 });
-//     std.debug.print("t: {f}\n", .{t});
+    // const a: f32 = 11.0;
 
-//     const t1 = try t.reshape(&.{ 2, 2, 5 });
+    // try t.add_(a);
+    // try t.add_(t);
+    // std.debug.print("add t: {f}\n", .{t});
 
-//     {
-//         const results = try t1.split(2, 2);
+    // try t.mul_(2.0);
+    // std.debug.print("mul t: {f}\n", .{t});
 
-//         std.debug.print("t1: {f}\n", .{t1});
-//         for (results) |result| {
-//             std.debug.print("result: {f} offset= {}\n", .{ result, result._storage_offset });
-//         }
-//     }
+    // try t.sin_();
+    // try t.exp_();
 
-//     std.debug.print("begin chunk\n", .{});
-//     {
-//         const results = try t1.chunk(5, 2);
+    // std.debug.print("t: {f}\n", .{t});
 
-//         std.debug.print("t1: {f}\n", .{t1});
-//         for (results) |result| {
-//             std.debug.print("result: {f} offset= {}\n", .{ result, result._storage_offset });
-//         }
-//     }
+    // try t.clamp_(0.0, 2.39);
+    // std.debug.print("t: {f}\n", .{t});
 
-//     std.debug.print("begin unbind\n", .{});
-//     {
-//         const results = try t1.unbind(2);
+    // const t1 = try t.add(t);
+    // std.debug.print("t: {f} t1: {f}\n", .{ t, t1 });
 
-//         std.debug.print("t1: {f}\n", .{t1});
-//         for (results) |result| {
-//             std.debug.print("result: {f} offset= {} contiguoused= {f}\n", .{ result, result._storage_offset, try result.contiguous() });
-//         }
-//     }
-// }
+    // const a1 = try Self.rand(allocator, &.{ 1, 3 }, 0.0, 2.0);
+    // const a2 = try Self.rand(allocator, &.{ 3, 1 }, -2.0, 5.0);
 
-// test "map" {
-//     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-//     defer _ = gpa.deinit();
+    // const a3 = try a1.add(a2);
+    // std.debug.print("a1: {f} a2: {f} a3: {f}\n", .{ a1, a2, a3 });
 
-//     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
-//     defer arena.deinit();
+    // const a4 = try a3.add(10);
+    // std.debug.print("a4: {f}\n", .{a4});
 
-//     const allocator = arena.allocator();
+    // const a5 = try a4.sub(10);
+    // std.debug.print("a5: {f}\n", .{a5});
 
-//     var t = try Self.arange(allocator, DataType.f32, .{ .end = 10 });
-
-//     const func = struct {
-//         fn call(x: f32, _: void) f32 {
-//             return x * 3;
-//         }
-//     }.call;
-//     try t.map_(DataType.f32, void{}, func);
-//     std.debug.print("t: {f}\n", .{t});
-
-//     const a: f32 = 11.0;
-
-//     try t.add_(a);
-//     try t.add_(t);
-//     std.debug.print("add t: {f}\n", .{t});
-
-//     try t.mul_(2.0);
-//     std.debug.print("mul t: {f}\n", .{t});
-
-//     try t.sin_();
-//     try t.exp_();
-
-//     std.debug.print("t: {f}\n", .{t});
-
-//     try t.clamp_(0.0, 2.39);
-//     std.debug.print("t: {f}\n", .{t});
-
-//     const t1 = try t.add(t);
-//     std.debug.print("t: {f} t1: {f}\n", .{ t, t1 });
-
-//     const a1 = try Self.rand(allocator, &.{ 1, 3 }, 0.0, 2.0);
-//     const a2 = try Self.rand(allocator, &.{ 3, 1 }, -2.0, 5.0);
-
-//     const a3 = try a1.add(a2);
-//     std.debug.print("a1: {f} a2: {f} a3: {f}\n", .{ a1, a2, a3 });
-
-//     const a4 = try a3.add(10);
-//     std.debug.print("a4: {f}\n", .{a4});
-
-//     const a5 = try a4.sub(10);
-//     std.debug.print("a5: {f}\n", .{a5});
-
-//     const a6 = try a5.mul(10);
-//     std.debug.print("a6: {f}\n", .{a6});
-// }
+    // const a6 = try a5.mul(10);
+    // std.debug.print("a6: {f}\n", .{a6});
+}
 
 // test "reduce" {
 //     var gpa = std.heap.GeneralPurposeAllocator(.{}){};

@@ -123,7 +123,7 @@ pub fn Storage(comptime T: type, comptime D: Device) type {
         }
 
         // init
-        fn initImpl(allocator: std.mem.Allocator, buf: []T) !Self {
+        pub fn initImpl(allocator: std.mem.Allocator, buf: []T) !Self {
             const ref_count = try allocator.create(RefCount);
             ref_count.count = 1;
             std.debug.print("init storage: buf= {*}\n", .{buf.ptr});
@@ -141,6 +141,10 @@ pub fn Storage(comptime T: type, comptime D: Device) type {
 
         pub fn len(self: *const Self) usize {
             return self._buf.len;
+        }
+
+        pub fn refCount(self: *const Self) usize {
+            return self._ref_count.count;
         }
 
         pub fn shared(self: *const Self) Self {
@@ -197,7 +201,7 @@ pub fn Storage(comptime T: type, comptime D: Device) type {
             try writer.print("  device: {},\n", .{D});
             try writer.print("  buf_len: {},\n", .{self.len()});
             try writer.print("  ref_count: {d}\n", .{self._ref_count.count});
-            try writer.print("}}\n", .{});
+            try writer.print("}}", .{});
         }
     };
 }
@@ -209,21 +213,41 @@ test "ref_count" {
 
     const buf = try allocator.alloc(f32, 10);
     std.debug.print("buf: {*}\n", .{buf.ptr});
+
     // allocator.free(buf);
     var storage = try StorageF32.initImpl(allocator, buf);
-    std.debug.print("storage: {f}\n", .{storage});
     defer storage.deinit();
 
-    try std.testing.expect(storage._ref_count.count == 1);
+    {
+        const s1 = storage.shared();
+        defer s1.deinit();
+        try std.testing.expectEqual(s1.refCount(), 2);
+
+        const s2 = storage.shared();
+        defer s2.deinit();
+        try std.testing.expectEqual(s1.refCount(), 3);
+
+        const s3 = storage.shared();
+        defer s3.deinit();
+        try std.testing.expectEqual(s1.refCount(), 4);
+
+        const s4 = storage.shared();
+        defer s4.deinit();
+        try std.testing.expectEqual(s1.refCount(), 5);
+
+        std.debug.print("storage: {f}\ns1: {f}\ns2: {f}\ns3: {f}\ns4: {f}\n", .{ storage, s1, s2, s3, s4 });
+    }
+
+    try std.testing.expect(storage.refCount() == 1);
 
     storage.retain();
-    try std.testing.expect(storage._ref_count.count == 2);
+    try std.testing.expect(storage.refCount() == 2);
 
     storage.release();
-    try std.testing.expect(storage._ref_count.count == 1);
+    try std.testing.expect(storage.refCount() == 1);
 
     storage.release();
-    try std.testing.expect(storage._ref_count.count == 0);
+    try std.testing.expect(storage.refCount() == 0);
 }
 
 test "arange" {
