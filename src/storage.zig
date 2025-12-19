@@ -153,16 +153,6 @@ pub fn Storage(comptime T: type, comptime D: Device) type {
             };
         }
 
-        pub fn clone(self: *const Self) Self {
-            self.retain();
-
-            return Self{
-                .allocator = self.allocator,
-                ._buf = self._buf,
-                ._ref_count = self._ref_count,
-            };
-        }
-
         pub fn deepCopy(self: *const Self) !Self {
             const new_buf = try self.allocator.alloc(u8, self._bytes_size);
             @memcpy(new_buf, self._buf);

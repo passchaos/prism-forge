@@ -29,7 +29,7 @@ pub fn isFloat(comptime T: type) bool {
 
 pub fn floatBasicType(comptime T: type) type {
     return comptime switch (@typeInfo(T)) {
-        inline .float => |DT| DT,
+        inline .float => |_| T,
         inline .comptime_float => f64,
         inline else => @compileError("only support f32 and f64"),
     };

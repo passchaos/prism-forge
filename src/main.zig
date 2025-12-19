@@ -37,6 +37,8 @@ fn matmulDemo(allocator: std.mem.Allocator) !void {
 }
 
 pub fn main() !void {
+    std.testing.refAllDeclsRecursive(@This());
+
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
 

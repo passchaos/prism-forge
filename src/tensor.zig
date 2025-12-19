@@ -35,67 +35,83 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
 
         // scope method
         // divide
-        // pub fn split(self: *const Self, chunk_size: usize, dim: usize) ![]const Self {
-        //     if (dim >= self.ndim()) return error.InvalidDim;
+        pub fn split(self: *const Self, allocator: std.mem.Allocator, chunk_size: usize, dim: usize) ![]const Self {
+            if (dim >= self.ndim()) return error.InvalidDim;
 
-        //     const dim_len = self.shapes()[dim];
-        //     if (chunk_size == 0 or chunk_size > dim_len) return error.InvalidSplit;
+            const dim_len = self.shape()[dim];
+            if (chunk_size == 0 or chunk_size > dim_len) return error.InvalidSplit;
 
-        //     const num_splits = (dim_len + chunk_size - 1) / chunk_size;
-        //     var result = try self.allocator.alloc(Self, num_splits);
+            const num_splits = (dim_len + chunk_size - 1) / chunk_size;
+            var result = try allocator.alloc(Self, num_splits);
 
-        //     var offset: usize = 0;
-        //     for (0..num_splits) |i| {
-        //         const chunk_size_i = if ((offset + chunk_size) <= dim_len) chunk_size else (dim_len - offset);
+            var offset: usize = 0;
+            for (0..num_splits) |i| {
+                const chunk_size_i = if ((offset + chunk_size) <= dim_len) chunk_size else (dim_len - offset);
 
-        //         var new_shape = try std.ArrayList(usize).initCapacity(self.allocator, self.shapes().len);
-        //         try new_shape.appendSlice(self.allocator, self.shapes());
-        //         new_shape.items[dim] = chunk_size_i;
+                var new_shape = self.shape();
+                new_shape[dim] = chunk_size_i;
 
-        //         // must use old strides
-        //         var new_strides = try std.ArrayList(usize).initCapacity(self.allocator, self.strides().len);
-        //         try new_strides.appendSlice(self.allocator, self.strides());
+                // must use old strides
+                const new_strides = self.stride();
 
-        //         const layout = try Layout.initRaw(self.allocator, self.dtype(), new_shape, new_strides);
-        //         result[i] = try Self.fromDataImpl(self.allocator, layout, self.storage.clone(), self._storage_offset + offset * self.strides()[dim]);
+                const layout = Layout.initRaw(new_shape, new_strides);
+                result[i] = try Self.fromDataImpl(layout, self.storage.shared(), self._storage_offset + offset * self.stride()[dim]);
 
-        //         offset += chunk_size_i;
-        //     }
+                offset += chunk_size_i;
+            }
 
-        //     return result;
-        // }
+            return result;
+        }
 
-        // pub fn chunk(self: *const Self, chunk_count: usize, dim: usize) ![]const Self {
-        //     if (dim >= self.ndim()) return error.InvalidDim;
+        pub fn chunk(self: *const Self, allocator: std.mem.Allocator, chunk_count: usize, dim: usize) ![]const Self {
+            if (dim >= self.ndim()) return error.InvalidDim;
 
-        //     const dim_len = self.shapes()[dim];
-        //     if (chunk_count == 0 or chunk_count > dim_len) return error.InvalidSplit;
+            const dim_len = self.shape()[dim];
+            if (chunk_count == 0 or chunk_count > dim_len) return error.InvalidSplit;
 
-        //     const chunk_size_i = (dim_len + chunk_count - 1) / chunk_count;
-        //     return try self.split(chunk_size_i, dim);
-        // }
+            const chunk_size_i = (dim_len + chunk_count - 1) / chunk_count;
+            return try self.split(allocator, chunk_size_i, dim);
+        }
 
-        // pub fn unbind(self: *const Self, dim: usize) ![]const Self {
-        //     if (dim >= self.ndim()) return error.InvalidDim;
+        pub fn unbind(self: *const Self, allocator: std.mem.Allocator, dim: usize) ![]const Tensor(N - 1, storage_args) {
+            if (dim >= self.ndim()) return error.InvalidDim;
 
-        //     const dim_len = self.shapes()[dim];
-        //     var result = try self.allocator.alloc(Self, dim_len);
+            const dim_len = self.shape()[dim];
 
-        //     for (0..dim_len) |i| {
-        //         var new_shapes = try std.ArrayList(usize).initCapacity(self.allocator, self.ndim() - 1);
-        //         var new_strides = try std.ArrayList(usize).initCapacity(self.allocator, self.ndim() - 1);
+            const NT = Tensor(N - 1, storage_args);
 
-        //         for (0..self.ndim()) |j| {
-        //             if (j == dim) continue;
-        //             try new_shapes.append(self.allocator, self.shapes()[j]);
-        //             try new_strides.append(self.allocator, self.strides()[j]);
-        //         }
+            var result = try allocator.alloc(NT, dim_len);
 
-        //         const layout = try Layout.initRaw(self.allocator, self.dtype(), new_shapes, new_strides);
-        //         result[i] = try Self.fromDataImpl(self.allocator, layout, self.storage.clone(), self._storage_offset + i * self.strides()[dim]);
-        //     }
-        //     return result;
-        // }
+            var offset: usize = 0;
+            for (0..dim_len) |idx| {
+                var new_shape = [_]usize{0} ** (N - 1);
+                var new_stride = [_]usize{0} ** (N - 1);
+
+                {
+                    var i: usize = 0;
+                    var j: usize = 0;
+
+                    while (j < N) {
+                        if (j == dim) {
+                            j += 1;
+                        } else {
+                            new_shape[i] = self.shape()[j];
+                            new_stride[i] = self.stride()[j];
+
+                            i += 1;
+                            j += 1;
+                        }
+                    }
+                }
+
+                const layout = layout_t.Layout(N - 1).initRaw(new_shape, new_stride);
+                result[idx] = try NT.fromDataImpl(layout, self.storage.shared(), self._storage_offset + offset * self.stride()[dim]);
+
+                offset += 1;
+            }
+
+            return result;
+        }
 
         // // elementwise method
         // pub fn map_(self: *Self, comptime data_type: DataType, ctx: anytype, func: fn (data_type.toTypeComp(), @TypeOf(ctx)) data_type.toTypeComp()) !void {
@@ -1526,10 +1542,11 @@ pub fn eye(allocator: std.mem.Allocator, row: usize, column: usize, value: anyty
     return tensor;
 }
 
-pub fn rand(allocator: std.mem.Allocator, comptime N: usize, shapes_a: [N]usize, low: anytype, high: @TypeOf(low)) !Tensor(
-    N,
+pub fn rand(allocator: std.mem.Allocator, shapes_a: anytype, low: anytype, high: @TypeOf(low)) !Tensor(
+    utils.getCompArrayLen(@TypeOf(shapes_a)),
     .{ .T = utils.floatBasicType(@TypeOf(low)) },
 ) {
+    const N = comptime utils.getCompArrayLen(@TypeOf(shapes_a));
     const T = comptime switch (@typeInfo(@TypeOf(low))) {
         inline .float => |DT| DT,
         inline .comptime_float => f64,
@@ -1543,10 +1560,11 @@ pub fn rand(allocator: std.mem.Allocator, comptime N: usize, shapes_a: [N]usize,
     return try Tensor(N, .{ .T = T }).fromDataImpl(layout, storage, 0);
 }
 
-pub fn randNorm(allocator: std.mem.Allocator, comptime N: usize, shapes_a: [N]usize, mean_a: anytype, stddev: @TypeOf(mean_a)) !Tensor(
-    N,
+pub fn randNorm(allocator: std.mem.Allocator, shapes_a: anytype, mean_a: anytype, stddev: @TypeOf(mean_a)) !Tensor(
+    utils.getCompArrayLen(@TypeOf(shapes_a)),
     .{ .T = utils.floatBasicType(@TypeOf(mean_a)) },
 ) {
+    const N = comptime utils.getCompArrayLen(@TypeOf(shapes_a));
     const T = utils.floatBasicType(@TypeOf(mean_a));
 
     const layout = layout_t.Layout(N).init(shapes_a);
@@ -1637,12 +1655,21 @@ test "tensor create" {
     }
 
     {
-        const t1 = try rand(allocator, 3, [3]usize{ 1, 2, 3 }, 0.0, 2.0);
+        const t1 = try rand(allocator, [3]usize{ 1, 2, 3 }, 0.0, 2.0);
         defer t1.deinit();
-        const t2 = try rand(allocator, 3, [3]usize{ 2, 2, 3 }, 3.0, 7.0);
+        const t2 = try rand(allocator, [3]usize{ 2, 2, 3 }, 3.0, 7.0);
         defer t2.deinit();
-        const t3 = try randNorm(allocator, 3, [3]usize{ 2, 2, 3 }, 0.0, 2.0);
+        const t3 = try randNorm(allocator, [3]usize{ 2, 2, 3 }, 0.0, 2.0);
         defer t3.deinit();
+
+        var mean_a: f32 = 0.0;
+        var stddev: f32 = 2.0;
+        const t4 = try randNorm(allocator, [3]usize{ 2, 2, 3 }, mean_a, stddev);
+        defer t4.deinit();
+
+        mean_a = 10.0;
+        stddev = 3.0;
+        std.debug.print("mean_a: {} stddev: {} t4: {f}\n", .{ mean_a, stddev, t4 });
 
         const tc = try cat(allocator, &[3]@TypeOf(t1){ t1, t2, t3 }, 0);
         defer tc.deinit();
@@ -1660,44 +1687,42 @@ test "tensor create" {
         try std.testing.expectEqualDeep(ts.shape(), [4]usize{ 2, 2, 2, 3 });
         std.debug.print("ts: {f}\n", .{ts});
     }
+}
 
-    // const t1 = arange(allocator, 10, .{});
-    // std.debug.print("t1: {f}\n", .{t1});
+test "split" {
+    const allocator = std.testing.allocator;
 
-    // var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    // defer _ = gpa.deinit();
+    const t1 = try rand(allocator, [3]usize{ 5, 2, 3 }, 0.0, 1.0);
+    defer t1.deinit();
 
-    // var arena = std.heap.ArenaAllocator.init(gpa.allocator());
-    // defer arena.deinit();
+    std.debug.print("t1: {f}\n", .{t1});
 
-    // const allocator = arena.allocator();
+    {
+        const result = try t1.split(allocator, 3, 0);
+        defer allocator.free(result);
+        for (result) |t| {
+            defer t.deinit();
+            std.debug.print("split t: {f}\n", .{t});
+        }
+    }
 
-    // const arr1 = [3][2]f32{
-    //     [2]f32{ 1.0, 2.0 },
-    //     [2]f32{ 3.0, 4.0 },
-    //     [2]f32{ 5.0, 6.0 },
-    // };
-    // const t111 = try Self.fromShapedData(allocator, &arr1);
+    {
+        const result = try t1.chunk(allocator, 3, 0);
+        defer allocator.free(result);
+        for (result) |t| {
+            defer t.deinit();
+            std.debug.print("chunk t: {f}\n", .{t});
+        }
+    }
 
-    // const arr2 = [2][4]f32{
-    //     [4]f32{ 3.0, 4.0, 5.0, 6.0 },
-    //     [4]f32{ 5.0, 6.0, 7.0, 8.0 },
-    // };
-    // const t112 = try Self.fromShapedData(allocator, &arr2);
-
-    // const res_arr = [3][4]f32{
-    //     [4]f32{ 13.0, 16.0, 19.0, 22.0 },
-    //     [4]f32{ 29.0, 36.0, 43.0, 50.0 },
-    //     [4]f32{ 45.0, 56.0, 67.0, 78.0 },
-    // };
-    // const res_t11 = try Self.fromShapedData(allocator, &res_arr);
-
-    // const t113 = try t111.matmul(&t112);
-    // std.debug.print("t111: {f} t112: {f}\n", .{ t111, t112 });
-    // std.debug.print("t113: {f}\n", .{t113});
-
-    // const compare_res = res_t11.approxEqual(&t113, DataType.f32, 0.001, 0.0001);
-    // try std.testing.expect(compare_res);
+    {
+        const result = try t1.unbind(allocator, 0);
+        defer allocator.free(result);
+        for (result) |t| {
+            defer t.deinit();
+            std.debug.print("unbind t: {f}\n", .{t});
+        }
+    }
 }
 
 // test "shape test" {
