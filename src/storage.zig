@@ -64,11 +64,17 @@ pub fn Storage(comptime T: type, comptime D: Device) type {
             }
         }
 
+        pub fn full(allocator: std.mem.Allocator, element_count: usize, value: anytype) !Self {
+            const buf = try allocator.alloc(T, element_count);
+            for (buf) |*elem| elem.* = value;
+            return try Self.initImpl(allocator, buf);
+        }
+
         // init
         fn initImpl(allocator: std.mem.Allocator, buf: []T) !Self {
             const ref_count = try allocator.create(RefCount);
             ref_count.count = 1;
-            std.debug.print("init storage: buf= {*}", .{buf.ptr});
+            std.debug.print("init storage: buf= {*}\n", .{buf.ptr});
 
             return Self{
                 .allocator = allocator,

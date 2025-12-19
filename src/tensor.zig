@@ -11,7 +11,7 @@ const Device = storage_t.Device;
 const layout_t = @import("./layout.zig");
 
 pub fn Tensor(comptime N: usize, comptime storage_args: struct {
-    comptime T: type = f32,
+    T: type = f32,
     comptime D: Device = .Cpu,
 }) type {
     const Storage = storage_t.Storage(storage_args.T, storage_args.D);
@@ -21,6 +21,10 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
     // const ShapeIterator = layout_t.ShapeIterator(N);
 
     return struct {
+        const DIMS = N;
+        const DATA_TYPE = T;
+        const DEVICE = storage_args.D;
+
         const Self = @This();
 
         _base: ?*const Self = null,
@@ -1436,9 +1440,6 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
 
             const show_all = current_dim_size <= 2 * pad_show_count;
 
-            // var slice_indices = try std.ArrayList(usize).initCapacity(self.allocator, 4);
-            // defer slice_indices.deinit(self.allocator);
-
             const space_handle_fn = struct {
                 fn call(idx: usize, depth_a: usize, dims_a: usize, writer_a: *std.Io.Writer) !void {
                     if (idx > 0) {
@@ -1464,12 +1465,9 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                     indices[depth] = i;
 
                     try self.fmtRecursive(writer, depth + 1, indices);
-                    // try slice_indices.append(self.allocator, i);
                 }
             } else {
                 for (0..pad_show_count) |i| {
-                    // try slice_indices.append(self.allocator, i);
-
                     try space_handle_fn(i, depth, dims, writer);
 
                     var indices = base_indices;
@@ -1479,7 +1477,6 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                     try self.fmtRecursive(writer, depth + 1, indices);
                 }
 
-                // if (i == pad_show_count) {
                 if (depth == dims - 2) {
                     _ = try writer.write("\n ");
 
@@ -1495,7 +1492,6 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                 for (0..depth) |_| {
                     _ = try writer.write(" ");
                 }
-                // }
 
                 for (current_dim_size - pad_show_count..current_dim_size) |i| {
                     try space_handle_fn(i, depth, dims, writer);
@@ -1505,66 +1501,8 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                     indices[depth] = i;
 
                     try self.fmtRecursive(writer, depth + 1, indices);
-
-                    // try slice_indices.append(self.allocator, i);
                 }
             }
-
-            // const space_dots_handle_fn = struct {
-            //     fn call(idx: usize, depth_a: usize, dims_a: usize, writer_a: *std.Io.Writer) !void {
-            //         if (idx > 0) {
-            //             if (depth_a == dims_a - 2) {
-            //                 _ = try writer_a.write("\n ");
-            //             } else {
-            //                 _ = try writer_a.write("\n\n ");
-            //             }
-
-            //             for (0..depth_a) |_| {
-            //                 _ = try writer_a.write(" ");
-            //             }
-            //         }
-            //     }
-            // }.call;
-
-            // for (slice_indices.items, 0..) |slice_idx, idx| {
-            //     if (idx > 0) {
-            //         if (depth == dims - 2) {
-            //             _ = try writer.write("\n ");
-            //         } else {
-            //             _ = try writer.write("\n\n ");
-            //         }
-
-            //         for (0..depth) |_| {
-            //             _ = try writer.write(" ");
-            //         }
-            //     }
-
-            //     if (!show_all and idx == pad_show_count) {
-            //         if (depth == dims - 2) {
-            //             _ = try writer.write("\n ");
-
-            //             for (0..depth) |_| {
-            //                 _ = try writer.write(" ");
-            //             }
-
-            //             _ = try writer.write("...\n ");
-            //         } else {
-            //             _ = try writer.write("\n ...\n\n ");
-            //         }
-
-            //         for (0..depth) |_| {
-            //             _ = try writer.write(" ");
-            //         }
-            //     }
-
-            //     var indices = try std.ArrayList(usize).initCapacity(self.allocator, 4);
-            //     defer indices.deinit(self.allocator);
-
-            //     try indices.appendSlice(self.allocator, base_indices);
-            //     try indices.append(self.allocator, slice_idx);
-
-            //     try self.fmtRecursive(writer, depth + 1, indices.items);
-            // }
 
             _ = try writer.write("]");
         }
@@ -1624,35 +1562,32 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
     };
 }
 
-// pub fn full(allocator: std.mem.Allocator, shapes_a: []const usize, value: anytype) !Self {
-//     const element_count = utils.product(shapes_a);
+pub fn full(allocator: std.mem.Allocator, comptime N: usize, shapes_a: [N]usize, value: anytype) !Tensor(N, .{ .T = @TypeOf(value) }) {
+    const T = @TypeOf(value);
 
-//     switch (@TypeOf(value)) {
-//         inline else => |v| {
-//             const DT = comptime DataType.typeToDataType(v);
-//             const T = DT.toTypeComp();
+    const Layout = layout_t.Layout(N);
+    const Storage = storage_t.Storage(T, .Cpu);
+    const TensorI = Tensor(N, .{ .T = T });
 
-//             const data = try allocator.alloc(T, element_count);
-//             @memset(data, value);
+    const element_count = utils.product(&shapes_a);
 
-//             const layout_i = try Layout.init(allocator, DT, shapes_a);
-//             const storage = Storage.init(allocator, Storage.Device.Cpu, @ptrCast(data.ptr), element_count * DT.dtypeSize());
+    const layout = Layout.init(shapes_a);
+    const storage = try Storage.full(allocator, element_count, value);
 
-//             return try Self.fromDataImpl(allocator, layout_i, storage, 0);
-//         },
-//     }
-// }
+    return TensorI.fromDataImpl(layout, storage, 0);
+}
 
-// pub fn fullLike(allocator: std.mem.Allocator, tensor: Self, value: anytype) !Self {
-//     const shapes_i = tensor.shapes();
+pub fn fullLike(allocator: std.mem.Allocator, tensor: anytype, value: @TypeOf(tensor).DATA_TYPE) !@TypeOf(tensor) {
+    comptime {
+        if (!@hasDecl(@TypeOf(tensor), "DIMS")) @compileError("expect a struct has DIMS info");
+    }
+    return try full(allocator, @TypeOf(tensor).DIMS, tensor.shapes(), value);
+}
 
-//     return try Self.full(allocator, shapes_i, value);
-// }
-
-// pub fn zeros(allocator: std.mem.Allocator, shapes_a: []const usize) !Self {
-//     const value: f32 = 0;
-//     return try Self.full(allocator, shapes_a, value);
-// }
+pub fn zeros(allocator: std.mem.Allocator, comptime N: usize, shapes_a: [N]usize) !Tensor(N, .{}) {
+    const value: f32 = 0;
+    return try full(allocator, N, shapes_a, value);
+}
 
 // pub fn zerosLike(allocator: std.mem.Allocator, tensor: Self) !Self {
 //     const value: f32 = 0;
@@ -1733,10 +1668,6 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
 test "tensor create" {
     const allocator = std.testing.allocator;
 
-    // const Tensor2 = Tensor(2, .{ .T = f32 });
-    // const t2 = try Tensor2.arange(allocator, .{ .end = 10 });
-    // std.debug.print("t2: {f}\n", .{t2});
-
     const Tensor1 = Tensor(1, .{ .T = f32 });
 
     const t1 = try Tensor1.arange(allocator, .{ .start = 0, .step = 2, .end = 10 });
@@ -1746,6 +1677,40 @@ test "tensor create" {
     const t2 = try Tensor1.linspace(allocator, .{ .start = 7, .end = 30, .steps = 5 });
     defer t2.deinit();
     std.debug.print("t2: {f}\n", .{t2});
+
+    const t3 = try full(allocator, 3, [3]usize{ 10, 13, 15 }, @as(f32, 10.2));
+    defer t3.deinit();
+    std.debug.print("t3: {f}\n", .{t3});
+
+    const t4 = try fullLike(allocator, t3, @as(f32, 10.2));
+    defer t4.deinit();
+    std.debug.print("t4: {f}\n", .{t4});
+
+    const T = @TypeOf(t3);
+    const ti = @typeInfo(T);
+
+    switch (ti) {
+        .@"struct" => |s| {
+            // for (s.fields) |field| {
+            //     std.debug.print("field: {s}\n", .{field.name});
+            // }
+            // std.debug.print("fields: {}\n", .{s.fields});
+            std.debug.print("s1: {any}\n", .{T.DEVICE});
+            std.debug.print("s: {s}\n", .{@typeName(@TypeOf(s))});
+        },
+        // {
+        //     std.debug.print("type info: {s}\n", .{@typeName(@TypeOf(t3))});
+        // },
+        else => {
+            std.debug.print("type info: {s}\n", .{@typeName(@TypeOf(t3))});
+        },
+    }
+
+    std.debug.print("type info: {s}\n", .{@typeName(@TypeOf(t3))});
+
+    // const t4 = try zeros(allocator, 3, [3]usize{ 2, 3, 5 });
+    // defer t4.deinit();
+    // std.debug.print("t4: {f}\n", .{t4});
 
     // const t1 = arange(allocator, 10, .{});
     // std.debug.print("t1: {f}\n", .{t1});
