@@ -27,6 +27,14 @@ pub fn isFloat(comptime T: type) bool {
     };
 }
 
+pub fn floatBasicType(comptime T: type) type {
+    return comptime switch (@typeInfo(T)) {
+        inline .float => |DT| DT,
+        inline .comptime_float => f64,
+        inline else => @compileError("only support f32 and f64"),
+    };
+}
+
 pub fn isInt(comptime T: type) bool {
     return switch (@typeInfo(T)) {
         .int => true,
@@ -97,8 +105,8 @@ fn dimsHelper(comptime T: type) []const usize {
     }
 }
 
-fn elementType(comptime T: type) type {
-    // @compileLog("type: " ++ @typeName(T));
+pub fn elementType(comptime T: type) type {
+    @compileLog("type: " ++ @typeName(T));
     return switch (@typeInfo(T)) {
         .array => |info| elementType(info.child),
         else => T,
@@ -113,7 +121,7 @@ pub fn getArrayRefItemType(comptime Ptr: type) type {
 pub fn getCompArrayLen(comptime T: type) usize {
     return switch (@typeInfo(T)) {
         .array => |info| info.len,
-        else => @compileError("Unsupported type"),
+        else => @compileError("Unsupported type" ++ @typeName(T)),
     };
 }
 

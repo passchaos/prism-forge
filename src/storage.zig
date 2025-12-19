@@ -17,6 +17,22 @@ pub fn Storage(comptime T: type, comptime D: Device) type {
 
         const Self = @This();
 
+        pub fn cat(allocator: std.mem.Allocator, storages: []const Self) !Self {
+            var total_len: usize = 0;
+            for (storages) |storage| {
+                total_len += storage.len();
+            }
+
+            var buf = try allocator.alloc(T, total_len);
+            var offset: usize = 0;
+            for (storages) |storage| {
+                @memcpy(buf[offset .. offset + storage.len()], storage._buf);
+                offset += storage.len();
+            }
+
+            return try Self.initImpl(allocator, buf);
+        }
+
         // generate method
         pub fn arange(allocator: std.mem.Allocator, args: struct {
             start: T = @as(T, 0),
@@ -64,9 +80,45 @@ pub fn Storage(comptime T: type, comptime D: Device) type {
             }
         }
 
-        pub fn full(allocator: std.mem.Allocator, element_count: usize, value: anytype) !Self {
+        pub fn full(allocator: std.mem.Allocator, element_count: usize, value: T) !Self {
             const buf = try allocator.alloc(T, element_count);
             for (buf) |*elem| elem.* = value;
+            return try Self.initImpl(allocator, buf);
+        }
+
+        pub fn rand(allocator: std.mem.Allocator, element_count: usize, low: T, high: T) !Self {
+            if (comptime T != f32 and T != f64) {
+                @compileError("Unsupported type" ++ @typeName(T));
+            }
+
+            const buf = try allocator.alloc(T, element_count);
+
+            var rpng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
+            const rng = rpng.random();
+
+            for (buf) |*elem| {
+                const u = rng.float(T);
+                elem.* = low + (high - low) * u;
+            }
+
+            return try Self.initImpl(allocator, buf);
+        }
+
+        pub fn randNorm(allocator: std.mem.Allocator, element_count: usize, mean_a: T, stddev: T) !Self {
+            if (comptime T != f32 and T != f64) {
+                @compileError("Unsupported type" ++ @typeName(T));
+            }
+
+            const buf = try allocator.alloc(T, element_count);
+
+            var rpng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
+            const rng = rpng.random();
+
+            for (buf) |*elem| {
+                const u = rng.floatNorm(T);
+                elem.* = mean_a + stddev * u;
+            }
+
             return try Self.initImpl(allocator, buf);
         }
 
@@ -213,4 +265,37 @@ test "linspace" {
     std.debug.print("s1: {f} data_slice: {any}\n", .{ s1, s1.dataSlice() });
 
     try std.testing.expect(s1.len() == 10);
+}
+
+test "random" {
+    const allocator = std.testing.allocator;
+    const StorageF32 = Storage(f32, .Cpu);
+
+    const s1 = try StorageF32.rand(allocator, 100, -3.0, 7.0);
+    defer s1.deinit();
+    const s2 = try StorageF32.randNorm(allocator, 100, -3.0, 7.0);
+    defer s2.deinit();
+
+    try std.testing.expect(s1.len() == 100);
+    try std.testing.expect(s2.len() == 100);
+
+    std.debug.print("s1: {f} s2: {f}\n", .{ s1, s2 });
+}
+
+test "cat" {
+    const allocator = std.testing.allocator;
+
+    const StorageF32 = Storage(f32, .Cpu);
+
+    const s1 = try StorageF32.rand(allocator, 10, -3, 3);
+    defer s1.deinit();
+    const s2 = try StorageF32.randNorm(allocator, 20, 3.0, 1.0);
+    defer s2.deinit();
+
+    const sc = try StorageF32.cat(allocator, &.{ s1, s2 });
+    defer sc.deinit();
+
+    try std.testing.expectEqualSlices(f32, sc.dataSlice()[0..s1.len()], s1.dataSlice());
+    try std.testing.expectEqualSlices(f32, sc.dataSlice()[s1.len()..], s2.dataSlice());
+    std.debug.print("s1: {any}\ns2: {any}\nsc: {any}\n", .{ s1.dataSlice(), s2.dataSlice(), sc.dataSlice() });
 }

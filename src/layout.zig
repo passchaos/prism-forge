@@ -4,11 +4,65 @@ const product = utils.product;
 
 pub fn Layout(comptime N: usize) type {
     return struct {
-        _shapes: [N]usize,
-        _strides: [N]usize,
+        _shape: [N]usize,
+        _stride: [N]usize,
         _is_contiguous: bool = true,
 
         const Self = @This();
+
+        pub fn cat(layouts: []const Self, dim: usize) !Self {
+            if (layouts.len == 0) return error.EmptyShapes;
+            var base_shape = layouts[0].shape();
+
+            if (layouts.len == 1) {
+                return Self.init(base_shape);
+            }
+
+            for (layouts[1..]) |shape_i| {
+                for (shape_i.shape(), 0..) |dim_size, i| {
+                    if (i == dim) {
+                        base_shape[i] += dim_size;
+                    } else {
+                        if (dim_size != base_shape[i]) {
+                            return error.IncompatibleShapes;
+                        }
+                    }
+                }
+            }
+
+            return Self.init(base_shape);
+        }
+
+        pub fn stack(layouts: []const Self, dim: usize) !Layout(N + 1) {
+            if (layouts.len == 0) return error.EmptyShapes;
+
+            {
+                const base_shape = layouts[0].shape();
+                for (layouts) |shape_i| {
+                    if (!std.mem.eql(usize, &base_shape, &shape_i.shape())) {
+                        return error.ShapeMustBeEqual;
+                    }
+                }
+            }
+
+            const count = layouts.len;
+            var base_shape = [_]usize{0} ** (N + 1);
+
+            var i: usize = 0;
+            var j: usize = 0;
+            while (i < N + 1) {
+                if (i == dim) {
+                    base_shape[i] = count;
+                    i += 1;
+                }
+                base_shape[i] = layouts[0].shape()[j];
+
+                i += 1;
+                j += 1;
+            }
+
+            return Layout(N + 1).init(base_shape);
+        }
 
         fn checkContiguous(shapes_a: []const usize, strides_a: []const usize) bool {
             var expected_stride: usize = 1;
@@ -38,8 +92,8 @@ pub fn Layout(comptime N: usize) type {
             const is_contiguous = checkContiguous(&shapes_a, &strides_a);
 
             const layout = Self{
-                ._shapes = shapes_a,
-                ._strides = strides_a,
+                ._shape = shapes_a,
+                ._stride = strides_a,
                 ._is_contiguous = is_contiguous,
             };
 
@@ -65,14 +119,14 @@ pub fn Layout(comptime N: usize) type {
         }
 
         pub fn permute(self: *const Self, perm: [N]usize) !Self {
-            var new_shapes = self._shapes;
-            var new_strides = self._strides;
+            var new_shapes = self._shape;
+            var new_strides = self._stride;
 
             for (perm, 0..) |p, i| {
                 if (p >= N) return error.InvalidDim;
 
-                new_shapes[i] = self._shapes[p];
-                new_strides[i] = self._strides[p];
+                new_shapes[i] = self._shape[p];
+                new_strides[i] = self._stride[p];
             }
 
             return Self.initRaw(new_shapes, new_strides);
@@ -102,7 +156,7 @@ pub fn Layout(comptime N: usize) type {
                     new_shapes[i] = 1;
                     i += 1;
                 } else {
-                    new_shapes[i] = self._shapes[j];
+                    new_shapes[i] = self._shape[j];
                     i += 1;
                     j += 1;
                 }
@@ -113,7 +167,7 @@ pub fn Layout(comptime N: usize) type {
 
         pub fn squeeze(self: *const Self, dim: usize) !Layout(N - 1) {
             if (dim > N) return error.InvalidDim;
-            if (self.shapes()[dim] != 1) return error.DimNotOne;
+            if (self.shape()[dim] != 1) return error.DimNotOne;
 
             var new_shapes = [_]usize{0} ** (N - 1);
 
@@ -124,7 +178,7 @@ pub fn Layout(comptime N: usize) type {
                 if (j == dim) {
                     j += 1;
                 } else {
-                    new_shapes[i] = self._shapes[j];
+                    new_shapes[i] = self._shape[j];
                     i += 1;
                     j += 1;
                 }
@@ -134,34 +188,34 @@ pub fn Layout(comptime N: usize) type {
         }
 
         pub fn iter(self: *const Self) ShapeIterator(N) {
-            return ShapeIterator(N).init(self.shapes());
+            return ShapeIterator(N).init(self.shape());
         }
 
         pub fn clone(self: *const Self) Self {
             return Self{
-                ._shapes = self._shapes,
-                ._strides = self._strides,
+                ._shape = self._shape,
+                ._stride = self._stride,
             };
         }
 
         pub fn equal(self: *const Self, other: *const Self) bool {
-            return self._shapes == other._shapes and self._strides == other._strides;
+            return self._shape == other._shape and self._stride == other._stride;
         }
 
         pub fn size(self: *const Self) usize {
-            return product(&self._shapes);
+            return product(&self._shape);
         }
 
         pub fn ndim(self: *const Self) usize {
-            return self._shapes.len;
+            return self._shape.len;
         }
 
-        pub fn shapes(self: *const Self) [N]usize {
-            return self._shapes;
+        pub fn shape(self: *const Self) [N]usize {
+            return self._shape;
         }
 
-        pub fn strides(self: *const Self) [N]usize {
-            return self._strides;
+        pub fn stride(self: *const Self) [N]usize {
+            return self._stride;
         }
 
         pub fn isContiguous(self: *const Self) bool {
@@ -173,10 +227,10 @@ pub fn Layout(comptime N: usize) type {
             writer: *std.Io.Writer,
         ) std.Io.Writer.Error!void {
             try writer.print("Layout {{\n", .{});
-            try writer.print("  shapes: {any},\n", .{self._shapes});
-            try writer.print("  strides: {any},\n", .{self._strides});
+            try writer.print("  shapes: {any},\n", .{self._shape});
+            try writer.print("  strides: {any},\n", .{self._stride});
             try writer.print("  contiguous: {}\n", .{self._is_contiguous});
-            try writer.print("}}\n", .{});
+            try writer.print("}}", .{});
         }
     };
 }
@@ -185,16 +239,16 @@ test "transpose" {
     const Layout3 = Layout(3);
     const layout = Layout3.initRaw([_]usize{ 2, 3, 4 }, [_]usize{ 12, 4, 1 });
     const transposed = try layout.transpose(0, 2);
-    try std.testing.expectEqual(transposed._shapes, [_]usize{ 4, 3, 2 });
-    try std.testing.expectEqual(transposed._strides, [_]usize{ 1, 4, 12 });
+    try std.testing.expectEqual(transposed._shape, [_]usize{ 4, 3, 2 });
+    try std.testing.expectEqual(transposed._stride, [_]usize{ 1, 4, 12 });
 }
 
 test "permute" {
     const Layout3 = Layout(3);
     const layout = Layout3.initRaw([_]usize{ 2, 3, 4 }, [_]usize{ 12, 4, 1 });
     const permuted = try layout.permute([_]usize{ 2, 0, 1 });
-    try std.testing.expectEqual(permuted._shapes, [_]usize{ 4, 2, 3 });
-    try std.testing.expectEqual(permuted._strides, [_]usize{ 1, 12, 4 });
+    try std.testing.expectEqual(permuted._shape, [_]usize{ 4, 2, 3 });
+    try std.testing.expectEqual(permuted._stride, [_]usize{ 1, 12, 4 });
 }
 
 test "reshape" {
@@ -203,8 +257,8 @@ test "reshape" {
 
     try std.testing.expectError(error.InvalidShape, layout.reshape([_]usize{ 2, 6 }));
     const reshaped = try layout.reshape([_]usize{ 6, 4 });
-    try std.testing.expectEqual(reshaped._shapes, [_]usize{ 6, 4 });
-    try std.testing.expectEqual(reshaped._strides, [_]usize{ 4, 1 });
+    try std.testing.expectEqual(reshaped._shape, [_]usize{ 6, 4 });
+    try std.testing.expectEqual(reshaped._stride, [_]usize{ 4, 1 });
 }
 
 test "unsqueeze" {
@@ -213,13 +267,40 @@ test "unsqueeze" {
 
     std.debug.print("layout: {f}\n", .{layout});
     const unsqueezed = try layout.unsqueeze(1);
-    try std.testing.expectEqual(unsqueezed._shapes, [_]usize{ 2, 1, 3, 4 });
-    try std.testing.expectEqual(unsqueezed._strides, [_]usize{ 12, 12, 4, 1 });
+    try std.testing.expectEqual(unsqueezed._shape, [_]usize{ 2, 1, 3, 4 });
+    try std.testing.expectEqual(unsqueezed._stride, [_]usize{ 12, 12, 4, 1 });
 
     const squeezed = try unsqueezed.squeeze(1);
-    try std.testing.expectEqual(squeezed._shapes, [_]usize{ 2, 3, 4 });
-    try std.testing.expectEqual(squeezed._strides, [_]usize{ 12, 4, 1 });
+    try std.testing.expectEqual(squeezed._shape, [_]usize{ 2, 3, 4 });
+    try std.testing.expectEqual(squeezed._stride, [_]usize{ 12, 4, 1 });
     std.debug.print("squeezed: {f}\n", .{squeezed});
+}
+
+test "cat or stack" {
+    const Layout3 = Layout(3);
+
+    const l1 = Layout3.init([_]usize{ 2, 3, 4 });
+    const l2 = Layout3.init([_]usize{ 1, 3, 4 });
+    const l3 = Layout3.init([_]usize{ 2, 3, 4 });
+
+    const lc = try Layout3.cat(&.{ l1, l2, l3 }, 0);
+
+    try std.testing.expectError(error.IncompatibleShapes, Layout3.cat(&.{ l1, l2, l3 }, 2));
+
+    try std.testing.expectError(error.ShapeMustBeEqual, Layout3.stack(&.{ l1, l2, l3 }, 2));
+
+    const ls = try Layout3.stack(&.{ l1, l3 }, 2);
+    try std.testing.expectEqualDeep(ls.shape(), [4]usize{ 2, 3, 2, 4 });
+    std.debug.print("lc: {f} ls: {f}\n", .{ lc, ls });
+
+    // std.debug.print("layout: {f}\n", .{layout});
+    // const stacked = try layout.stack(1, layout);
+    // try std.testing.expectEqual(stacked._shape, [_]usize{ 2, 2, 3, 4 });
+    // try std.testing.expectEqual(stacked._stride, [_]usize{ 12, 12, 4, 1 });
+
+    // const cat = try layout.cat(1, layout);
+    // try std.testing.expectEqual(cat._shape, [_]usize{ 2, 6, 4 });
+    // try std.testing.expectEqual(cat._stride, [_]usize{ 12, 4, 1 });
 }
 
 pub fn ShapeIterator(comptime N: usize) type {

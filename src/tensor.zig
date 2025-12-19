@@ -14,16 +14,17 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
     T: type = f32,
     comptime D: Device = .Cpu,
 }) type {
-    const Storage = storage_t.Storage(storage_args.T, storage_args.D);
-
-    const T = storage_args.T;
-    const Layout = layout_t.Layout(N);
     // const ShapeIterator = layout_t.ShapeIterator(N);
 
     return struct {
+        const StorageArgs = storage_args;
+        const Storage = storage_t.Storage(storage_args.T, storage_args.D);
+
+        const T = storage_args.T;
+        const D = storage_args.D;
+        const Layout = layout_t.Layout(N);
+
         const DIMS = N;
-        const DATA_TYPE = T;
-        const DEVICE = storage_args.D;
 
         const Self = @This();
 
@@ -32,98 +33,8 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
         layout: Layout,
         _storage_offset: usize = 0,
 
-        // pub fn scalarItem(self: *const Self) !Scalar {
-        //     if (self.ndim() == 0) {
-        //         return self.getWithIndices(&.{});
-        //     } else {
-        //         return error.ShapeMismatch;
-        //     }
-        // }
-
-        // pub fn scalarItemComp(self: *const Self, comptime data_type: DataType) !data_type.toTypeComp() {
-        //     if (self.ndim() == 0) {
-        //         return (try self.getWithIndicesCompType(data_type, &.{})).*;
-        //     } else {
-        //         return error.ShapeMismatch;
-        //     }
-        // }
-
-        // // scope method
-        // pub fn cat(allocator: std.mem.Allocator, tensors: []const Self, dim: usize) !Self {
-        //     const dtype_i = tensors[0].dtype();
-        //     const rank = tensors[0].ndim();
-
-        //     for (tensors) |t| {
-        //         if (t.dtype() != dtype_i or t.ndim() != rank) return error.ShapeMismatch;
-        //     }
-
-        //     var new_shape = try allocator.alloc(usize, rank);
-        //     for (0..rank) |i| {
-        //         if (i == dim) {
-        //             var sum_i: usize = 0;
-        //             for (tensors) |t| {
-        //                 sum_i += t.shapes()[i];
-        //             }
-        //             new_shape[i] = sum_i;
-        //         } else {
-        //             new_shape[i] = tensors[0].shapes()[i];
-        //         }
-        //     }
-
-        //     var total: usize = 1;
-        //     for (new_shape) |s| total *= s;
-
-        //     const elem_size = dtype_i.dtypeSize();
-        //     var new_buf = try allocator.alloc(u8, total * elem_size);
-
-        //     var offset: usize = 0;
-        //     for (tensors) |t| {
-        //         const bytes = t.rawDataSlice();
-        //         @memcpy(new_buf[offset .. offset + bytes.len], bytes);
-        //         offset += bytes.len;
-        //     }
-
-        //     return Self.fromDataRaw(
-        //         allocator,
-        //         dtype_i,
-        //         new_shape,
-        //         Storage.Device.Cpu,
-        //         @ptrCast(new_buf),
-        //         new_buf.len,
-        //     );
-        // }
-
-        // pub fn stack(allocator: std.mem.Allocator, tensors: []const Self, dim: usize) !Self {
-        //     const dtype_i = tensors[0].dtype();
-        //     const rank = tensors[0].ndim();
-
-        //     for (tensors) |t| {
-        //         if (t.dtype() != dtype_i or !std.mem.eql(usize, t.shapes(), tensors[0].shapes())) return error.ShapeMismatch;
-        //     }
-
-        //     var new_shape = try allocator.alloc(usize, rank + 1);
-        //     for (0..dim) |i| new_shape[i] = tensors[0].shapes()[i];
-        //     new_shape[dim] = tensors.len;
-        //     for (dim..rank) |i| new_shape[i + 1] = tensors[0].shapes()[i];
-
-        //     var total: usize = 1;
-        //     for (new_shape) |s| total *= s;
-
-        //     const elem_size = dtype_i.dtypeSize();
-        //     var new_buf = try allocator.alloc(u8, total * elem_size);
-
-        //     var offset: usize = 0;
-        //     for (tensors) |t| {
-        //         const bytes = t.rawDataSlice();
-        //         std.debug.print("len: {}\n", .{bytes.len});
-        //         @memcpy(new_buf[offset .. offset + bytes.len], bytes);
-        //         offset += bytes.len;
-        //     }
-
-        //     return Self.fromDataRaw(allocator, dtype_i, new_shape, Storage.Device.Cpu, @ptrCast(new_buf), new_buf.len);
-        // }
-
-        // // divide
+        // scope method
+        // divide
         // pub fn split(self: *const Self, chunk_size: usize, dim: usize) ![]const Self {
         //     if (dim >= self.ndim()) return error.InvalidDim;
 
@@ -1263,14 +1174,14 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
         // }
 
         pub fn get(self: *const Self, indices: [N]usize) !T {
-            var idx = try utils.indices_to_flat(&indices, &self.shapes(), &self.strides());
+            var idx = try utils.indices_to_flat(&indices, &self.shape(), &self.stride());
             idx += self._storage_offset;
 
             return self.storage.dataSlice()[idx];
         }
 
         pub fn set(self: *Self, indices: [N]usize, value: T) !void {
-            var idx = try utils.indices_to_flat(indices, self.shapes(), self.strides());
+            var idx = try utils.indices_to_flat(indices, self.shape(), self.stride());
             idx += self._storage_offset;
 
             self.storage.dataSlice()[idx] = value;
@@ -1345,15 +1256,6 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             self.storage.deinit();
         }
 
-        // fn getDataWithIdx(self: *const Self, dtype_i: DataType, idx: usize) Scalar {
-        //     return switch (dtype_i) {
-        //         .f16 => Scalar{ .f16 = self.dataSlice(DataType.f16.toType())[idx] },
-        //         .f32 => Scalar{ .f32 = self.dataSlice(DataType.f32.toType())[idx] },
-        //         .i32 => Scalar{ .i32 = self.dataSlice(DataType.i32.toType())[idx] },
-        //         .u32 => Scalar{ .u32 = self.dataSlice(DataType.u32.toType())[idx] },
-        //     };
-        // }
-
         pub fn size(self: *const Self) usize {
             return self.layout.size();
         }
@@ -1362,12 +1264,12 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             return self.layout.ndim();
         }
 
-        pub fn shapes(self: *const Self) [N]usize {
-            return self.layout.shapes();
+        pub fn shape(self: *const Self) [N]usize {
+            return self.layout.shape();
         }
 
-        pub fn strides(self: *const Self) [N]usize {
-            return self.layout.strides();
+        pub fn stride(self: *const Self) [N]usize {
+            return self.layout.stride();
         }
 
         pub fn equal(self: *const Self, other: *const Self) bool {
@@ -1404,9 +1306,10 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
         ) std.Io.Writer.Error!void {
             try writer.print(
                 \\Tensor{{
+                \\.DType = {}
                 \\.{f}
                 \\.Data =
-            , .{self.layout});
+            , .{ T, self.layout });
 
             _ = try writer.write("\n");
 
@@ -1433,7 +1336,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
         fn fmtNdSlice(self: *const Self, writer: *std.Io.Writer, depth: usize, base_indices: [N]usize) anyerror!void {
             const pad_show_count = 4;
 
-            const current_dim_size = self.shapes()[depth];
+            const current_dim_size = self.shape()[depth];
             const dims = self.ndim();
 
             _ = try writer.write("[");
@@ -1511,7 +1414,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             const pad_show_count = 5;
 
             const max_items: usize = if (base_indices.len == 0) 10 else 2 * pad_show_count;
-            const current_dim_size = self.shapes()[depth];
+            const current_dim_size = self.shape()[depth];
 
             const line_size = 18;
 
@@ -1562,8 +1465,12 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
     };
 }
 
-pub fn full(allocator: std.mem.Allocator, comptime N: usize, shapes_a: [N]usize, value: anytype) !Tensor(N, .{ .T = @TypeOf(value) }) {
+pub fn full(allocator: std.mem.Allocator, shapes_a: anytype, value: anytype) !Tensor(
+    utils.getCompArrayLen(@TypeOf(shapes_a)),
+    .{ .T = @TypeOf(value) },
+) {
     const T = @TypeOf(value);
+    const N = comptime shapes_a.len;
 
     const Layout = layout_t.Layout(N);
     const Storage = storage_t.Storage(T, .Cpu);
@@ -1577,140 +1484,163 @@ pub fn full(allocator: std.mem.Allocator, comptime N: usize, shapes_a: [N]usize,
     return TensorI.fromDataImpl(layout, storage, 0);
 }
 
-pub fn fullLike(allocator: std.mem.Allocator, tensor: anytype, value: @TypeOf(tensor).DATA_TYPE) !@TypeOf(tensor) {
-    comptime {
-        if (!@hasDecl(@TypeOf(tensor), "DIMS")) @compileError("expect a struct has DIMS info");
-    }
-    return try full(allocator, @TypeOf(tensor).DIMS, tensor.shapes(), value);
+pub fn fullLike(allocator: std.mem.Allocator, tensor: anytype, value: @TypeOf(tensor).T) !@TypeOf(tensor) {
+    return try full(allocator, tensor.shape(), value);
 }
 
-pub fn zeros(allocator: std.mem.Allocator, comptime N: usize, shapes_a: [N]usize) !Tensor(N, .{}) {
+pub fn zeros(allocator: std.mem.Allocator, shapes_a: anytype) !Tensor(
+    utils.getCompArrayLen(@TypeOf(shapes_a)),
+    .{},
+) {
     const value: f32 = 0;
-    return try full(allocator, N, shapes_a, value);
+
+    return try full(allocator, shapes_a, value);
 }
 
-// pub fn zerosLike(allocator: std.mem.Allocator, tensor: Self) !Self {
-//     const value: f32 = 0;
-//     return try Self.fullLike(allocator, tensor, value);
-// }
+pub fn zerosLike(allocator: std.mem.Allocator, tensor: anytype) !@TypeOf(tensor) {
+    return try zeros(allocator, tensor.shapes());
+}
 
-// pub fn ones(allocator: std.mem.Allocator, shapes_a: []const usize) !Self {
-//     const value: f32 = 1.0;
-//     return try Self.full(allocator, shapes_a, value);
-// }
+pub fn ones(allocator: std.mem.Allocator, shapes_a: anytype) !Tensor(
+    utils.getCompArrayLen(@TypeOf(shapes_a)),
+    .{},
+) {
+    const value: f32 = 1.0;
+    return try full(allocator, shapes_a, value);
+}
 
-// pub fn onesLike(allocator: std.mem.Allocator, tensor: Self) !Self {
-//     const value: f32 = 1.0;
-//     return try Self.fullLike(allocator, tensor, value);
-// }
+pub fn onesLike(allocator: std.mem.Allocator, tensor: anytype) !@TypeOf(tensor) {
+    return try ones(allocator, tensor.shapes());
+}
 
-// pub fn eye(allocator: std.mem.Allocator, comptime data_type: DataType, row: usize, column: usize) !Self {
-//     var tensor = try Self.zeros(allocator, &.{ row, column });
+pub fn eye(allocator: std.mem.Allocator, row: usize, column: usize, value: anytype) !Tensor(
+    2,
+    .{ .T = @TypeOf(value) },
+) {
+    var tensor = try zeros(allocator, [2]usize{ row, column });
 
-//     for (0..@min(row, column)) |i| {
-//         const data_ref = try tensor.getWithIndicesCompType(data_type, &.{ i, i });
-//         data_ref.* = @as(data_type.toTypeComp(), 1);
-//     }
+    for (0..@min(row, column)) |i| {
+        tensor.set([2]usize{ i, i }, value);
+    }
 
-//     return tensor;
-// }
+    return tensor;
+}
 
-// pub fn rand(allocator: std.mem.Allocator, comptime T: type, shapes_a: []const usize, low: T, high: T) !Self {
-//     if (comptime T != f32 and T != f64 and T != comptime_float) {
-//         @compileError("Unsupported type" ++ @typeName(T));
-//     }
-//     const data_type = DataType.typeToDataType(T);
+pub fn rand(allocator: std.mem.Allocator, comptime N: usize, shapes_a: [N]usize, low: anytype, high: @TypeOf(low)) !Tensor(
+    N,
+    .{ .T = utils.floatBasicType(@TypeOf(low)) },
+) {
+    const T = comptime switch (@typeInfo(@TypeOf(low))) {
+        inline .float => |DT| DT,
+        inline .comptime_float => f64,
+        inline else => @compileError("only support f32 and f64"),
+    };
 
-//     const total = utils.product(shapes_a);
+    const layout = layout_t.Layout(N).init(shapes_a);
+    const size = layout.size();
 
-//     const buf = try allocator.alloc(T, total);
+    const storage = try storage_t.Storage(T, .Cpu).rand(allocator, size, low, high);
+    return try Tensor(N, .{ .T = T }).fromDataImpl(layout, storage, 0);
+}
 
-//     var rpng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
-//     const rng = rpng.random();
+pub fn randNorm(allocator: std.mem.Allocator, comptime N: usize, shapes_a: [N]usize, mean_a: anytype, stddev: @TypeOf(mean_a)) !Tensor(
+    N,
+    .{ .T = utils.floatBasicType(@TypeOf(mean_a)) },
+) {
+    const T = utils.floatBasicType(@TypeOf(mean_a));
 
-//     for (buf) |*x| {
-//         const u = rng.float(T);
-//         x.* = low + (high - low) * u;
-//     }
+    const layout = layout_t.Layout(N).init(shapes_a);
+    const size = layout.size();
 
-//     return Self{
-//         .allocator = allocator,
-//         .storage = Storage.init(allocator, Storage.Device.Cpu, @as([*]u8, @ptrCast(buf.ptr)), total * data_type.dtypeSize()),
-//         .layout = try Layout.init(allocator, data_type, shapes_a),
-//     };
-// }
+    const storage = try storage_t.Storage(T, .Cpu).randNorm(allocator, size, mean_a, stddev);
+    return try Tensor(N, .{ .T = T }).fromDataImpl(layout, storage, 0);
+}
 
-// pub fn randNorm(allocator: std.mem.Allocator, comptime T: type, shapes_a: []const usize, mean_a: T, stddev: T) !Self {
-//     if (comptime T != f32 and T != f64 and T != comptime_float) {
-//         @compileError("Unsupported type" ++ @typeName(T));
-//     }
+pub fn cat(allocator: std.mem.Allocator, tensors: anytype, dim: usize) !utils.elementType(@TypeOf(tensors)) {
+    const TS = utils.getArrayRefItemType(@TypeOf(tensors));
 
-//     const data_type = DataType.typeToDataType(T);
-//     const total = utils.product(shapes_a);
+    var layouts = try allocator.alloc(TS.Layout, tensors.len);
+    defer allocator.free(layouts);
+    var storages = try allocator.alloc(TS.Storage, tensors.len);
+    defer allocator.free(storages);
 
-//     const buf = try allocator.alloc(T, total);
+    for (tensors, 0..) |t, i| {
+        layouts[i] = t.layout;
+        storages[i] = t.storage;
+    }
 
-//     var rpng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
-//     const rng = rpng.random();
+    const layout = try TS.Layout.cat(layouts, dim);
+    const storage = try TS.Storage.cat(allocator, storages);
 
-//     for (buf) |*x| {
-//         const u = rng.floatNorm(T);
-//         x.* = mean_a + stddev * u;
-//     }
+    return try TS.fromDataImpl(layout, storage, 0);
+}
 
-//     return Self{
-//         .allocator = allocator,
-//         .storage = Storage.init(allocator, Storage.Device.Cpu, @as([*]u8, @ptrCast(buf.ptr)), total * data_type.dtypeSize()),
-//         .layout = try Layout.init(allocator, data_type, shapes_a),
-//     };
-// }
+pub fn stack(allocator: std.mem.Allocator, tensors: anytype, dim: usize) !utils.elementType(@TypeOf(tensors)) {
+    const TS = utils.elementType(@TypeOf(tensors));
+
+    var layouts = try allocator.alloc(TS.Layout, tensors.len);
+    defer allocator.free(layouts);
+    var storages = try allocator.alloc(TS.Storage, tensors.len);
+    defer allocator.free(storages);
+
+    for (tensors, 0..) |t, i| {
+        layouts[i] = t.layout;
+        storages[i] = t.storage;
+    }
+
+    const layout = try TS.Layout.stack(layouts, dim);
+    const storage = try TS.Storage.cat(allocator, storages);
+
+    return try Tensor(TS.DIMS + 1, TS.StorageArgs).fromDataImpl(layout, storage, 0);
+}
 
 test "tensor create" {
     const allocator = std.testing.allocator;
 
     const Tensor1 = Tensor(1, .{ .T = f32 });
 
-    const t1 = try Tensor1.arange(allocator, .{ .start = 0, .step = 2, .end = 10 });
-    defer t1.deinit();
-    std.debug.print("t1: {f}\n", .{t1});
-
-    const t2 = try Tensor1.linspace(allocator, .{ .start = 7, .end = 30, .steps = 5 });
-    defer t2.deinit();
-    std.debug.print("t2: {f}\n", .{t2});
-
-    const t3 = try full(allocator, 3, [3]usize{ 10, 13, 15 }, @as(f32, 10.2));
-    defer t3.deinit();
-    std.debug.print("t3: {f}\n", .{t3});
-
-    const t4 = try fullLike(allocator, t3, @as(f32, 10.2));
-    defer t4.deinit();
-    std.debug.print("t4: {f}\n", .{t4});
-
-    const T = @TypeOf(t3);
-    const ti = @typeInfo(T);
-
-    switch (ti) {
-        .@"struct" => |s| {
-            // for (s.fields) |field| {
-            //     std.debug.print("field: {s}\n", .{field.name});
-            // }
-            // std.debug.print("fields: {}\n", .{s.fields});
-            std.debug.print("s1: {any}\n", .{T.DEVICE});
-            std.debug.print("s: {s}\n", .{@typeName(@TypeOf(s))});
-        },
-        // {
-        //     std.debug.print("type info: {s}\n", .{@typeName(@TypeOf(t3))});
-        // },
-        else => {
-            std.debug.print("type info: {s}\n", .{@typeName(@TypeOf(t3))});
-        },
+    {
+        const t1 = try Tensor1.arange(allocator, .{ .start = 0, .step = 2, .end = 10 });
+        defer t1.deinit();
+        std.debug.print("t1: {f}\n", .{t1});
     }
 
-    std.debug.print("type info: {s}\n", .{@typeName(@TypeOf(t3))});
+    {
+        const t2 = try Tensor1.linspace(allocator, .{ .start = 7, .end = 30, .steps = 5 });
+        defer t2.deinit();
+        std.debug.print("t2: {f}\n", .{t2});
+    }
 
-    // const t4 = try zeros(allocator, 3, [3]usize{ 2, 3, 5 });
-    // defer t4.deinit();
-    // std.debug.print("t4: {f}\n", .{t4});
+    {
+        var a = [2]usize{ 10, 13 };
+        const t3 = try full(allocator, a, @as(f32, 10.2));
+        defer t3.deinit();
+        try std.testing.expect(t3.ndim() == 2);
+        try std.testing.expectEqualDeep(a, t3.shape());
+        a[0] = 11;
+        std.debug.print("t3: {f}\n", .{t3});
+
+        const t4 = try fullLike(allocator, t3, 10.2);
+        try std.testing.expect(@TypeOf(t4).T == f32);
+        try std.testing.expectEqualDeep(t4.shape(), t3.shape());
+        defer t4.deinit();
+        std.debug.print("t4: {f}\n", .{t4});
+    }
+
+    {
+        const t5 = try zeros(allocator, [3]usize{ 2, 3, 5 });
+        defer t5.deinit();
+        std.debug.print("t5: {f}\n", .{t5});
+    }
+
+    {
+        const t1 = try rand(allocator, 3, [3]usize{ 1, 2, 3 }, 0.0, 2.0);
+        const t2 = try rand(allocator, 3, [3]usize{ 2, 2, 3 }, 3.0, 7.0);
+        const t3 = try randNorm(allocator, 3, [3]usize{ 2, 2, 3 }, 0.0, 2.0);
+
+        const tc = try cat(allocator, &.{ t1, t2, t3 }, 0);
+        std.debug.print("tc: {f}\n", .{tc});
+    }
 
     // const t1 = arange(allocator, 10, .{});
     // std.debug.print("t1: {f}\n", .{t1});
