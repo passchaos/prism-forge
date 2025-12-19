@@ -106,15 +106,15 @@ fn dimsHelper(comptime T: type) []const usize {
 }
 
 pub fn elementType(comptime T: type) type {
-    @compileLog("type: " ++ @typeName(T));
+    // @compileLog("type: " ++ @typeName(T));
     return switch (@typeInfo(T)) {
         .array => |info| elementType(info.child),
         else => T,
     };
 }
 
-pub fn getArrayRefItemType(comptime Ptr: type) type {
-    const Deref = @typeInfo(Ptr).pointer.child;
+pub fn getSliceItemType(comptime Slice: type) type {
+    const Deref = @typeInfo(Slice).pointer.child;
     return elementType(Deref);
 }
 

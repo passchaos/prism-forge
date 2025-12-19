@@ -1556,8 +1556,8 @@ pub fn randNorm(allocator: std.mem.Allocator, comptime N: usize, shapes_a: [N]us
     return try Tensor(N, .{ .T = T }).fromDataImpl(layout, storage, 0);
 }
 
-pub fn cat(allocator: std.mem.Allocator, tensors: anytype, dim: usize) !utils.elementType(@TypeOf(tensors)) {
-    const TS = utils.getArrayRefItemType(@TypeOf(tensors));
+pub fn cat(allocator: std.mem.Allocator, tensors: anytype, dim: usize) !utils.getSliceItemType(@TypeOf(tensors)) {
+    const TS = utils.getSliceItemType(@TypeOf(tensors));
 
     var layouts = try allocator.alloc(TS.Layout, tensors.len);
     defer allocator.free(layouts);
@@ -1575,8 +1575,11 @@ pub fn cat(allocator: std.mem.Allocator, tensors: anytype, dim: usize) !utils.el
     return try TS.fromDataImpl(layout, storage, 0);
 }
 
-pub fn stack(allocator: std.mem.Allocator, tensors: anytype, dim: usize) !utils.elementType(@TypeOf(tensors)) {
-    const TS = utils.elementType(@TypeOf(tensors));
+pub fn stack(allocator: std.mem.Allocator, tensors: anytype, dim: usize) !Tensor(
+    utils.getSliceItemType(@TypeOf(tensors)).DIMS + 1,
+    utils.getSliceItemType(@TypeOf(tensors)).StorageArgs,
+) {
+    const TS = utils.getSliceItemType(@TypeOf(tensors));
 
     var layouts = try allocator.alloc(TS.Layout, tensors.len);
     defer allocator.free(layouts);
@@ -1635,11 +1638,27 @@ test "tensor create" {
 
     {
         const t1 = try rand(allocator, 3, [3]usize{ 1, 2, 3 }, 0.0, 2.0);
+        defer t1.deinit();
         const t2 = try rand(allocator, 3, [3]usize{ 2, 2, 3 }, 3.0, 7.0);
+        defer t2.deinit();
         const t3 = try randNorm(allocator, 3, [3]usize{ 2, 2, 3 }, 0.0, 2.0);
+        defer t3.deinit();
 
-        const tc = try cat(allocator, &.{ t1, t2, t3 }, 0);
+        const tc = try cat(allocator, &[3]@TypeOf(t1){ t1, t2, t3 }, 0);
+        defer tc.deinit();
+
+        try std.testing.expectEqualDeep(tc.shape(), [3]usize{ 5, 2, 3 });
         std.debug.print("tc: {f}\n", .{tc});
+
+        const meet_err =
+            if (stack(allocator, &[3]@TypeOf(t1){ t1, t2, t3 }, 0)) |_| false else |_| true;
+        try std.testing.expect(meet_err);
+
+        const ts = try stack(allocator, &[2]@TypeOf(t1){ t2, t3 }, 0);
+        defer ts.deinit();
+
+        try std.testing.expectEqualDeep(ts.shape(), [4]usize{ 2, 2, 2, 3 });
+        std.debug.print("ts: {f}\n", .{ts});
     }
 
     // const t1 = arange(allocator, 10, .{});
