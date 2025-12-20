@@ -345,6 +345,7 @@ pub fn computeStrides(comptime N: usize, shape: [N]usize) [N]usize {
 pub fn indexShapeToFlat(comptime N: usize, shape: [N]usize, index: [N]usize) !usize {
     const stride = computeStrides(N, shape);
 
+    std.debug.print("shape: {any} index: {any}\n", .{ shape, index });
     return try indexToFlat(&index, &shape, &stride);
 }
 
@@ -395,7 +396,7 @@ pub fn broadcastShapes(comptime N: usize, comptime BN: usize, orig_shape: [N]usi
     var new_i: isize = @intCast(target_shape.len);
     new_i -= 1;
 
-    while (new_i >= 0) : (new_i -= 1) {
+    while (new_i >= 0) {
         const td = target_shape[@intCast(new_i)];
 
         if (old_i >= 0) {
@@ -406,14 +407,17 @@ pub fn broadcastShapes(comptime N: usize, comptime BN: usize, orig_shape: [N]usi
             if (od == td) {
                 new_shape[@intCast(new_i)] = os;
             } else if (od == 1 and td > 1) {
-                new_shape[@intCast(new_i)] = 0;
+                new_shape[@intCast(new_i)] = td;
             } else {
                 return error.ShapeMismatch;
             }
 
             old_i -= 1;
+            new_i -= 1;
         } else {
-            new_shape[@intCast(new_i)] = 0;
+            new_shape[@intCast(new_i)] = td;
+
+            new_i -= 1;
         }
     }
 
@@ -493,7 +497,7 @@ test "get array len" {
 }
 
 test "broadcast shape" {
-    const orig_shape = [_]usize{ 5, 3 };
+    const orig_shape = [_]usize{ 1, 3 };
     const target_shape = [_]usize{ 5, 3 };
     const broadcasted_shape = try broadcastShapes(
         2,
@@ -501,5 +505,14 @@ test "broadcast shape" {
         orig_shape,
         target_shape,
     );
+    std.debug.print("broadcasted shape: {any}\n", .{broadcasted_shape});
     try std.testing.expectEqualSlices(usize, &broadcasted_shape, &target_shape);
+
+    std.debug.print("begin compatible handle\n", .{});
+    const compatible_broadcasted_shape = try compatibleBroacastShapes(
+        2,
+        orig_shape,
+        target_shape,
+    );
+    try std.testing.expectEqualSlices(usize, &compatible_broadcasted_shape, &target_shape);
 }

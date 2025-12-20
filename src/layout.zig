@@ -15,7 +15,7 @@ pub fn Layout(comptime N: usize) type {
                 return self;
             }
 
-            const new_shape = try utils.broadcastShapes(N, BN, self.shape(), self.stride(), target_shape);
+            const new_shape = try utils.broadcastShapes(N, BN, self.shape(), target_shape);
             return Layout(BN).init(new_shape);
         }
 
@@ -141,8 +141,8 @@ pub fn Layout(comptime N: usize) type {
             return Self.initRaw(new_shapes, new_strides);
         }
 
-        pub fn reshape(self: *const Self, new_shapes: anytype) !Layout(utils.getCompArrayLen(@TypeOf(new_shapes))) {
-            const N1 = comptime utils.getCompArrayLen(@TypeOf(new_shapes));
+        pub fn reshape(self: *const Self, new_shapes: anytype) !Layout(utils.array.getArrayShapeComp(@TypeOf(new_shapes))[0]) {
+            const N1 = comptime utils.array.getArrayShapeComp(@TypeOf(new_shapes))[0];
             const new_size = product(&new_shapes);
 
             if (new_size != self.size()) {

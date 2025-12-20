@@ -158,7 +158,7 @@ pub fn Storage(comptime T: type, comptime D: Device) type {
         }
 
         pub fn deepCopy(self: *const Self) !Self {
-            const new_buf = try self.allocator.alloc(u8, self._bytes_size);
+            const new_buf = try self.allocator.alloc(T, self.len());
             @memcpy(new_buf, self._buf);
 
             const ref_count = try self.allocator.create(RefCount);
@@ -166,7 +166,7 @@ pub fn Storage(comptime T: type, comptime D: Device) type {
 
             return Self{
                 .allocator = self.allocator,
-                ._buf = new_buf.ptr,
+                ._buf = new_buf,
                 ._ref_count = ref_count,
             };
         }

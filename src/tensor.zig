@@ -226,23 +226,24 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
         }
 
         pub fn binaryOp(
-            self: *const Self,
+            self: Self,
             b: Self,
             op_func: fn (x: T, y: T) T,
         ) !Self {
             const target_shape = try utils.compatibleBroacastShapes(
                 N,
-                self.shapes(),
-                b.shapes(),
+                self.shape(),
+                b.shape(),
             );
 
             const a = try self.broadcastTo(target_shape);
+            defer a.deinit();
             const c = try b.broadcastTo(target_shape);
+            defer c.deinit();
 
-            var new_buf = try self.allocator.alloc(T, utils.product(target_shape));
+            var new_buf = try self.s_allocator().alloc(T, utils.product(&target_shape));
 
-            var iter_a = try a.dataIter();
-            defer iter_a.deinit();
+            var iter_a = a.dataIter();
 
             var i: usize = 0;
 
@@ -250,7 +251,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                 const x = try a.getData(idx);
                 const y = try c.getData(idx);
 
-                const flat_idx = try utils.indexShapeToFlat(idx, target_shape);
+                const flat_idx = try utils.indexShapeToFlat(N, target_shape, idx);
 
                 new_buf[flat_idx] = op_func(x, y);
                 i += 1;
@@ -258,8 +259,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
 
             const layout = Layout.init(target_shape);
             const storage = try Storage.initImpl(
-                self.allocator,
-                Storage.Device.Cpu,
+                self.s_allocator(),
                 new_buf,
             );
 
@@ -349,7 +349,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
 
                     return try self.map(T, vv, func);
                 },
-                else => @compileError("unsupported add argument type" ++ @typeName(TV)),
+                else => @compileError("unsupported add argument type" ++ " self: " ++ @typeName(@This()) ++ " input: " ++ @typeName(TV)),
             }
         }
 
@@ -810,20 +810,23 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             return try self.reduceAll(scope.op_func, T, null);
         }
 
-        // pub fn min(self: *const Self, dim: ?usize) !Self {
-        //     switch (self.dtype()) {
-        //         inline .bool => return error.UnsupportedType,
-        //         inline else => |dt| {
-        //             const T = dt.toTypeComp();
-        //             const scope = struct {
-        //                 fn op_func(acc: T, val: T) T {
-        //                     return @min(acc, val);
-        //                 }
-        //             };
-        //             return try self.reduce(dt, dim, std.math.inf(T), scope.op_func, null);
-        //         },
-        //     }
-        // }
+        pub fn min(self: *const Self, dim: usize) !Self {
+            const scope = struct {
+                fn op_func(acc: T, val: T) T {
+                    return @min(acc, val);
+                }
+            };
+            return try self.reduce(dim, scope.op_func, T, null);
+        }
+
+        pub fn minAll(self: *const Self) !Self {
+            const scope = struct {
+                fn op_func(acc: T, val: T) T {
+                    return @min(acc, val);
+                }
+            };
+            return try self.reduceAll(scope.op_func, T, null);
+        }
 
         // pub fn prod(self: *const Self, dim: ?usize) !Self {
         //     switch (self.dtype()) {
@@ -866,7 +869,19 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             return try self.reduceAll(scope.op_func, T, scope.post_func);
         }
 
-        pub fn anyTrue(self: *const Self) !Tensor(0, .{ .T = bool }) {
+        pub fn anyTrue(self: *const Self, dim: usize) !Tensor(N - 1, .{ .T = bool }) {
+            if (T != bool) @compileError("unsupported type " ++ @typeName(T));
+
+            const scope = struct {
+                fn op_func(acc: bool, val: bool) bool {
+                    return acc or val;
+                }
+            };
+
+            return try self.reduce(dim, scope.op_func, bool, null);
+        }
+
+        pub fn anyTrueAll(self: *const Self) !Tensor(0, .{ .T = bool }) {
             if (T != bool) @compileError("unsupported type " ++ @typeName(T));
 
             const scope = struct {
@@ -878,7 +893,19 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             return try self.reduceAll(scope.op_func, bool, null);
         }
 
-        pub fn allTrue(self: *const Self) !Tensor(0, .{ .T = bool }) {
+        pub fn allTrue(self: *const Self, dim: usize) !Tensor(N - 1, .{ .T = bool }) {
+            if (T != bool) @compileError("unsupported type " ++ @typeName(T));
+
+            const scope = struct {
+                fn op_func(acc: bool, val: bool) bool {
+                    return acc and val;
+                }
+            };
+
+            return try self.reduceAll(dim, scope.op_func, bool, null);
+        }
+
+        pub fn allTrueAll(self: *const Self) !Tensor(0, .{ .T = bool }) {
             if (T != bool) @compileError("unsupported type " ++ @typeName(T));
 
             const scope = struct {
@@ -942,7 +969,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
         }
 
         pub fn clone(self: *const Self) !Self {
-            const layout = try self.layout.clone();
+            const layout = self.layout.clone();
             const storage = try self.storage.deepCopy();
 
             return try Self.fromDataImpl(layout, storage, 0);
@@ -972,20 +999,17 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
         }
 
         // attributes
-        pub fn broadcastTo(self: *const Self, target_shape: []const usize) !Self {
-            var t = try self.clone();
-            try t.broadcastTo_(target_shape);
-            return t;
+        pub fn broadcastTo(self: Self, target_shape: anytype) !Self {
+            const new_layout = try self.layout.broadcastTo(N, target_shape);
+            std.debug.print("new_layout: {f}\n", .{new_layout});
+
+            const storage = self.storage.shared();
+
+            return try Self.fromDataImpl(new_layout, storage, self._storage_offset);
         }
 
         pub fn broadcastTo_(self: *Self, target_shape: anytype) !void {
-            const NDIM = comptime utils.array.getArrayNDimComp(@TypeOf(target_shape));
-            if (NDIM != 1) @compileError("only support 1-d array");
-
-            const BN = comptime utils.array.getArrayShapeComp(@TypeOf(target_shape))[0];
-            std.debug.print("BN: {any} target_shape: {any}\n", .{ BN, target_shape });
-
-            const new_layout = try self.layout.broadcastTo(BN, target_shape);
+            const new_layout = try self.layout.broadcastTo(N, target_shape);
             std.debug.print("new_layout: {f}\n", .{new_layout});
 
             self.layout = new_layout;
@@ -1026,8 +1050,14 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             self.layout = try self.layout.permute(perm);
         }
 
-        pub fn reshape_(self: *const Self, new_shapes: []const usize) !void {
-            self.layout = try self.layout.reshape(new_shapes);
+        pub fn reshape(self: *const Self, new_shapes: anytype) !Tensor(
+            utils.array.getArrayShapeComp(@TypeOf(new_shapes))[0],
+            .{ .T = T },
+        ) {
+            const layout = try self.layout.reshape(new_shapes);
+            const storage = self.storage.shared();
+
+            return try Tensor(utils.array.getArrayShapeComp(@TypeOf(new_shapes))[0], .{ .T = T }).fromDataImpl(layout, storage, self._storage_offset);
         }
 
         pub fn unsqueeze_(self: *const Self, dim: usize) !void {
@@ -1783,106 +1813,35 @@ test "reduce" {
 
         const any_t = try t2.anyTrue();
         defer any_t.deinit();
+        const any_t_all = try t2.allTrueAll();
+        defer any_t_all.deinit();
         const all_t = try t2.allTrue();
         defer all_t.deinit();
+        const all_t_all = try t2.allTrueAll();
+        defer all_t_all.deinit();
 
-        std.debug.print("t2: {f} any_t: {f} all_t: {f}\n", .{ t2, any_t, all_t });
+        std.debug.print("t2: {f} any_t: {f} all_t: {f} all_t_all: {f}\n", .{ t2, any_t, all_t, all_t_all });
     }
 }
 
-// test "binary op" {
-//     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-//     defer _ = gpa.deinit();
+test "binary op" {
+    const allocator = std.testing.allocator;
 
-//     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
-//     defer arena.deinit();
+    const t1 = try rand(allocator, [_]usize{ 3, 3 }, 10.0, 20.0);
+    defer t1.deinit();
+    var t2 = try arange(allocator, f32, .{ .end = 9 });
+    defer t2.deinit();
 
-//     const allocator = arena.allocator();
+    std.debug.print("t2: {f}\n", .{t2});
 
-//     const t = try Self.arange(allocator, DataType.f32, .{ .end = 10 });
-//     std.debug.print("typ: {any}\n", .{@typeInfo(@TypeOf(&t))});
-// }
+    const t2r = try t2.reshape([_]usize{ 3, 3 });
+    defer t2r.deinit();
 
-// test "iterator" {
-//     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-//     defer _ = gpa.deinit();
+    const t3 = try t1.add(t2r);
+    defer t3.deinit();
 
-//     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
-//     defer arena.deinit();
-
-//     const allocator = arena.allocator();
-
-//     const t = try Self.arange(allocator, DataType.f32, .{ .end = 10 });
-//     const t1 = try t.reshape(&.{ 2, 5 });
-
-//     var iter1 = try t1.dataIter();
-//     while (iter1.next()) |item| {
-//         std.debug.print("item: {any}\n", .{item});
-//     }
-//     // std.debug.print("typ: {any}\n", .{@typeInfo(@TypeOf(&t))});
-
-// }
-
-// test "bool op" {
-//     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-//     defer _ = gpa.deinit();
-
-//     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
-//     defer arena.deinit();
-
-//     const allocator = arena.allocator();
-
-//     const t1 = try Self.rand(allocator, &.{ 2, 3 }, -1.0, 1.0);
-//     std.debug.print("t1: {f}\n", .{t1});
-
-//     const t2 = try t1.eql(0.0);
-//     const t3 = try t1.lt(0.0);
-//     const t4 = try t1.gt(0.0);
-//     std.debug.print("t1: {f} t2: {f} t3: {f} t4: {f}\n", .{ t1, t2, t3, t4 });
-// }
-
-// test "create functions" {
-//     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-//     defer _ = gpa.deinit();
-
-//     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
-//     defer arena.deinit();
-
-//     const allocator = arena.allocator();
-
-//     const t1 = try Self.full(allocator, &.{ 3, 5 }, 10);
-//     const t2 = try Self.linspace(allocator, DataType.f32, .{ .start = -27, .end = 33, .steps = 10 });
-//     const t3 = try Self.eye(allocator, DataType.f32, 4, 5);
-
-//     std.debug.print("t1: {f} t2: {f} t3: {f}\n", .{ t1, t2, t3 });
-// }
-
-// test "activation function" {
-//     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-//     defer _ = gpa.deinit();
-
-//     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
-//     defer arena.deinit();
-
-//     const allocator = arena.allocator();
-
-//     const t1 = try Self.rand(allocator, &.{ 2, 5 }, -1.0, 1.0);
-
-//     var t2 = try t1.clone();
-//     try t2.sigmoid_();
-//     var t3 = try t1.clone();
-//     try t3.relu_();
-//     const t4 = try t1.max(1);
-//     const t5 = try t1.max(0);
-//     std.debug.print("t1: {f} t2: {f} t3: {f} t4: {f} t5: {f}\n", .{ t1, t2, t3, t4, t5 });
-
-//     const arr = [3]f32{ 0.3, 2.9, 4.0 };
-//     const v = try Self.fromShapedData(allocator, &arr);
-//     var v1 = try v.softmax();
-//     const v2 = try v1.sum(null);
-
-//     std.debug.print("v: {f} v1: {f} v2: {f}\n", .{ v, v1, v2 });
-// }
+    // std.debug.print("t1: {f} t2: {f} t3: {f}\n", .{ t1, t2, t3 });
+}
 
 test "masked" {
     const allocator = std.testing.allocator;
