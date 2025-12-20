@@ -46,6 +46,51 @@ pub const array = struct {
             else => |_| return T,
         };
     }
+
+    pub fn removeDim(comptime N: usize, arr: [N]usize, dim: usize) ![N - 1]usize {
+        if (dim >= N) {
+            return error.InvalidDim;
+        }
+
+        var new_arr = [_]usize{0} ** (N - 1);
+        var i: usize = 0;
+        var j: usize = 0;
+
+        while (i < N) {
+            if (i == dim) {
+                i += 1;
+                continue;
+            }
+            new_arr[j] = arr[i];
+            i += 1;
+            j += 1;
+        }
+
+        return new_arr;
+    }
+
+    pub fn insertDim(comptime N: usize, arr: [N]usize, dim: usize, value: usize) ![N + 1]usize {
+        if (dim > N) {
+            return error.InvalidDim;
+        }
+
+        var new_arr = [_]usize{0} ** (N + 1);
+        var i: usize = 0;
+        var j: usize = 0;
+
+        while (i < N + 1) {
+            if (i == dim) {
+                new_arr[i] = value;
+                i += 1;
+                continue;
+            }
+            new_arr[i] = arr[j];
+            i += 1;
+            j += 1;
+        }
+
+        return new_arr;
+    }
 };
 
 pub const tensor = struct {
@@ -263,14 +308,16 @@ pub fn allStatic(comptime dims: ?[]const ?usize) bool {
 pub fn computeArrayShapeStrides(comptime N: usize, shapes: [N]usize) [N]usize {
     var strides = [_]usize{0} ** N;
 
-    var acc: usize = 1;
-    var i: usize = N - 1;
-    while (i != 0) : (i -= 1) {
-        strides[i] = acc;
-        acc *= shapes[i];
-    }
+    if (N > 0) {
+        var acc: usize = 1;
+        var i: usize = N - 1;
+        while (i != 0) : (i -= 1) {
+            strides[i] = acc;
+            acc *= shapes[i];
+        }
 
-    strides[0] = acc;
+        strides[0] = acc;
+    }
 
     return strides;
 }
@@ -296,9 +343,9 @@ pub fn computeStrides(comptime N: usize, shape: [N]usize) [N]usize {
 }
 
 pub fn indexShapeToFlat(comptime N: usize, shape: [N]usize, index: [N]usize) !usize {
-    const stride = try computeStrides(N, shape);
+    const stride = computeStrides(N, shape);
 
-    return try indexToFlat(index, shape, stride);
+    return try indexToFlat(&index, &shape, &stride);
 }
 
 pub fn indexToFlat(indices: []const usize, shape: []const usize, stride_a: []const usize) anyerror!usize {

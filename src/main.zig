@@ -16,7 +16,7 @@ fn matmulDemo(allocator: std.mem.Allocator) !void {
     var t2 = try tensor.randNorm(allocator, [2]usize{ 3000, 3000 }, 0.0, 1.0);
     std.debug.print("t2: {f}\n", .{t2.layout});
 
-    try t2.transpose_();
+    t2.transpose_();
 
     std.debug.print("is contiguous: {}\n", .{t2.isContiguous()});
 
