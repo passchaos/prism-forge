@@ -1,5 +1,53 @@
 const std = @import("std");
 
+pub const array = struct {
+    pub fn getArrayNDimComp(comptime T: type) usize {
+        switch (@typeInfo(T)) {
+            .array => |arr| {
+                const child_dims = comptime dimsHelper(arr.child);
+                return 1 + child_dims.len;
+            },
+            else => return 0,
+        }
+    }
+
+    pub fn getArrayShapeComp(comptime T: type) [getArrayNDimComp(T)]usize {
+        switch (@typeInfo(T)) {
+            .array => return dimsHelper(T),
+            else => @compileError("Unsupported type" ++ @typeName(T)),
+        }
+    }
+
+    pub fn getArrayElementCountComp(comptime T: type) usize {
+        const shape = getArrayShapeComp(T);
+        return product(&shape);
+    }
+
+    pub fn getArrayItemTypeComp(comptime T: type) type {
+        return switch (@typeInfo(T)) {
+            .array => return typeHelper(T),
+            else => @compileError("Unsupported type" ++ @typeName(T)),
+        };
+    }
+
+    fn dimsHelper(comptime T: type) [getArrayNDimComp(T)]usize {
+        switch (@typeInfo(T)) {
+            .array => |arr| {
+                const child_dims = comptime dimsHelper(arr.child);
+                return [_]usize{arr.len} ++ child_dims;
+            },
+            else => return [_]usize{},
+        }
+    }
+
+    fn typeHelper(comptime T: type) type {
+        return switch (@typeInfo(T)) {
+            .array => |arr| return typeHelper(arr.child),
+            else => |_| return T,
+        };
+    }
+};
+
 pub fn approxEqual(comptime T: type, a: T, b: T, relEps: T, absEps: T) bool {
     return std.math.approxEqAbs(T, a, b, absEps) or
         std.math.approxEqRel(T, a, b, relEps);
@@ -87,22 +135,9 @@ pub fn printOptional(writer: anytype, comptime fmt: []const u8, value: anytype) 
     try writer.print(fmt, .{value});
 }
 
-pub fn toArray(comptime slice: []const usize) [slice.len]usize {
-    var result: [slice.len]usize = undefined;
-    inline for (slice, 0..) |dim, i| {
-        result[i] = dim;
-    }
-    return result;
-}
-
-fn dimsHelper(comptime T: type) []const usize {
-    const info = @typeInfo(T);
-
-    if (info == .array) {
-        return &[_]usize{info.array.len} ++ dimsHelper(info.array.child);
-    } else {
-        return &[_]usize{};
-    }
+pub fn getSliceItemType(comptime Slice: type) type {
+    const Deref = @typeInfo(Slice).pointer.child;
+    return elementType(Deref);
 }
 
 pub fn elementType(comptime T: type) type {
@@ -111,35 +146,6 @@ pub fn elementType(comptime T: type) type {
         .array => |info| elementType(info.child),
         else => T,
     };
-}
-
-pub fn getSliceItemType(comptime Slice: type) type {
-    const Deref = @typeInfo(Slice).pointer.child;
-    return elementType(Deref);
-}
-
-pub fn getCompArrayLen(comptime T: type) usize {
-    return switch (@typeInfo(T)) {
-        .array => |info| info.len,
-        else => @compileError("Unsupported type" ++ @typeName(T)),
-    };
-}
-
-pub fn getArrayRefShapes(comptime T: type) []const usize {
-    switch (@typeInfo(T)) {
-        .pointer => |p| switch (p.size) {
-            .one => switch (@typeInfo(p.child)) {
-                .array => return comptime dimsHelper(p.child),
-                .pointer => |pp| switch (pp.size) {
-                    .slice => return comptime dimsHelper(pp.child),
-                    else => @compileError("Unsupported pointer type"),
-                },
-                else => @compileError("support only array pointer"),
-            },
-            else => @compileError("support only array pointer"),
-        },
-        else => @compileError("support only array pointer"),
-    }
 }
 
 fn ElemOf(comptime V: type) type {
@@ -209,29 +215,33 @@ pub fn computeArrayShapeStrides(comptime N: usize, shapes: [N]usize) [N]usize {
     return strides;
 }
 
-pub fn computeStrides(allocator: std.mem.Allocator, dims: []const usize) !std.ArrayList(usize) {
-    const rank = dims.len;
-    var dyn_strides = try std.ArrayList(usize).initCapacity(allocator, rank);
+pub fn computeStrides(comptime N: usize, shape: [N]usize) ![N]usize {
+    var new_stride = [_]usize{0} ** N;
+    const rank = shape.len;
 
     // handle zero-dimensional tensor
     if (rank == 0) {
-        return dyn_strides;
+        return new_stride;
     }
-
-    try dyn_strides.appendNTimes(allocator, 0, rank);
 
     var acc: usize = 1;
     var i: usize = rank - 1;
     while (i != 0) : (i -= 1) {
-        dyn_strides.items[i] = acc;
-        acc *= dims[i];
+        new_stride[i] = acc;
+        acc *= shape[i];
     }
-    dyn_strides.items[0] = acc;
+    new_stride[0] = acc;
 
-    return dyn_strides;
+    return new_stride;
 }
 
-pub fn indices_to_flat(indices: []const usize, shape: []const usize, stride_a: []const usize) anyerror!usize {
+pub fn indexShapeToFlat(comptime N: usize, shape: [N]usize, index: [N]usize) !usize {
+    const stride = try computeStrides(N, shape);
+
+    return try indexToFlat(index, shape, stride);
+}
+
+pub fn indexToFlat(indices: []const usize, shape: []const usize, stride_a: []const usize) anyerror!usize {
     var flat_index: usize = 0;
     for (indices, shape, 0..) |index, dim, idx| {
         if (index >= dim) {
@@ -268,10 +278,11 @@ pub fn cartesianProduct(allocator: std.mem.Allocator, dims: []const usize) !std.
     return result;
 }
 
-pub fn broadcastShapes(allocator: std.mem.Allocator, orig_shape: []const usize, orig_strides: []const usize, target_shape: []const usize) !std.ArrayList(usize) {
+pub fn broadcastShapes(comptime N: usize, comptime BN: usize, orig_shape: [N]usize, orig_stride: [N]usize, target_shape: [BN]usize) ![BN]usize {
     if (orig_shape.len > target_shape.len) return error.ShapeMismatch;
 
-    var new_strides = try allocator.alloc(usize, target_shape.len);
+    var new_stride = [_]usize{0} ** BN;
+
     var old_i: isize = @intCast(orig_shape.len);
     old_i -= 1;
     var new_i: isize = @intCast(target_shape.len);
@@ -283,29 +294,26 @@ pub fn broadcastShapes(allocator: std.mem.Allocator, orig_shape: []const usize, 
         if (old_i >= 0) {
             const od_i: usize = @intCast(old_i);
             const od = orig_shape[od_i];
-            const os = orig_strides[od_i];
+            const os = orig_stride[od_i];
 
             if (od == td) {
-                new_strides[@intCast(new_i)] = os;
+                new_stride[@intCast(new_i)] = os;
             } else if (od == 1 and td > 1) {
-                new_strides[@intCast(new_i)] = 0;
+                new_stride[@intCast(new_i)] = 0;
             } else {
                 return error.ShapeMismatch;
             }
 
             old_i -= 1;
         } else {
-            new_strides[@intCast(new_i)] = 0;
+            new_stride[@intCast(new_i)] = 0;
         }
     }
 
-    var new_strides_i = try std.ArrayList(usize).initCapacity(allocator, target_shape.len);
-    try new_strides_i.appendSlice(allocator, new_strides);
-
-    return new_strides_i;
+    return new_stride;
 }
 
-pub fn compatibleBroacastShapes(allocator: std.mem.Allocator, lhs_shape: []const usize, rhs_shape: []const usize) !std.ArrayList(usize) {
+pub fn compatibleBroacastShapes(comptime N: usize, lhs_shape: [N]usize, rhs_shape: [N]usize) ![N]usize {
     const l_l = lhs_shape.len;
     const r_l = rhs_shape.len;
 
@@ -314,8 +322,8 @@ pub fn compatibleBroacastShapes(allocator: std.mem.Allocator, lhs_shape: []const
     }
 
     const result_len = @max(l_l, r_l);
-    var result = try std.ArrayList(usize).initCapacity(allocator, result_len);
-    try result.appendNTimes(allocator, 0, result_len);
+
+    var result = [_]usize{0} ** result_len;
 
     for (0..result_len) |i| {
         const v = if (l_l > i) blk: {
@@ -323,7 +331,7 @@ pub fn compatibleBroacastShapes(allocator: std.mem.Allocator, lhs_shape: []const
             break :blk v;
         } else rhs_shape[r_l - i - 1];
 
-        result.items[result_len - i - 1] = v;
+        result[result_len - i - 1] = v;
     }
 
     return result;
@@ -345,12 +353,34 @@ test "cartesian product" {
 }
 
 test "get array len" {
-    var array = [_]i32{ 1, 2, 3 };
-    array[2] = 10;
+    const arr = [2][3][4]f32{
+        [3][4]f32{
+            [4]f32{ 1.0, 2.0, 3.0, 4.0 },
+            [4]f32{ 5.0, 6.0, 7.0, 8.0 },
+            [4]f32{ 9.0, 10.0, 11.0, 12.0 },
+        },
+        [3][4]f32{
+            [4]f32{ 13.0, 14.0, 15.0, 16.0 },
+            [4]f32{ 17.0, 18.0, 19.0, 20.0 },
+            [4]f32{ 21.0, 22.0, 23.0, 24.0 },
+        },
+    };
 
-    const len = comptime getCompArrayLen(@TypeOf(array));
+    const ndim = comptime array.getArrayNDimComp(@TypeOf(arr));
+    try std.testing.expectEqual(ndim, 3);
 
-    array[1] = -10;
+    const element_count = comptime array.getArrayElementCountComp(@TypeOf(arr));
+    try std.testing.expectEqual(element_count, 24);
 
-    try std.testing.expectEqual(len, 3);
+    const shape = comptime array.getArrayShapeComp(@TypeOf(arr));
+    const dtype = comptime array.getArrayItemTypeComp(@TypeOf(arr));
+
+    try std.testing.expectEqualSlices(usize, &[3]usize{ 2, 3, 4 }, &shape);
+    try std.testing.expect(if (dtype == f32) true else false);
+
+    std.debug.print("shape: {any} dtype: {}\n", .{ shape, dtype });
+
+    const s: []const f32 = @ptrCast(&arr);
+    try std.testing.expectEqual(s.len, 24);
+    std.debug.print("s: {any} len: {}\n", .{ s, s.len });
 }

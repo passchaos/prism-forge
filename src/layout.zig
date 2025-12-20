@@ -10,6 +10,11 @@ pub fn Layout(comptime N: usize) type {
 
         const Self = @This();
 
+        pub fn broadcastTo(self: *const Self, comptime BN: usize, target_shape: [BN]usize) !Layout(BN) {
+            const new_shape = try utils.broadcastShapes(N, BN, self.shape(), self.stride(), target_shape);
+            return Layout(BN).init(new_shape);
+        }
+
         pub fn cat(layouts: []const Self, dim: usize) !Self {
             if (layouts.len == 0) return error.EmptyShapes;
             var base_shape = layouts[0].shape();
