@@ -10,7 +10,11 @@ pub fn Layout(comptime N: usize) type {
 
         const Self = @This();
 
-        pub fn broadcastTo(self: *const Self, comptime BN: usize, target_shape: [BN]usize) !Layout(BN) {
+        pub fn broadcastTo(self: Self, comptime BN: usize, target_shape: [BN]usize) !Layout(BN) {
+            if (std.mem.eql(usize, &self.shape(), &target_shape)) {
+                return self;
+            }
+
             const new_shape = try utils.broadcastShapes(N, BN, self.shape(), self.stride(), target_shape);
             return Layout(BN).init(new_shape);
         }

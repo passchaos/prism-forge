@@ -48,6 +48,58 @@ pub const array = struct {
     }
 };
 
+pub const tensor = struct {
+    pub fn matmulResultNDimComp(comptime T1: type, comptime T2: type) usize {
+        const DIM1 = T1.DIMS;
+        const DIM2 = T2.DIMS;
+
+        if (DIM1 == 1) {
+            if (DIM2 == 1) {
+                return 1;
+            } else if (DIM2 == 2) {
+                return 1;
+            } else {
+                return DIM2 - 1;
+            }
+        } else if (DIM1 == 2) {
+            if (DIM2 == 1) {
+                return DIM1;
+            } else if (DIM2 == 2) {
+                return DIM1;
+            } else {
+                return @max(DIM1, DIM2);
+            }
+        } else {
+            return @max(DIM1, DIM2);
+        }
+    }
+
+    pub fn matmulResultElementTypeComp(comptime T1: type, comptime T2: type) type {
+        const TE1 = T1.T;
+        const TE2 = T2.T;
+
+        if (TE1 == f32) {
+            if (TE2 == f32) {
+                return f32;
+            } else if (TE2 == f64) {
+                return f64;
+            } else {
+                @compileError("Unsupported matmul type" ++ @typeName(TE2));
+            }
+        } else if (TE1 == f64) {
+            if (TE2 == f32) {
+                return f64;
+            } else if (TE2 == f64) {
+                return f64;
+            } else {
+                @compileError("Unsupported matmul type" ++ @typeName(TE2));
+            }
+        } else {
+            @compileError("Unsupported matmul type" ++ @typeName(TE1));
+        }
+    }
+};
+
 pub fn approxEqual(comptime T: type, a: T, b: T, relEps: T, absEps: T) bool {
     return std.math.approxEqAbs(T, a, b, absEps) or
         std.math.approxEqRel(T, a, b, relEps);
@@ -72,6 +124,14 @@ pub fn isFloat(comptime T: type) bool {
     return switch (@typeInfo(T)) {
         .float => true,
         else => false,
+    };
+}
+
+pub fn numberTypeComp(comptime T: type) type {
+    return comptime switch (@typeInfo(T)) {
+        .comptime_float => f32,
+        .comptime_int => i32,
+        else => T,
     };
 }
 
@@ -215,7 +275,7 @@ pub fn computeArrayShapeStrides(comptime N: usize, shapes: [N]usize) [N]usize {
     return strides;
 }
 
-pub fn computeStrides(comptime N: usize, shape: [N]usize) ![N]usize {
+pub fn computeStrides(comptime N: usize, shape: [N]usize) [N]usize {
     var new_stride = [_]usize{0} ** N;
     const rank = shape.len;
 
@@ -278,10 +338,10 @@ pub fn cartesianProduct(allocator: std.mem.Allocator, dims: []const usize) !std.
     return result;
 }
 
-pub fn broadcastShapes(comptime N: usize, comptime BN: usize, orig_shape: [N]usize, orig_stride: [N]usize, target_shape: [BN]usize) ![BN]usize {
+pub fn broadcastShapes(comptime N: usize, comptime BN: usize, orig_shape: [N]usize, target_shape: [BN]usize) ![BN]usize {
     if (orig_shape.len > target_shape.len) return error.ShapeMismatch;
 
-    var new_stride = [_]usize{0} ** BN;
+    var new_shape = [_]usize{0} ** BN;
 
     var old_i: isize = @intCast(orig_shape.len);
     old_i -= 1;
@@ -294,23 +354,23 @@ pub fn broadcastShapes(comptime N: usize, comptime BN: usize, orig_shape: [N]usi
         if (old_i >= 0) {
             const od_i: usize = @intCast(old_i);
             const od = orig_shape[od_i];
-            const os = orig_stride[od_i];
+            const os = orig_shape[od_i];
 
             if (od == td) {
-                new_stride[@intCast(new_i)] = os;
+                new_shape[@intCast(new_i)] = os;
             } else if (od == 1 and td > 1) {
-                new_stride[@intCast(new_i)] = 0;
+                new_shape[@intCast(new_i)] = 0;
             } else {
                 return error.ShapeMismatch;
             }
 
             old_i -= 1;
         } else {
-            new_stride[@intCast(new_i)] = 0;
+            new_shape[@intCast(new_i)] = 0;
         }
     }
 
-    return new_stride;
+    return new_shape;
 }
 
 pub fn compatibleBroacastShapes(comptime N: usize, lhs_shape: [N]usize, rhs_shape: [N]usize) ![N]usize {
@@ -383,4 +443,16 @@ test "get array len" {
     const s: []const f32 = @ptrCast(&arr);
     try std.testing.expectEqual(s.len, 24);
     std.debug.print("s: {any} len: {}\n", .{ s, s.len });
+}
+
+test "broadcast shape" {
+    const orig_shape = [_]usize{ 5, 3 };
+    const target_shape = [_]usize{ 5, 3 };
+    const broadcasted_shape = try broadcastShapes(
+        2,
+        2,
+        orig_shape,
+        target_shape,
+    );
+    try std.testing.expectEqualSlices(usize, &broadcasted_shape, &target_shape);
 }
