@@ -6,6 +6,26 @@ const plot = @import("plot.zig");
 const matmul = @import("matmul.zig");
 const basic = @import("nn/basic.zig");
 
+pub fn logFn(
+    comptime level: std.log.Level,
+    comptime scope: @TypeOf(.enum_literal),
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    _ = scope;
+
+    const src = @src();
+    std.debug.print("{s}:{d} [{s}] " ++ format ++ "\n", .{
+        src.file, src.line, @tagName(level),
+    } ++ args);
+    // std.log.defaultLog(level, scope, format, args);
+}
+
+pub const std_options: std.Options = .{
+    .log_level = .debug,
+    .logFn = logFn,
+};
+
 pub fn isStruct(comptime T: type) bool {
     return @typeInfo(T) == .@"struct";
 }
@@ -81,12 +101,15 @@ fn function2(
 test "differential" {
     const allocator = std.testing.allocator;
 
+    std.testing.log_level = .debug;
+
     const arr = try tensor.fromArray(allocator, [_]f32{ 3.0, 4.0 });
     defer arr.deinit();
 
     const v1 = try basic.numericalGradient(allocator, 1, function2, arr);
     defer v1.deinit();
 
+    std.log.info("different", .{});
     std.debug.print("v1: {f}\n", .{v1});
 
     var init_x = try tensor.fromArray(allocator, [_]f32{ -3.0, 4.0 });
@@ -145,5 +168,6 @@ test "simple net" {
     defer t.deinit();
 
     const loss = try net.loss(x, t);
+    std.log.info("hahah", .{});
     std.debug.print("loss: {}\n", .{loss});
 }

@@ -141,13 +141,7 @@ pub fn build(b: *std.Build) void {
     // Creates an executable that will run `test` blocks from the provided module.
     // Here `mod` needs to define a target, which is why earlier we made sure to
     // set the releative field.
-    const test_filters = b.option(
-        []const []const u8,
-        "test-filter",
-        "Filter test cases",
-    ) orelse &[0][]const u8{};
     const mod_tests = b.addTest(.{
-        .filters = test_filters,
         .root_module = mod,
     });
 
@@ -157,6 +151,12 @@ pub fn build(b: *std.Build) void {
     // Creates an executable that will run `test` blocks from the executable's
     // root module. Note that test executables only test one module at a time,
     // hence why we have to create two separate ones.
+
+    const test_filters = b.option(
+        []const []const u8,
+        "test-filter",
+        "Filter test cases",
+    ) orelse &[0][]const u8{};
     const exe_tests = b.addTest(.{
         .filters = test_filters,
         .root_module = exe.root_module,
