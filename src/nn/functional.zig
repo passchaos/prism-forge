@@ -1,42 +1,56 @@
 const std = @import("std");
 
-const Tensor = @import("../Tensor.zig");
-const dtype = @import("../dtype.zig");
-const DataType = dtype.DataType;
+const tensor = @import("../tensor.zig");
 const utils = @import("../utils.zig");
-const ShapeIterator = @import("../Layout.zig").ShapeIterator;
 
 // loss
-pub fn mseLoss(self: Tensor, other: Tensor) !Tensor {
-    var a = try self.sub(other);
-    try a.powi_(2);
+pub fn mseLoss(
+    comptime N: usize,
+    comptime T: type,
+    lt: tensor.Tensor(N, .{ .T = T }),
+    rt: tensor.Tensor(N, .{ .T = T }),
+) !tensor.Tensor(0, .{ .T = T }) {
+    var a = try lt.sub(rt);
+    defer a.deinit();
+    a.powi_(2);
 
-    return try a.sum(null);
+    var res = try a.sumAll();
+    try res.div_(2);
+
+    return res;
 }
 
-pub fn crossEntropy(self: Tensor, other: Tensor) !Tensor {
-    switch (self.dtype()) {
-        inline .f32 => |dt| {
+pub fn crossEntropy(
+    comptime N: usize,
+    comptime T: type,
+    pt: tensor.Tensor(N, .{ .T = T }),
+    lt: tensor.Tensor(N, .{ .T = T }),
+) !tensor.Tensor(0, .{ .T = T }) {
+    switch (@typeInfo(T)) {
+        .float => |_| {
+            const batch_size = switch (N) {
+                1 => 1,
+                2 => pt.shape()[0],
+                inline else => @compileError("unsuported dimension"),
+            };
+
+            var a = pt;
+
             const scope = struct {
-                fn call(v: dt.toTypeComp(), _: void) dt.toTypeComp() {
-                    return -@log(v + 0.0001);
+                fn call(v: T, _: void) T {
+                    return -@log(v + 0.000001);
                 }
             };
 
-            const a = try self.map(dt, dt, void{}, scope.call);
+            a.map_(void{}, scope.call);
 
-            const a1 = try a.mul(other);
-            var value = try a1.sum(null);
+            try a.mul_(lt);
 
-            const batch_size = switch (self.ndim()) {
-                1 => 1,
-                2 => self.shapes()[0],
-                else => return error.InvalidDimension,
-            };
+            var res = try a.sumAll();
+            try res.div_(@as(T, @floatFromInt(batch_size)));
 
-            try value.div_(batch_size);
-            return value;
+            return res;
         },
-        inline else => return error.InvalidDataType,
+        else => @compileError("unsupported type"),
     }
 }

@@ -10,6 +10,8 @@ const storage_t = @import("./storage.zig");
 const Device = storage_t.Device;
 const layout_t = @import("./layout.zig");
 
+const F = @import("nn/functional.zig");
+
 pub fn Tensor(comptime N: usize, comptime storage_args: struct {
     T: type = f32,
     comptime D: Device = .Cpu,
@@ -183,6 +185,14 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             }
 
             return result;
+        }
+
+        pub fn mseLoss(self: Self, other: Self) !Tensor(0, .{ .T = T }) {
+            return try F.mseLoss(N, T, self, other);
+        }
+
+        pub fn crossEntropy(self: Self, other: Self) !Tensor(0, .{ .T = T }) {
+            return try F.crossEntropy(N, T, self, other);
         }
 
         // elementwise method
@@ -528,7 +538,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                 return try self.binaryOp_(@as(@This(), value), func);
             }
 
-            if (TV == T or (TV == comptime_float and @typeInfo(T) == .float) or (TV == comptime_int and @typeInfo(T) == .int)) {
+            if (TV == T or ((TV == comptime_float or TV == comptime_int) and @typeInfo(T) == .float) or (TV == comptime_int and @typeInfo(T) == .int)) {
                 const vv = @as(T, value);
 
                 const func = struct {
@@ -619,13 +629,13 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             return self.map_(void{}, func);
         }
 
-        pub fn powi_(self: *Self, value: T) !void {
+        pub fn powi_(self: *Self, value: T) void {
             const func = struct {
                 fn call(v: T, ctx: T) T {
                     return std.math.pow(T, v, ctx);
                 }
             }.call;
-            return try self.map_(value, func);
+            return self.map_(value, func);
         }
 
         pub fn sqrt_(self: *Self) void {
@@ -2175,5 +2185,54 @@ test "pad" {
         try std.testing.expectEqual(t2.shape(), [_]usize{ 7, 10 });
 
         std.debug.print("t1: {f} t2: {f}\n", .{ t1, t2 });
+    }
+}
+
+test "loss func" {
+    const allocator = std.testing.allocator;
+
+    {
+        const t = try fromArray(allocator, [_]f32{ 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 });
+        defer t.deinit();
+
+        const y = try fromArray(allocator, [_]f32{ 0.1, 0.05, 0.6, 0.0, 0.05, 0.1, 0.0, 0.1, 0.0, 0.0 });
+        defer y.deinit();
+
+        const mse_loss = try y.mseLoss(t);
+        defer mse_loss.deinit();
+        const cross_entropy_loss = try y.crossEntropy(t);
+        defer cross_entropy_loss.deinit();
+
+        const mse_v = try mse_loss.dataItem();
+        const cross_entropy_v = try cross_entropy_loss.dataItem();
+        try std.testing.expectApproxEqAbs(0.0975, mse_v, 0.0001);
+        try std.testing.expectApproxEqAbs(0.5108, cross_entropy_v, 0.0001);
+
+        std.debug.print("mse: {f} cross_entropy: {f}\n", .{ mse_loss, cross_entropy_loss });
+    }
+
+    {
+        const t = try fromArray(allocator, [_][10]f32{
+            .{ 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 },
+            .{ 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 },
+        });
+        defer t.deinit();
+        const y = try fromArray(allocator, [_][10]f32{
+            .{ 0.1, 0.05, 0.6, 0.0, 0.05, 0.1, 0.0, 0.1, 0.0, 0.0 },
+            .{ 0.01, 0.15, 0.06, 0.55, 0.03, 0.07, 0.08, 0.01, 0.01, 0.03 },
+        });
+        defer y.deinit();
+
+        const mse_loss = try y.mseLoss(t);
+        defer mse_loss.deinit();
+        const cross_entropy_loss = try y.crossEntropy(t);
+        defer cross_entropy_loss.deinit();
+
+        const mse_v = try mse_loss.dataItem();
+        const cross_entropy_v = try cross_entropy_loss.dataItem();
+        try std.testing.expectApproxEqAbs(0.21849997, mse_v, 0.0001);
+        try std.testing.expectApproxEqAbs(0.55433106, cross_entropy_v, 0.0001);
+
+        std.debug.print("mse: {f} cross_entropy: {f}\n", .{ mse_loss, cross_entropy_loss });
     }
 }
