@@ -1,12 +1,12 @@
 const std = @import("std");
-const Tensor = @import("Tensor.zig");
-const Layout = @import("Layout.zig");
-const Storage = @import("Storage.zig");
-const DataType = @import("dtype.zig").DataType;
-const Scalar = @import("dtype.zig").Scalar;
-const F = @import("nn/functional.zig");
+const tensor = @import("tensor.zig");
+const layout = @import("layout.zig");
+const storage = @import("storage.zig");
 
-pub fn loadImages(allocator: std.mem.Allocator, path: []const u8) !Tensor {
+const Tensor_2 = tensor.Tensor(2, .{});
+const Tensor_1 = tensor.Tensor(1, .{});
+
+pub fn loadImages(allocator: std.mem.Allocator, path: []const u8) !tensor.Tensor(2, .{ .T = u8 }) {
     var buf = [_]u8{0} ** 4;
 
     const file = try std.fs.openFileAbsolute(path, .{ .mode = .read_only });
@@ -34,13 +34,10 @@ pub fn loadImages(allocator: std.mem.Allocator, path: []const u8) !Tensor {
     const data_size = samples * rows * columns;
     const data = try file.readToEndAlloc(allocator, data_size);
 
-    const layout = try Layout.init(allocator, DataType.u8, &.{ samples, rows * columns });
-    const storage = Storage.init(allocator, Storage.Device.Cpu, data.ptr, data.len);
-
-    return try Tensor.fromDataImpl(allocator, layout, storage, 0);
+    return try tensor.fromData(2, u8, allocator, data, [2]usize{ samples, rows * columns });
 }
 
-pub fn loadLabels(allocator: std.mem.Allocator, path: []const u8) !Tensor {
+pub fn loadLabels(allocator: std.mem.Allocator, path: []const u8) !tensor.Tensor(1, .{ .T = u8 }) {
     var buf = [_]u8{0} ** 4;
 
     const file = try std.fs.openFileAbsolute(path, .{ .mode = .read_only });
@@ -59,41 +56,51 @@ pub fn loadLabels(allocator: std.mem.Allocator, path: []const u8) !Tensor {
     const new_buf = try file.readToEndAlloc(allocator, 100 * 1024 * 1024);
     std.debug.assert(new_buf.len == samples);
 
-    const layout = try Layout.init(allocator, DataType.u8, &.{new_buf.len});
-    const storage = Storage.init(allocator, Storage.Device.Cpu, new_buf.ptr, new_buf.len);
-
-    return try Tensor.fromDataImpl(allocator, layout, storage, 0);
+    return try tensor.fromData(1, u8, allocator, new_buf, [1]usize{new_buf.len});
 }
 
 pub fn loadDatas(allocator: std.mem.Allocator) !struct {
-    train_images: Tensor,
-    train_labels: Tensor,
-    test_images: Tensor,
-    test_labels: Tensor,
+    train_images: tensor.Tensor(2, .{}),
+    train_labels: tensor.Tensor(2, .{}),
+    test_images: tensor.Tensor(2, .{}),
+    test_labels: tensor.Tensor(2, .{}),
 } {
     const env_home = std.posix.getenv("HOME").?;
 
     const path_images = try std.fs.path.join(allocator, &.{ env_home, "Work/mnist/train-images.idx3-ubyte" });
+    defer allocator.free(path_images);
+
     var train_images = try loadImages(allocator, path_images);
+    defer train_images.deinit();
 
     const func = struct {
         fn call(v: u8, _: void) f32 {
             return @as(f32, @floatFromInt(v)) / 255.0;
         }
     }.call;
-    const train_images_one = try train_images.map(DataType.u8, DataType.f32, void{}, func);
+    const train_images_one = try train_images.map(f32, void{}, func);
 
     const path_labels = try std.fs.path.join(allocator, &.{ env_home, "Work/mnist/train-labels.idx1-ubyte" });
+    defer allocator.free(path_labels);
+
     const train_labels = try loadLabels(allocator, path_labels);
-    const train_labels_oh = try F.oneHot(train_labels, .{ .num_classes = 10 });
+    defer train_labels.deinit();
+    const train_labels_oh = try train_labels.oneHot(f32, 10);
 
     const path_test_images = try std.fs.path.join(allocator, &.{ env_home, "Work/mnist/t10k-images.idx3-ubyte" });
+    defer allocator.free(path_test_images);
+
     var test_images = try loadImages(allocator, path_test_images);
-    const test_images_one = try test_images.map(DataType.u8, DataType.f32, void{}, func);
+    defer test_images.deinit();
+
+    const test_images_one = try test_images.map(f32, void{}, func);
 
     const path_test_labels = try std.fs.path.join(allocator, &.{ env_home, "Work/mnist/t10k-labels.idx1-ubyte" });
+    defer allocator.free(path_test_labels);
+
     const test_labels = try loadLabels(allocator, path_test_labels);
-    const test_labels_oh = try F.oneHot(test_labels, .{ .num_classes = 10 });
+    defer test_labels.deinit();
+    const test_labels_oh = try test_labels.oneHot(f32, 10);
 
     return .{
         .train_images = train_images_one,
@@ -104,19 +111,18 @@ pub fn loadDatas(allocator: std.mem.Allocator) !struct {
 }
 
 test "mnist images and labels" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
+    const allocator = std.testing.allocator;
 
-    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
-    defer arena.deinit();
-
-    const allocator = arena.allocator();
     const res = try loadDatas(allocator);
 
     const train_images = res.train_images;
+    defer train_images.deinit();
     const train_labels = res.train_labels;
+    defer train_labels.deinit();
     const test_images = res.test_images;
+    defer test_images.deinit();
     const test_labels = res.test_labels;
+    defer test_labels.deinit();
 
     std.debug.print("train_images: {f} train_labels: {f} test_images: {f} test_labels: {f}\n", .{ train_images, train_labels, test_images, test_labels });
 }

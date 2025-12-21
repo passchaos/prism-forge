@@ -125,7 +125,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             return result;
         }
 
-        pub fn oneHot(self: *const Self, num_classes: ?usize) !Tensor(N + 1, .{ .T = T }) {
+        pub fn oneHot(self: *const Self, comptime TT: type, num_classes: ?usize) !Tensor(N + 1, .{ .T = TT }) {
             switch (@typeInfo(T)) {
                 .int => {
                     const new_dim = if (num_classes) |nc| nc else blk: {
@@ -136,13 +136,13 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                         break :blk @as(usize, @intCast(max_v_item + 1));
                     };
 
-                    var result_tensor = try full(self.s_allocator(), try utils.array.insertDim(N, self.shape(), N, new_dim), 0);
+                    var result_tensor = try full(self.s_allocator(), try utils.array.insertDim(N, self.shape(), N, new_dim), @as(TT, 0));
 
                     var self_iter = self.shapeIter();
                     while (self_iter.next()) |idx| {
                         const val = try self.getData(idx);
                         const dest_idx = try utils.array.insertDim(N, idx, N, @as(usize, @intCast(val)));
-                        try result_tensor.setData(dest_idx, 1);
+                        try result_tensor.setData(dest_idx, @as(TT, 1));
                     }
 
                     return result_tensor;
@@ -1376,6 +1376,20 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
 }
 
 // create factory method
+pub fn fromData(comptime N: usize, comptime T: type, allocator: std.mem.Allocator, arr: []T, shape: [N]usize) !Tensor(N, .{ .T = T }) {
+    const layout = layout_t.Layout(N).init(shape);
+    const Storage = storage_t.Storage(T, .Cpu);
+
+    const storage = try Storage.initImpl(allocator, arr);
+
+    return Tensor(N, .{ .T = T })
+        .fromDataImpl(
+        layout,
+        storage,
+        0,
+    );
+}
+
 pub fn fromScalar(allocator: std.mem.Allocator, value: anytype) !Tensor(
     0,
     .{ .T = utils.numberTypeComp(@TypeOf(value)) },
@@ -2098,10 +2112,10 @@ test "one hot" {
         const t1 = try arange(allocator, i32, .{ .end = 10 });
         defer t1.deinit();
 
-        const t2 = try t1.oneHot(null);
+        const t2 = try t1.oneHot(u8, null);
         defer t2.deinit();
 
-        const td = try fromArray(allocator, [_][10]i32{
+        const td = try fromArray(allocator, [_][10]u8{
             .{ 1, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
             .{ 0, 1, 0, 0, 0, 0, 0, 0, 0, 0 },
             .{ 0, 0, 1, 0, 0, 0, 0, 0, 0, 0 },
@@ -2128,10 +2142,10 @@ test "one hot" {
         const t2 = try t1.reshape([2]usize{ 2, 5 });
         defer t2.deinit();
 
-        const t3 = try t2.oneHot(null);
+        const t3 = try t2.oneHot(u8, null);
         defer t3.deinit();
 
-        const td = try fromArray(allocator, [_][5][10]i32{
+        const td = try fromArray(allocator, [_][5][10]u8{
             .{
                 .{ 1, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
                 .{ 0, 1, 0, 0, 0, 0, 0, 0, 0, 0 },
