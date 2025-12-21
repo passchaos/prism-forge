@@ -73,7 +73,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
         }
 
         pub fn dataItem(self: *const Self) !T {
-            var data_iter = self.dataIter();
+            var data_iter = self.shapeIter();
             const item = data_iter.next();
 
             if (item) |i| {
@@ -136,7 +136,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
 
                     var result_tensor = try full(self.s_allocator(), try utils.array.insertDim(N, self.shape(), N, new_dim), 0);
 
-                    var self_iter = self.dataIter();
+                    var self_iter = self.shapeIter();
                     while (self_iter.next()) |idx| {
                         const val = try self.getData(idx);
                         const dest_idx = try utils.array.insertDim(N, idx, N, @as(usize, @intCast(val)));
@@ -149,9 +149,45 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             }
         }
 
+        pub fn pad(self: *const Self, pads: []const usize, value: T) !Self {
+            const pad_dims = pads.len / 2;
+
+            var new_shape = self.shape();
+            for (&new_shape, 0..) |*s, i| {
+                const idx_to_pad_idx = N - i - 1;
+
+                if (idx_to_pad_idx < pad_dims) {
+                    const left_add = pads[2 * idx_to_pad_idx];
+                    const right_add = pads[2 * idx_to_pad_idx + 1];
+                    s.* += left_add + right_add;
+                }
+            }
+
+            var result = try full(self.s_allocator(), new_shape, value);
+
+            var shape_iter = self.shapeIter();
+            while (shape_iter.next()) |idx| {
+                var dst_idx = idx;
+
+                for (0..N) |i| {
+                    // judge if need to set value from orig tensor
+                    const idx_to_pad_idx = N - i - 1;
+
+                    if (idx_to_pad_idx < pad_dims) {
+                        const left_add = pads[2 * idx_to_pad_idx];
+                        dst_idx[i] += left_add;
+                    }
+                }
+
+                try result.setData(dst_idx, try self.getData(idx));
+            }
+
+            return result;
+        }
+
         // elementwise method
         pub fn map_(self: *Self, ctx: anytype, func: fn (T, @TypeOf(ctx)) T) void {
-            var iter = self.dataIter();
+            var iter = self.shapeIter();
 
             while (iter.next()) |idx| {
                 self.setData(idx, func(self.getData(idx) catch unreachable, ctx)) catch unreachable;
@@ -168,7 +204,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
 
             var new_buf = try self.storage.allocator.alloc(RT, self.size());
 
-            var iter = self.dataIter();
+            var iter = self.shapeIter();
 
             var i: usize = 0;
             while (iter.next()) |idx| {
@@ -232,7 +268,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
 
             try mask_i.broadcastTo_(self.shape());
 
-            var iter = self.dataIter();
+            var iter = self.shapeIter();
 
             while (iter.next()) |idx| {
                 if (try mask_i.getData(idx)) {
@@ -246,7 +282,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             var b_i = b;
             try b_i.broadcastTo_(self.shape());
 
-            var iter = self.dataIter();
+            var iter = self.shapeIter();
 
             while (iter.next()) |idx| {
                 const x = try self.getData(idx);
@@ -277,7 +313,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             std.debug.print("a: {f} c: {f}\n", .{ a, c });
             var new_buf = try self.s_allocator().alloc(T, utils.product(&target_shape));
 
-            var iter_a = a.dataIter();
+            var iter_a = a.shapeIter();
 
             var i: usize = 0;
 
@@ -952,7 +988,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
 
             var new_buf = try self.storage.allocator.alloc(NT, self.size());
 
-            var iter = self.dataIter();
+            var iter = self.shapeIter();
 
             while (iter.next()) |idx| {
                 const new_idx = try utils.indexToFlat(&idx, &self.shape(), &self.stride());
@@ -1001,7 +1037,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
 
             const new_buf = try self.storage.allocator.alloc(T, self.size());
 
-            var data_iter = self.dataIter();
+            var data_iter = self.shapeIter();
 
             const layout = Layout.init(self.shape());
 
@@ -1100,7 +1136,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
         }
 
         // core method
-        pub fn dataIter(self: *const Self) ShapeIterator {
+        pub fn shapeIter(self: *const Self) ShapeIterator {
             return ShapeIterator.init(self.shape());
         }
 
@@ -1135,7 +1171,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
         pub fn equal(self: Self, other: Self) bool {
             if (!self.layout.equal(other.layout)) return false;
 
-            var self_iter = self.dataIter();
+            var self_iter = self.shapeIter();
 
             while (self_iter.next()) |idx| {
                 const sv = self.getData(idx) catch unreachable;
@@ -2107,5 +2143,37 @@ test "one hot" {
         try std.testing.expect(eql_result);
 
         std.debug.print("t2: {f} t3: {f}\n", .{ t2, t3 });
+    }
+}
+
+test "pad" {
+    const allocator = std.testing.allocator;
+
+    {
+        const t1 = try arange(allocator, i32, .{ .end = 5 });
+        defer t1.deinit();
+
+        const t2 = try t1.pad(&.{ 2, 3 }, 20);
+        defer t2.deinit();
+
+        const td = try fromArray(allocator, [_]i32{ 20, 20, 0, 1, 2, 3, 4, 20, 20, 20 });
+        defer td.deinit();
+
+        const eql_result = t2.equal(td);
+        try std.testing.expect(eql_result);
+
+        std.debug.print("t1: {f} t2: {f}\n", .{ t1, t2 });
+    }
+
+    {
+        const t1 = try rand(allocator, [2]usize{ 3, 5 }, 0.0, 1.0);
+        defer t1.deinit();
+
+        const t2 = try t1.pad(&.{ 2, 3, 1, 3 }, 20);
+        defer t2.deinit();
+
+        try std.testing.expectEqual(t2.shape(), [_]usize{ 7, 10 });
+
+        std.debug.print("t1: {f} t2: {f}\n", .{ t1, t2 });
     }
 }
