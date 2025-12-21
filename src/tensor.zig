@@ -193,16 +193,11 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
         pub fn maskedFill_(self: *Self, mask: Tensor(N, .{ .T = bool }), value: T) !void {
             var mask_i = mask;
 
-            std.debug.print("before broadcast mask_i: {f}\n", .{mask_i});
-
             try mask_i.broadcastTo_(self.shape());
-
-            std.debug.print("after broadcast mask_i: {f}\n", .{mask_i});
 
             var iter = self.dataIter();
 
             while (iter.next()) |idx| {
-                std.debug.print("idx: {any}\n", .{idx});
                 if (try mask_i.getData(idx)) {
                     try self.setData(idx, value);
                 }
@@ -212,16 +207,15 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
         pub fn binaryOp_(self: *Self, b: Self, op_func: fn (x: T, y: T) T) !void {
             // inplace method: need broadcast to self shape
             var b_i = b;
-            try b_i.broadcastTo_(self.shapes());
+            try b_i.broadcastTo_(self.shape());
 
             var iter = self.dataIter();
-            defer iter.deinit();
 
             while (iter.next()) |idx| {
                 const x = try self.getData(idx);
                 const y = try b_i.getData(idx);
 
-                self.setData(idx, op_func(x, y));
+                try self.setData(idx, op_func(x, y));
             }
         }
 
@@ -236,11 +230,14 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                 b.shape(),
             );
 
+            std.debug.print("target shape: {any}\n", .{target_shape});
+
             const a = try self.broadcastTo(target_shape);
             defer a.deinit();
             const c = try b.broadcastTo(target_shape);
             defer c.deinit();
 
+            std.debug.print("a: {f} c: {f}\n", .{ a, c });
             var new_buf = try self.s_allocator().alloc(T, utils.product(&target_shape));
 
             var iter_a = a.dataIter();
@@ -280,8 +277,18 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             self.map_(ctx_i, func);
         }
 
-        pub fn add_(self: *Self, value: anytype) void {
+        pub fn add_(self: *Self, value: anytype) !void {
             const TV = @TypeOf(value);
+
+            if (TV == @This()) {
+                const func = struct {
+                    fn call(v: T, other: T) T {
+                        return v + other;
+                    }
+                }.call;
+
+                return try self.binaryOp_(@as(@This(), value), func);
+            }
 
             if (TV == T or (TV == comptime_float and @typeInfo(T) == .float) or (TV == comptime_int and @typeInfo(T) == .int)) {
                 const vv = @as(T, value);
@@ -295,36 +302,8 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                 return self.map_(vv, func);
             }
 
-            @compileError("unsupported add argument type " ++ @typeName(TV) ++ " for tensor of type " ++ @typeName(T));
+            @compileError("unsupported add_ argument type " ++ @typeName(TV) ++ " for tensor of type " ++ @typeName(T));
         }
-
-        // pub fn add(self: *Self, value: anytype) !Self {
-        //     const TV = @TypeOf(value);
-
-        //     if (TV == @This()) {
-        //         const scope = struct {
-        //             fn call(v: T, other: T) T {
-        //                 return v + other;
-        //             }
-        //         }.call;
-
-        //         return try self.binaryOp_(@as(@This(), value), scope);
-        //     }
-
-        //     if (TV == T or (TV == comptime_float and @typeInfo(T) == .float) or (TV == comptime_int and @typeInfo(T) == .int)) {
-        //         const vv = @as(T, value);
-
-        //         const func = struct {
-        //             fn call(v: T, ctx: T) T {
-        //                 return v + ctx;
-        //             }
-        //         }.call;
-
-        //         return self.map_(vv, func);
-        //     }
-
-        //     @compileError("unsupported add argument type" ++ @typeName(TV));
-        // }
 
         pub fn add(self: *const Self, value: anytype) !Self {
             const TV = @TypeOf(value);
@@ -353,160 +332,170 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             }
         }
 
-        // pub fn sub_(self: *Self, value: anytype) !void {
-        //     if (@TypeOf(value) == @This()) {
-        //         switch (self.dtype()) {
-        //             inline else => |dt| {
-        //                 const scope = struct {
-        //                     fn call(v: dt.toTypeComp(), other: dt.toTypeComp()) dt.toTypeComp() {
-        //                         return v - other;
-        //                     }
-        //                 }.call;
+        pub fn sub_(self: *Self, value: anytype) !void {
+            const TV = @TypeOf(value);
 
-        //                 return try self.binaryOp_(@as(@This(), value), dt, scope);
-        //             },
-        //         }
-        //     }
+            if (TV == @This()) {
+                const func = struct {
+                    fn call(v: T, other: T) T {
+                        return v - other;
+                    }
+                }.call;
 
-        //     const DT = comptime DataType.typeToDataType(@TypeOf(value));
-        //     const scope = struct {
-        //         fn call(v: *DT.toTypeComp()) void {
-        //             v.* -= value;
-        //         }
-        //     }.call;
+                return try self.binaryOp_(@as(@This(), value), func);
+            }
 
-        //     try self.map_(DT, scope);
-        // }
+            if (TV == T or (TV == comptime_float and @typeInfo(T) == .float) or (TV == comptime_int and @typeInfo(T) == .int)) {
+                const vv = @as(T, value);
 
-        // pub fn sub(self: *const Self, value: anytype) !Self {
-        //     if (@TypeOf(value) == @This()) {
-        //         switch (self.dtype()) {
-        //             inline .bool => return error.InvalidType,
-        //             inline else => |dt| {
-        //                 const scope = struct {
-        //                     fn call(v: dt.toTypeComp(), other: dt.toTypeComp()) dt.toTypeComp() {
-        //                         return v - other;
-        //                     }
-        //                 }.call;
+                const func = struct {
+                    fn call(v: T, ctx: T) T {
+                        return v - ctx;
+                    }
+                }.call;
 
-        //                 return try self.binaryOp(@as(@This(), value), dt, scope);
-        //             },
-        //         }
-        //     }
+                return self.map_(vv, func);
+            }
 
-        //     switch (self.dtype()) {
-        //         inline .bool => return error.InvalidType,
-        //         inline else => |DT| {
-        //             const T = DT.toTypeComp();
-        //             const vv = dtype_o.toDType(T, value);
+            @compileError("unsupported sub_ argument type " ++ @typeName(TV) ++ " for tensor of type " ++ @typeName(T));
+        }
 
-        //             const scope = struct {
-        //                 fn call(v: T, ctx: T) T {
-        //                     return v - ctx;
-        //                 }
-        //             }.call;
+        pub fn sub(self: *const Self, value: anytype) !Self {
+            const TV = @TypeOf(value);
+            switch (TV) {
+                @This() => {
+                    const func = struct {
+                        fn call(v: T, other: T) T {
+                            return v - other;
+                        }
+                    }.call;
 
-        //             return try self.map(DT, DT, vv, scope);
-        //         },
-        //     }
-        // }
+                    return try self.binaryOp(@as(@This(), value), func);
+                },
+                T => {
+                    const vv = @as(T, value);
 
-        // pub fn mul(self: *const Self, value: anytype) !Self {
-        //     if (comptime @TypeOf(value) == @This()) {
-        //         switch (self.dtype()) {
-        //             inline .bool => return error.InvalidType,
-        //             inline else => |dt| {
-        //                 const scope = struct {
-        //                     fn call(v: dt.toTypeComp(), other: dt.toTypeComp()) dt.toTypeComp() {
-        //                         return v * other;
-        //                     }
-        //                 }.call;
+                    const func = struct {
+                        fn call(v: T, ctx: T) T {
+                            return v - ctx;
+                        }
+                    }.call;
 
-        //                 return try self.binaryOp(@as(@This(), value), dt, scope);
-        //             },
-        //         }
-        //     }
+                    return try self.map(T, vv, func);
+                },
+                else => @compileError("unsupported sub argument type" ++ " self: " ++ @typeName(@This()) ++ " input: " ++ @typeName(TV)),
+            }
+        }
 
-        //     switch (self.dtype()) {
-        //         inline .bool => return error.InvalidType,
-        //         inline else => |DT| {
-        //             const T = DT.toTypeComp();
-        //             const vv = dtype_o.toDType(T, value);
+        pub fn mul_(self: *Self, value: anytype) !void {
+            const TV = @TypeOf(value);
 
-        //             const scope = struct {
-        //                 fn call(v: T, ctx: T) T {
-        //                     return v * ctx;
-        //                 }
-        //             }.call;
+            if (TV == @This()) {
+                const func = struct {
+                    fn call(v: T, other: T) T {
+                        return v * other;
+                    }
+                }.call;
 
-        //             return try self.map(DT, DT, vv, scope);
-        //         },
-        //     }
-        // }
+                return try self.binaryOp_(@as(@This(), value), func);
+            }
 
-        // pub fn mul_(self: *Self, value: anytype) !void {
-        //     if (@TypeOf(value) == @This()) {
-        //         switch (self.dtype()) {
-        //             inline else => |dt| {
-        //                 const scope = struct {
-        //                     fn call(v: dt.toTypeComp(), other: dt.toTypeComp()) dt.toTypeComp() {
-        //                         return v * other;
-        //                     }
-        //                 }.call;
+            if (TV == T or (TV == comptime_float and @typeInfo(T) == .float) or (TV == comptime_int and @typeInfo(T) == .int)) {
+                const vv = @as(T, value);
 
-        //                 return try self.binaryOp_(@as(@This(), value), dt, scope);
-        //             },
-        //         }
-        //     }
+                const func = struct {
+                    fn call(v: T, ctx: T) T {
+                        return v * ctx;
+                    }
+                }.call;
 
-        //     switch (self.dtype()) {
-        //         inline .bool => return error.UnsupportedType,
-        //         inline else => |DT| {
-        //             const vv = dtype_o.toDType(DT.toTypeComp(), value);
+                return self.map_(vv, func);
+            }
 
-        //             const scope = struct {
-        //                 fn call(v: DT.toTypeComp(), ctx: DT.toTypeComp()) DT.toTypeComp() {
-        //                     return v * ctx;
-        //                 }
-        //             }.call;
+            @compileError("unsupported mul_ argument type " ++ @typeName(TV) ++ " for tensor of type " ++ @typeName(T));
+        }
 
-        //             return try self.map_(DT, vv, scope);
-        //         },
-        //     }
-        // }
+        pub fn mul(self: *const Self, value: anytype) !Self {
+            const TV = @TypeOf(value);
+            switch (TV) {
+                @This() => {
+                    const func = struct {
+                        fn call(v: T, other: T) T {
+                            return v * other;
+                        }
+                    }.call;
 
-        // pub fn div_(self: *Self, value: anytype) !void {
-        //     if (@TypeOf(value) == @This()) {
-        //         switch (self.dtype()) {
-        //             inline .f32 => |dt| {
-        //                 const scope = struct {
-        //                     fn call(v: dt.toTypeComp(), other: dt.toTypeComp()) dt.toTypeComp() {
-        //                         return v / other;
-        //                     }
-        //                 }.call;
+                    return try self.binaryOp(@as(@This(), value), func);
+                },
+                T => {
+                    const vv = @as(T, value);
 
-        //                 return try self.binaryOp_(@as(@This(), value), dt, scope);
-        //             },
-        //             inline else => return error.UnsupportedType,
-        //         }
-        //     }
+                    const func = struct {
+                        fn call(v: T, ctx: T) T {
+                            return v * ctx;
+                        }
+                    }.call;
 
-        //     switch (self.dtype()) {
-        //         inline .f32 => |DT| {
-        //             const T = DT.toTypeComp();
-        //             const ctx_i = dtype_o.toDType(T, value);
+                    return try self.map(T, vv, func);
+                },
+                else => @compileError("unsupported mul argument type" ++ " self: " ++ @typeName(@This()) ++ " input: " ++ @typeName(TV)),
+            }
+        }
 
-        //             const func = struct {
-        //                 fn call(v: T, ctx: T) T {
-        //                     return v / ctx;
-        //                 }
-        //             }.call;
+        pub fn div_(self: *Self, value: anytype) !void {
+            const TV = @TypeOf(value);
 
-        //             try self.map_(DT, ctx_i, func);
-        //         },
-        //         inline else => return error.UnsupportedType,
-        //     }
-        // }
+            if (TV == @This()) {
+                const func = struct {
+                    fn call(v: T, other: T) T {
+                        return v / other;
+                    }
+                }.call;
+
+                return try self.binaryOp_(@as(@This(), value), func);
+            }
+
+            if (TV == T or (TV == comptime_float and @typeInfo(T) == .float) or (TV == comptime_int and @typeInfo(T) == .int)) {
+                const vv = @as(T, value);
+
+                const func = struct {
+                    fn call(v: T, ctx: T) T {
+                        return v / ctx;
+                    }
+                }.call;
+
+                return self.map_(vv, func);
+            }
+
+            @compileError("unsupported div_ argument type " ++ @typeName(TV) ++ " for tensor of type " ++ @typeName(T));
+        }
+
+        pub fn div(self: *const Self, value: anytype) !Self {
+            const TV = @TypeOf(value);
+            switch (TV) {
+                @This() => {
+                    const func = struct {
+                        fn call(v: T, other: T) T {
+                            return v / other;
+                        }
+                    }.call;
+
+                    return try self.binaryOp(@as(@This(), value), func);
+                },
+                T => {
+                    const vv = @as(T, value);
+
+                    const func = struct {
+                        fn call(v: T, ctx: T) T {
+                            return v / ctx;
+                        }
+                    }.call;
+
+                    return try self.map(T, vv, func);
+                },
+                else => @compileError("unsupported div argument type" ++ " self: " ++ @typeName(@This()) ++ " input: " ++ @typeName(TV)),
+            }
+        }
 
         pub fn sin_(self: *Self) void {
             if (@typeInfo(T) != .float) @compileError("only supported float tensor sin_ op");
@@ -519,33 +508,23 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             self.map_(void{}, func);
         }
 
-        // pub fn exp_(self: *Self) !void {
-        //     switch (self.dtype()) {
-        //         inline .f32 => |DT| {
-        //             const func = struct {
-        //                 fn call(v: DT.toTypeComp(), _: void) DT.toTypeComp() {
-        //                     return @exp(v);
-        //                 }
-        //             }.call;
-        //             try self.map_(DT, void{}, func);
-        //         },
-        //         inline else => return error.UnsupportedType,
-        //     }
-        // }
+        pub fn exp_(self: *Self) void {
+            const func = struct {
+                fn call(v: T, _: void) T {
+                    return @exp(v);
+                }
+            }.call;
+            return self.map_(void{}, func);
+        }
 
-        // pub fn log_(self: *Self) !void {
-        //     switch (self.dtype()) {
-        //         inline .f32 => |DT| {
-        //             const func = struct {
-        //                 fn call(v: DT.toTypeComp()) DT.toTypeComp() {
-        //                     return @log(v);
-        //                 }
-        //             }.call;
-        //             try self.map_(DT, func);
-        //         },
-        //         inline else => return error.UnsupportedType,
-        //     }
-        // }
+        pub fn log_(self: *Self) void {
+            const func = struct {
+                fn call(v: T, _: void) T {
+                    return @log(v);
+                }
+            }.call;
+            return self.map_(void{}, func);
+        }
 
         pub fn sigmoid_(self: *Self) void {
             if (@typeInfo(T) != .float) @compileError("only supported float tensor sin_ op");
@@ -567,21 +546,14 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             return self.map_(void{}, func);
         }
 
-        // pub fn powi_(self: *Self, value: anytype) !void {
-        //     switch (self.dtype()) {
-        //         inline .f32, .i32, .u32 => |DT| {
-        //             const ctx_i = dtype_o.toDType(DT.toTypeComp(), value);
-
-        //             const func = struct {
-        //                 fn call(v: DT.toTypeComp(), ctx: DT.toTypeComp()) DT.toTypeComp() {
-        //                     return std.math.pow(DT.toTypeComp(), v, ctx);
-        //                 }
-        //             }.call;
-        //             return try self.map_(DT, ctx_i, func);
-        //         },
-        //         inline else => return error.UnsupportedType,
-        //     }
-        // }
+        pub fn powi_(self: *Self, value: T) !void {
+            const func = struct {
+                fn call(v: T, ctx: T) T {
+                    return std.math.pow(T, v, ctx);
+                }
+            }.call;
+            return try self.map_(value, func);
+        }
 
         pub fn sqrt_(self: *Self) void {
             if (@typeInfo(T) != .float) @compileError("only supported float tensor sin_ op");
@@ -673,24 +645,28 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             return self.map_(ctx_i, func);
         }
 
-        // pub fn softmax(self: *const Self) !Self {
-        //     const dims = self.ndim();
+        pub fn softmax(self: *const Self) !Self {
+            const dims = self.ndim();
 
-        //     if (dims == 0) {
-        //         return error.InvalidDimension;
-        //     }
+            if (dims == 0) {
+                return error.InvalidDimension;
+            }
 
-        //     const a = try self.max(dims - 1);
-        //     var v = try self.sub(try a.unsqueeze(dims - 1));
-        //     try v.exp_();
+            const a = try self.max(N - 1);
+            defer a.deinit();
 
-        //     const v1 = try (try v.sum(dims - 1)).unsqueeze(dims - 1);
+            std.debug.print("self: {f} a: {f}\n", .{ self, a });
+            var v = try self.sub(a);
+            v.exp_();
 
-        //     std.debug.print("v: {f} v1: {f}\n", .{ v, v1 });
-        //     try v.div_(v1);
+            const vs = try v.sum(N - 1);
+            defer vs.deinit();
 
-        //     return v;
-        // }
+            std.debug.print("v: {f} vs: {f}\n", .{ v, vs });
+            try v.div_(vs);
+
+            return v;
+        }
 
         // reduce method
         pub fn reduce(
@@ -699,21 +675,22 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             op_func: fn (acc: T, x: T) T,
             comptime PT: type,
             post_func: ?fn (acc: T, count: usize) PT,
-        ) !Tensor(N - 1, .{ .T = PT }) {
-            const shape_i = try utils.array.removeDim(N, self.shape(), dm);
+        ) !Tensor(N, .{ .T = PT }) {
+            var shape_i = self.shape();
+            shape_i[dm] = 1;
 
             const data_len = utils.product(&shape_i);
             var new_buf = try self.s_allocator().alloc(PT, data_len);
 
-            var shape_i_iter = layout_t.ShapeIterator(N - 1).init(shape_i);
+            var shape_i_iter = layout_t.initShapeIterator(shape_i);
             while (shape_i_iter.next()) |idx| {
                 var acc = blk: {
-                    var idx_i = try utils.array.insertDim(N - 1, idx, dm, 0);
-
                     if (self.shape()[dm] == 1) {
-                        break :blk try self.getData(idx_i);
+                        break :blk try self.getData(idx);
                     } else {
-                        const idx_i_1 = try utils.array.insertDim(N - 1, idx, dm, 1);
+                        var idx_i = idx;
+                        var idx_i_1 = idx;
+                        idx_i_1[dm] = 1;
 
                         var acc = op_func(try self.getData(idx_i), try self.getData(idx_i_1));
 
@@ -729,14 +706,14 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                     acc = pf(acc, self.shape()[dm]);
                 }
 
-                const flat_idx = try utils.indexShapeToFlat(N - 1, shape_i, idx);
+                const flat_idx = try utils.indexShapeToFlat(N, shape_i, idx);
                 new_buf[flat_idx] = acc;
             }
 
-            const layout = layout_t.Layout(N - 1).init(shape_i);
+            const layout = Layout.init(shape_i);
             const storage = try storage_t.Storage(PT, .Cpu).initImpl(self.s_allocator(), new_buf);
 
-            return try Tensor(N - 1, .{ .T = PT }).fromDataImpl(layout, storage, 0);
+            return try Tensor(N, .{ .T = PT }).fromDataImpl(layout, storage, 0);
         }
 
         pub fn reduceAll(
@@ -774,7 +751,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             return try Tensor(0, .{ .T = PT }).fromDataImpl(layout, storage, 0);
         }
 
-        pub fn sum(self: *const Self, dim: usize) !Tensor(N - 1, .{ .T = T }) {
+        pub fn sum(self: *const Self, dim: usize) !Self {
             const func = struct {
                 fn op_func(acc: T, val: T) T {
                     return acc + val;
@@ -792,7 +769,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             return try self.reduceAll(func, T, null);
         }
 
-        pub fn max(self: *const Self, dim: usize) !Tensor(N - 1, .{ .T = T }) {
+        pub fn max(self: *const Self, dim: usize) !Self {
             const scope = struct {
                 fn op_func(acc: T, val: T) T {
                     return @max(acc, val);
@@ -828,22 +805,25 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             return try self.reduceAll(scope.op_func, T, null);
         }
 
-        // pub fn prod(self: *const Self, dim: ?usize) !Self {
-        //     switch (self.dtype()) {
-        //         inline .bool => return error.UnsupportedType,
-        //         inline else => |dt| {
-        //             const T = dt.toTypeComp();
-        //             const scope = struct {
-        //                 fn op_func(acc: T, val: T) T {
-        //                     return acc * val;
-        //                 }
-        //             };
-        //             return try self.reduce(dt, dim, std.math.inf(T), scope.op_func, null);
-        //         },
-        //     }
-        // }
+        pub fn prod(self: *const Self, dim: usize) !Self {
+            const scope = struct {
+                fn op_func(acc: T, val: T) T {
+                    return acc * val;
+                }
+            };
+            return try self.reduce(dim, scope.op_func, T, null);
+        }
 
-        pub fn mean(self: *const Self, dim: usize) !Tensor(N - 1, .{ .T = T }) {
+        pub fn prodAll(self: *const Self) !Self {
+            const scope = struct {
+                fn op_func(acc: T, val: T) T {
+                    return acc * val;
+                }
+            };
+            return try self.reduceAll(scope.op_func, T, null);
+        }
+
+        pub fn mean(self: *const Self, dim: usize) !Self {
             const scope = struct {
                 fn op_func(acc: T, val: T) T {
                     return acc + val;
@@ -869,7 +849,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             return try self.reduceAll(scope.op_func, T, scope.post_func);
         }
 
-        pub fn anyTrue(self: *const Self, dim: usize) !Tensor(N - 1, .{ .T = bool }) {
+        pub fn anyTrue(self: *const Self, dim: usize) !Tensor(N, .{ .T = bool }) {
             if (T != bool) @compileError("unsupported type " ++ @typeName(T));
 
             const scope = struct {
@@ -893,7 +873,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             return try self.reduceAll(scope.op_func, bool, null);
         }
 
-        pub fn allTrue(self: *const Self, dim: usize) !Tensor(N - 1, .{ .T = bool }) {
+        pub fn allTrue(self: *const Self, dim: usize) !Tensor(N, .{ .T = bool }) {
             if (T != bool) @compileError("unsupported type " ++ @typeName(T));
 
             const scope = struct {
@@ -1060,12 +1040,26 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             return try Tensor(utils.array.getArrayShapeComp(@TypeOf(new_shapes))[0], .{ .T = T }).fromDataImpl(layout, storage, self._storage_offset);
         }
 
-        pub fn unsqueeze_(self: *const Self, dim: usize) !void {
-            self.layout = try self.layout.unsqueeze(dim);
+        pub fn unsqueeze(self: *const Self, dim: usize) !Tensor(N + 1, .{ .T = T }) {
+            const layout = try self.layout.unsqueeze(dim);
+            const storage = self.storage.shared();
+
+            return try Tensor(N + 1, .{ .T = T }).fromDataImpl(
+                layout,
+                storage,
+                self._storage_offset,
+            );
         }
 
-        pub fn squeeze_(self: *const Self, dim: usize) !void {
-            self.layout = try self.layout.squeeze(dim);
+        pub fn squeeze(self: *const Self, dim: usize) !Tensor(N - 1, .{ .T = T }) {
+            const layout = try self.layout.squeeze(dim);
+            const storage = self.storage.shared();
+
+            return try Tensor(N + 1, .{ .T = T }).fromDataImpl(
+                layout,
+                storage,
+                self._storage_offset,
+            );
         }
 
         // core method
@@ -1116,12 +1110,12 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             return true;
         }
 
-        pub fn approxEqual(self: *const Self, other: *const Self, relEps: T, absEps: T) bool {
-            if (!self.layout.equal(&other.layout)) return false;
+        pub fn approxEqual(self: Self, other: Self, relEps: T, absEps: T) bool {
+            if (!self.layout.equal(other.layout)) return false;
 
-            const self_data_slice = self.dataSlice();
-            const other_data_slice = other.dataSlice();
-            return utils.sliceApproxEqual(T, &self_data_slice, &other_data_slice, relEps, absEps);
+            const self_data_slice = self.storage.dataSlice();
+            const other_data_slice = other.storage.dataSlice();
+            return utils.sliceApproxEqual(T, self_data_slice, other_data_slice, relEps, absEps);
         }
 
         pub fn format(
@@ -1827,20 +1821,31 @@ test "reduce" {
 test "binary op" {
     const allocator = std.testing.allocator;
 
-    const t1 = try rand(allocator, [_]usize{ 3, 3 }, 10.0, 20.0);
-    defer t1.deinit();
-    var t2 = try arange(allocator, f32, .{ .end = 9 });
-    defer t2.deinit();
+    {
+        const t1 = try rand(allocator, [_]usize{ 3, 3 }, 10.0, 20.0);
+        defer t1.deinit();
+        var t2 = try arange(allocator, f32, .{ .end = 9 });
+        defer t2.deinit();
 
-    std.debug.print("t2: {f}\n", .{t2});
+        std.debug.print("t2: {f}\n", .{t2});
 
-    const t2r = try t2.reshape([_]usize{ 3, 3 });
-    defer t2r.deinit();
+        const t2r = try t2.reshape([_]usize{ 3, 3 });
+        defer t2r.deinit();
 
-    const t3 = try t1.add(t2r);
-    defer t3.deinit();
+        const t3 = try t1.add(t2r);
+        defer t3.deinit();
 
-    // std.debug.print("t1: {f} t2: {f} t3: {f}\n", .{ t1, t2, t3 });
+        std.debug.print("t1: {f} t2: {f} t3: {f}\n", .{ t1, t2, t3 });
+    }
+
+    {
+        const t1 = try arange(allocator, i32, .{ .end = 10 });
+        defer t1.deinit();
+        const t2 = try t1.add(t1);
+        defer t2.deinit();
+
+        std.debug.print("t1: {f} t2: {f}\n", .{ t1, t2 });
+    }
 }
 
 test "masked" {
@@ -1922,4 +1927,38 @@ test "nan inf" {
     t1.nanToNum_(.{ .nan = 0.0, .posinf = 1.0, .neginf = -3.0 });
     try std.testing.expectEqualSlices(f32, &[_]f32{ 1.0, 1.0, 0.0, -3.0, -2.3 }, t1.storage.dataSlice());
     std.debug.print("inf_to_num: {f}\n", .{t1});
+}
+
+test "softmax" {
+    const allocator = std.testing.allocator;
+
+    const t1 = try fromArray(allocator, [3]f32{ 0.3, 2.9, 4.0 });
+    defer t1.deinit();
+    const t2 = try t1.softmax();
+    defer t2.deinit();
+
+    const td = try fromArray(allocator, [3]f32{ 0.01821127, 0.24519181, 0.73659691 });
+    defer td.deinit();
+
+    const approx_equal = t2.approxEqual(td, 0.00001, 0.00001);
+    try std.testing.expect(approx_equal);
+    std.debug.print("t2: {f} td: {f}\n", .{ t2, td });
+
+    const t3 = try fromArray(allocator, [_][10]f32{
+        .{ 0.1, 0.05, 0.6, 0.0, 0.05, 0.1, 0.0, 0.1, 0.0, 0.0 },
+        .{ 0.1, 0.15, 0.5, 0.0, 0.05, 0.1, 0.0, 0.1, 0.0, 0.0 },
+    });
+    defer t3.deinit();
+
+    const t4 = try t3.softmax();
+    defer t4.deinit();
+
+    const t4d = try fromArray(allocator, [_][10]f32{
+        .{ 0.09832329, 0.09352801, 0.16210771, 0.0889666, 0.09352801, 0.09832329, 0.0889666, 0.09832329, 0.0889666, 0.0889666 },
+        .{ 0.09887603, 0.10394551, 0.1475057, 0.08946673, 0.09405379, 0.09887603, 0.08946673, 0.09887603, 0.08946673, 0.08946673 },
+    });
+    defer t4d.deinit();
+
+    const t4_approx_equal = t4.approxEqual(t4d, 0.00001, 0.00001);
+    try std.testing.expect(t4_approx_equal);
 }

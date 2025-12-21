@@ -52,21 +52,27 @@ pub const array = struct {
             return error.InvalidDim;
         }
 
-        var new_arr = [_]usize{0} ** (N - 1);
-        var i: usize = 0;
-        var j: usize = 0;
+        if (N == 0) {
+            @compileError("don't support 0-1-d tensor removeDim op");
+        } else if (N == 1) {
+            return [0]usize{};
+        } else {
+            var new_arr = [_]usize{0} ** (N - 1);
+            var i: usize = 0;
+            var j: usize = 0;
 
-        while (i < N) {
-            if (i == dim) {
+            while (i < N) {
+                if (i == dim) {
+                    i += 1;
+                    continue;
+                }
+                new_arr[j] = arr[i];
                 i += 1;
-                continue;
+                j += 1;
             }
-            new_arr[j] = arr[i];
-            i += 1;
-            j += 1;
-        }
 
-        return new_arr;
+            return new_arr;
+        }
     }
 
     pub fn insertDim(comptime N: usize, arr: [N]usize, dim: usize, value: usize) ![N + 1]usize {
@@ -74,22 +80,26 @@ pub const array = struct {
             return error.InvalidDim;
         }
 
-        var new_arr = [_]usize{0} ** (N + 1);
-        var i: usize = 0;
-        var j: usize = 0;
+        if (N == 0) {
+            return [_]usize{value};
+        } else {
+            var new_arr = [_]usize{0} ** (N + 1);
+            var i: usize = 0;
+            var j: usize = 0;
 
-        while (i < N + 1) {
-            if (i == dim) {
-                new_arr[i] = value;
+            while (i < N + 1) {
+                if (i == dim) {
+                    new_arr[i] = value;
+                    i += 1;
+                    continue;
+                }
+                new_arr[i] = arr[j];
                 i += 1;
-                continue;
+                j += 1;
             }
-            new_arr[i] = arr[j];
-            i += 1;
-            j += 1;
-        }
 
-        return new_arr;
+            return new_arr;
+        }
     }
 };
 
@@ -386,10 +396,16 @@ pub fn cartesianProduct(allocator: std.mem.Allocator, dims: []const usize) !std.
     return result;
 }
 
-pub fn broadcastShapes(comptime N: usize, comptime BN: usize, orig_shape: [N]usize, target_shape: [BN]usize) ![BN]usize {
-    if (orig_shape.len > target_shape.len) return error.ShapeMismatch;
+pub fn generateBroadcastStride(
+    comptime N: usize,
+    comptime BN: usize,
+    orig_shape: [N]usize,
+    orig_stride: [N]usize,
+    target_shape: [BN]usize,
+) ![BN]usize {
+    if (N > BN) @compileError("can't broadcast to smaller dimension");
 
-    var new_shape = [_]usize{0} ** BN;
+    var new_stride = [_]usize{0} ** BN;
 
     var old_i: isize = @intCast(orig_shape.len);
     old_i -= 1;
@@ -397,17 +413,18 @@ pub fn broadcastShapes(comptime N: usize, comptime BN: usize, orig_shape: [N]usi
     new_i -= 1;
 
     while (new_i >= 0) {
-        const td = target_shape[@intCast(new_i)];
+        const n_dim = target_shape[@intCast(new_i)];
 
         if (old_i >= 0) {
-            const od_i: usize = @intCast(old_i);
-            const od = orig_shape[od_i];
-            const os = orig_shape[od_i];
+            const old_i_u: usize = @intCast(old_i);
 
-            if (od == td) {
-                new_shape[@intCast(new_i)] = os;
-            } else if (od == 1 and td > 1) {
-                new_shape[@intCast(new_i)] = td;
+            const o_dim = orig_shape[old_i_u];
+            const o_stride = orig_stride[old_i_u];
+
+            if (o_dim == n_dim) {
+                new_stride[@intCast(new_i)] = o_stride;
+            } else if (o_dim == 1 and n_dim > 1) {
+                new_stride[@intCast(new_i)] = 0;
             } else {
                 return error.ShapeMismatch;
             }
@@ -415,13 +432,13 @@ pub fn broadcastShapes(comptime N: usize, comptime BN: usize, orig_shape: [N]usi
             old_i -= 1;
             new_i -= 1;
         } else {
-            new_shape[@intCast(new_i)] = td;
+            new_stride[@intCast(new_i)] = 0;
 
             new_i -= 1;
         }
     }
 
-    return new_shape;
+    return new_stride;
 }
 
 pub fn compatibleBroacastShapes(comptime N: usize, lhs_shape: [N]usize, rhs_shape: [N]usize) ![N]usize {
@@ -499,14 +516,14 @@ test "get array len" {
 test "broadcast shape" {
     const orig_shape = [_]usize{ 1, 3 };
     const target_shape = [_]usize{ 5, 3 };
-    const broadcasted_shape = try broadcastShapes(
+    const broadcasted_stride = try generateBroadcastStride(
         2,
         2,
         orig_shape,
+        computeStrides(2, orig_shape),
         target_shape,
     );
-    std.debug.print("broadcasted shape: {any}\n", .{broadcasted_shape});
-    try std.testing.expectEqualSlices(usize, &broadcasted_shape, &target_shape);
+    try std.testing.expectEqual([2]usize{ 0, 1 }, broadcasted_stride);
 
     std.debug.print("begin compatible handle\n", .{});
     const compatible_broadcasted_shape = try compatibleBroacastShapes(

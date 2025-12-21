@@ -15,8 +15,8 @@ pub fn Layout(comptime N: usize) type {
                 return self;
             }
 
-            const new_shape = try utils.broadcastShapes(N, BN, self.shape(), target_shape);
-            return Layout(BN).init(new_shape);
+            const new_stride = try utils.generateBroadcastStride(N, BN, self.shape(), self.stride(), target_shape);
+            return Layout(BN).initRaw(target_shape, new_stride);
         }
 
         pub fn cat(layouts: []const Self, dim: usize) !Self {
@@ -155,23 +155,9 @@ pub fn Layout(comptime N: usize) type {
         pub fn unsqueeze(self: *const Self, dim: usize) !Layout(N + 1) {
             if (dim > N) return error.InvalidDim;
 
-            var new_shapes = [_]usize{0} ** (N + 1);
+            const new_shape = try utils.array.insertDim(N, self.shape(), dim, 1);
 
-            var i: usize = 0;
-            var j: usize = 0;
-
-            while (i < N + 1) {
-                if (i == dim) {
-                    new_shapes[i] = 1;
-                    i += 1;
-                } else {
-                    new_shapes[i] = self._shape[j];
-                    i += 1;
-                    j += 1;
-                }
-            }
-
-            return Layout(N + 1).init(new_shapes);
+            return Layout(N + 1).init(new_shape);
         }
 
         pub fn squeeze(self: *const Self, dim: usize) !Layout(N - 1) {
@@ -207,8 +193,8 @@ pub fn Layout(comptime N: usize) type {
             };
         }
 
-        pub fn equal(self: *const Self, other: *const Self) bool {
-            return self._shape == other._shape and self._stride == other._stride;
+        pub fn equal(self: Self, other: Self) bool {
+            return std.mem.eql(usize, &self._shape, &self._shape) and std.mem.eql(usize, &self._stride, &other._stride);
         }
 
         pub fn size(self: *const Self) usize {
@@ -312,6 +298,16 @@ test "cat or stack" {
     // try std.testing.expectEqual(cat._stride, [_]usize{ 12, 4, 1 });
 }
 
+pub fn initShapeIterator(arr: anytype) ShapeIterator(utils.array.getArrayShapeComp(@TypeOf(arr))[0]) {
+    const NDIM = comptime utils.array.getArrayNDimComp(@TypeOf(arr));
+    if (NDIM != 1) @compileError("only support 1-d array");
+
+    const N = comptime utils.array.getArrayShapeComp(@TypeOf(arr))[0];
+    const a = @as([N]usize, arr);
+
+    return ShapeIterator(N).init(a);
+}
+
 pub fn ShapeIterator(comptime N: usize) type {
     return struct {
         _shapes: [N]usize,
@@ -334,26 +330,25 @@ pub fn ShapeIterator(comptime N: usize) type {
 
             const outer_indices = self.idx;
 
-            var d: usize = self._shapes.len;
-
             // handle zero-demension
-            if (d == 0) {
+            if (N == 0) {
                 self.done = true;
                 return self.idx;
-            }
+            } else {
+                var d: usize = self._shapes.len;
+                while (d > 0) : (d -= 1) {
+                    self.idx[d - 1] += 1;
 
-            while (d > 0) : (d -= 1) {
-                self.idx[d - 1] += 1;
+                    if (self.idx[d - 1] < self._shapes[d - 1]) {
+                        break;
+                    }
+                    self.idx[d - 1] = 0;
 
-                if (self.idx[d - 1] < self._shapes[d - 1]) {
-                    break;
+                    if (d == 1) self.done = true;
                 }
-                self.idx[d - 1] = 0;
 
-                if (d == 1) self.done = true;
+                return outer_indices;
             }
-
-            return outer_indices;
         }
     };
 }
