@@ -126,7 +126,7 @@ pub fn Storage(comptime T: type, comptime D: Device) type {
         pub fn initImpl(allocator: std.mem.Allocator, buf: []T) !Self {
             const ref_count = try allocator.create(RefCount);
             ref_count.count = 1;
-            std.debug.print("init storage: buf= {*}\n", .{buf.ptr});
+            // std.debug.print("init storage: buf= {*}\n", .{buf.ptr});
 
             return Self{
                 .allocator = allocator,
@@ -176,7 +176,7 @@ pub fn Storage(comptime T: type, comptime D: Device) type {
 
             if (self._ref_count.count == 0) {
                 if (comptime D == .Cpu) {
-                    std.debug.print("release storage: {*}\n", .{self._buf.ptr});
+                    // std.debug.print("release storage: {*}\n", .{self._buf.ptr});
                     self.allocator.free(self._buf);
                     self.allocator.destroy(self._ref_count);
                 }

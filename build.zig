@@ -141,7 +141,13 @@ pub fn build(b: *std.Build) void {
     // Creates an executable that will run `test` blocks from the provided module.
     // Here `mod` needs to define a target, which is why earlier we made sure to
     // set the releative field.
+    const test_filters = b.option(
+        []const []const u8,
+        "test-filter",
+        "Filter test cases",
+    ) orelse &[0][]const u8{};
     const mod_tests = b.addTest(.{
+        .filters = test_filters,
         .root_module = mod,
     });
 
@@ -152,6 +158,7 @@ pub fn build(b: *std.Build) void {
     // root module. Note that test executables only test one module at a time,
     // hence why we have to create two separate ones.
     const exe_tests = b.addTest(.{
+        .filters = test_filters,
         .root_module = exe.root_module,
     });
 
@@ -165,29 +172,29 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
 
-    const tensor_mod = b.createModule(.{
-        .root_source_file = b.path("src/Tensor.zig"),
-        .target = target,
-    });
+    // const tensor_mod = b.createModule(.{
+    //     .root_source_file = b.path("src/tensor.zig"),
+    //     .target = target,
+    // });
 
-    // setup blas linkage
-    switch (target.result.os.tag) {
-        .linux => {
-            tensor_mod.link_libc = true;
-            tensor_mod.linkSystemLibrary("openblas", .{});
-        },
-        .macos => {
-            tensor_mod.linkFramework("Accelerate", .{});
-        },
-        else => {},
-    }
-    const tensor_tests = b.addTest(.{
-        .root_module = tensor_mod,
-    });
-    const tensor_exe_tests = b.addRunArtifact(tensor_tests);
+    // // setup blas linkage
+    // switch (target.result.os.tag) {
+    //     .linux => {
+    //         tensor_mod.link_libc = true;
+    //         tensor_mod.linkSystemLibrary("openblas", .{});
+    //     },
+    //     .macos => {
+    //         tensor_mod.linkFramework("Accelerate", .{});
+    //     },
+    //     else => {},
+    // }
+    // const tensor_tests = b.addTest(.{
+    //     .root_module = tensor_mod,
+    // });
+    // const tensor_exe_tests = b.addRunArtifact(tensor_tests);
 
-    const inner_test_step = b.step("inner_test", "Run inner tests");
-    inner_test_step.dependOn(&tensor_exe_tests.step);
+    // const inner_test_step = b.step("inner_test", "Run inner tests");
+    // inner_test_step.dependOn(&tensor_exe_tests.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //

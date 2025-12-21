@@ -182,7 +182,7 @@ pub fn isFloat(comptime T: type) bool {
     };
 }
 
-pub fn numberTypeComp(comptime T: type) type {
+pub fn comptimeTypeEraseComp(comptime T: type) type {
     return comptime switch (@typeInfo(T)) {
         .comptime_float => f32,
         .comptime_int => i32,
@@ -336,7 +336,6 @@ pub fn computeStrides(comptime N: usize, shape: [N]usize) [N]usize {
 pub fn indexShapeToFlat(comptime N: usize, shape: [N]usize, index: [N]usize) !usize {
     const stride = computeStrides(N, shape);
 
-    std.debug.print("shape: {any} index: {any}\n", .{ shape, index });
     return try indexToFlat(&index, &shape, &stride);
 }
 
@@ -361,20 +360,6 @@ pub fn flat_to_indices(allocator: std.mem.Allocator, flat_index: usize, strides_
         tmp %= strides_a[dim];
     }
     return indices;
-}
-
-pub fn cartesianProduct(allocator: std.mem.Allocator, dims: []const usize) !std.ArrayList(std.ArrayList(usize)) {
-    const total = product(dims);
-    var result = try std.ArrayList(std.ArrayList(usize)).initCapacity(allocator, total);
-
-    const strides = try computeStrides(allocator, dims);
-
-    for (0..total) |i| {
-        const indices = try flat_to_indices(allocator, i, strides.items);
-        try result.append(allocator, indices);
-    }
-
-    return result;
 }
 
 pub fn generateBroadcastStride(
@@ -444,21 +429,6 @@ pub fn compatibleBroacastShapes(comptime N: usize, lhs_shape: [N]usize, rhs_shap
     }
 
     return result;
-}
-
-test "cartesian product" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-
-    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
-    defer arena.deinit();
-
-    const allocator = arena.allocator();
-
-    const res = try cartesianProduct(allocator, &.{ 2, 3, 5 });
-    for (res.items) |item| {
-        std.debug.print("item: {any}\n", .{item});
-    }
 }
 
 test "get array len" {

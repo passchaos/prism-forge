@@ -196,7 +196,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
         }
 
         // elementwise method
-        pub fn map_(self: *Self, ctx: anytype, func: fn (T, @TypeOf(ctx)) T) void {
+        pub fn map_(self: *Self, ctx: anytype, func: fn (T, utils.comptimeTypeEraseComp(@TypeOf(ctx))) T) void {
             var iter = self.shapeIter();
 
             while (iter.next()) |idx| {
@@ -208,7 +208,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             self: *const Self,
             comptime RT: type,
             ctx: anytype,
-            func: fn (T, @TypeOf(ctx)) RT,
+            func: fn (T, utils.comptimeTypeEraseComp(@TypeOf(ctx))) RT,
         ) !Tensor(N, .{ .T = RT }) {
             const TI = Tensor(N, .{ .T = RT });
 
@@ -313,14 +313,11 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                 b.shape(),
             );
 
-            std.debug.print("target shape: {any}\n", .{target_shape});
-
             const a = try self.broadcastTo(target_shape);
             defer a.deinit();
             const c = try b.broadcastTo(target_shape);
             defer c.deinit();
 
-            std.debug.print("a: {f} c: {f}\n", .{ a, c });
             var new_buf = try self.s_allocator().alloc(T, utils.product(&target_shape));
 
             var iter_a = a.shapeIter();
@@ -738,14 +735,12 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             const a = try self.max(N - 1);
             defer a.deinit();
 
-            std.debug.print("self: {f} a: {f}\n", .{ self, a });
             var v = try self.sub(a);
             v.exp_();
 
             const vs = try v.sum(N - 1);
             defer vs.deinit();
 
-            std.debug.print("v: {f} vs: {f}\n", .{ v, vs });
             try v.div_(vs);
 
             return v;
@@ -879,7 +874,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             return try self.reduce(dim, scope.op_func, T, null);
         }
 
-        pub fn minAll(self: *const Self) !Self {
+        pub fn minAll(self: *const Self) !Tensor(0, .{ .T = T }) {
             const scope = struct {
                 fn op_func(acc: T, val: T) T {
                     return @min(acc, val);
@@ -897,7 +892,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             return try self.reduce(dim, scope.op_func, T, null);
         }
 
-        pub fn prodAll(self: *const Self) !Self {
+        pub fn prodAll(self: *const Self) !Tensor(0, .{ .T = T }) {
             const scope = struct {
                 fn op_func(acc: T, val: T) T {
                     return acc * val;
@@ -1064,7 +1059,6 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
         // attributes
         pub fn broadcastTo(self: Self, target_shape: anytype) !Self {
             const new_layout = try self.layout.broadcastTo(N, target_shape);
-            std.debug.print("new_layout: {f}\n", .{new_layout});
 
             const storage = self.storage.shared();
 
@@ -1073,7 +1067,6 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
 
         pub fn broadcastTo_(self: *Self, target_shape: anytype) !void {
             const new_layout = try self.layout.broadcastTo(N, target_shape);
-            std.debug.print("new_layout: {f}\n", .{new_layout});
 
             self.layout = new_layout;
         }
@@ -1109,7 +1102,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             self.layout = self.layout.transpose(0, 1) catch unreachable;
         }
 
-        pub fn permute_(self: *const Self, perm: [N]usize) !void {
+        pub fn permute_(self: *Self, perm: [N]usize) !void {
             self.layout = try self.layout.permute(perm);
         }
 
@@ -1138,7 +1131,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             const layout = try self.layout.squeeze(dim);
             const storage = self.storage.shared();
 
-            return try Tensor(N + 1, .{ .T = T }).fromDataImpl(
+            return try Tensor(N - 1, .{ .T = T }).fromDataImpl(
                 layout,
                 storage,
                 self._storage_offset,
@@ -1392,9 +1385,9 @@ pub fn fromData(comptime N: usize, comptime T: type, allocator: std.mem.Allocato
 
 pub fn fromScalar(allocator: std.mem.Allocator, value: anytype) !Tensor(
     0,
-    .{ .T = utils.numberTypeComp(@TypeOf(value)) },
+    .{ .T = utils.comptimeTypeEraseComp(@TypeOf(value)) },
 ) {
-    const T = utils.numberTypeComp(@TypeOf(value));
+    const T = utils.comptimeTypeEraseComp(@TypeOf(value));
 
     const layout = layout_t.Layout(0).init([0]usize{});
     const Storage = storage_t.Storage(T, .Cpu);
@@ -1475,12 +1468,12 @@ pub fn linspace(allocator: std.mem.Allocator, comptime T: type, args: struct {
 
 pub fn full(allocator: std.mem.Allocator, shapes_a: anytype, value: anytype) !Tensor(
     utils.array.getArrayShapeComp(@TypeOf(shapes_a))[0],
-    .{ .T = utils.numberTypeComp(@TypeOf(value)) },
+    .{ .T = utils.comptimeTypeEraseComp(@TypeOf(value)) },
 ) {
     const NDIM = comptime utils.array.getArrayNDimComp(@TypeOf(shapes_a));
     if (NDIM != 1) @compileError("only support 1-d array");
 
-    const T = utils.numberTypeComp(@TypeOf(value));
+    const T = utils.comptimeTypeEraseComp(@TypeOf(value));
     const N = comptime shapes_a.len;
 
     const Layout = layout_t.Layout(N);
@@ -1498,7 +1491,7 @@ pub fn full(allocator: std.mem.Allocator, shapes_a: anytype, value: anytype) !Te
 pub fn fullLike(allocator: std.mem.Allocator, tensor: anytype, value: anytype) !Tensor(
     @TypeOf(tensor).DIMS,
     .{
-        .T = utils.numberTypeComp(@TypeOf(value)),
+        .T = utils.comptimeTypeEraseComp(@TypeOf(value)),
     },
 ) {
     return try full(allocator, tensor.shape(), value);
@@ -1517,7 +1510,7 @@ pub fn zeros(allocator: std.mem.Allocator, shapes_a: anytype) !Tensor(
 }
 
 pub fn zerosLike(allocator: std.mem.Allocator, tensor: anytype) !@TypeOf(tensor) {
-    return try zeros(allocator, tensor.shapes());
+    return try zeros(allocator, tensor.shape());
 }
 
 pub fn ones(allocator: std.mem.Allocator, shapes_a: anytype) !Tensor(
@@ -1842,7 +1835,7 @@ test "math op" {
     {
         var t1 = try arange(allocator, i32, .{ .end = 10 });
         defer t1.deinit();
-        t1.add_(12);
+        try t1.add_(12);
         t1.clamp_(10, 15);
 
         const t2 = try fullLike(allocator, t1, 1.0);
@@ -1921,11 +1914,11 @@ test "reduce" {
         const t2 = try t1.gt(0.5);
         defer t2.deinit();
 
-        const any_t = try t2.anyTrue();
+        const any_t = try t2.anyTrueAll();
         defer any_t.deinit();
         const any_t_all = try t2.allTrueAll();
         defer any_t_all.deinit();
-        const all_t = try t2.allTrue();
+        const all_t = try t2.allTrueAll();
         defer all_t.deinit();
         const all_t_all = try t2.allTrueAll();
         defer all_t_all.deinit();
@@ -2099,7 +2092,7 @@ test "data item" {
         defer t2.deinit();
 
         const item = try t2.dataItem();
-        try std.testing.expectEqual(@TypeOf(item), utils.numberTypeComp(@TypeOf(5.0)));
+        try std.testing.expectEqual(@TypeOf(item), utils.comptimeTypeEraseComp(@TypeOf(5.0)));
 
         std.debug.print("t2: {f} item: {}\n", .{ t2, item });
     }
