@@ -219,25 +219,6 @@ pub fn sliceEqual(comptime T: type, a: []const T, b: []const T) bool {
     return true;
 }
 
-pub fn insertDim(comptime shape: []const ?usize, comptime dim: usize) []const ?usize {
-    if (dim > shape.len) @compileError("dim is out of range");
-
-    const new_shape_len = shape.len + 1;
-    var tmp: [new_shape_len]?usize = undefined;
-
-    var i = 0;
-    while (i < new_shape_len) : (i += 1) {
-        if (i == dim) {
-            tmp[i] = 1;
-            i += 1;
-        } else {
-            tmp[i] = shape[i];
-        }
-    }
-
-    return tmp;
-}
-
 pub fn toOptionalShape(comptime shape: []const usize) [shape.len]?usize {
     var tmp: [shape.len]?usize = undefined;
     inline for (shape, 0..) |val, i| {

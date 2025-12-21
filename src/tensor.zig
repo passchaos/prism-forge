@@ -72,6 +72,17 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             return try self.split(allocator, chunk_size_i, dim);
         }
 
+        pub fn dataItem(self: *const Self) !T {
+            var data_iter = self.dataIter();
+            const item = data_iter.next();
+
+            if (item) |i| {
+                return try self.getData(i);
+            } else {
+                return error.EmptyTensor;
+            }
+        }
+
         pub fn unbind(self: *const Self, allocator: std.mem.Allocator, dim: usize) ![]const Tensor(N - 1, storage_args) {
             if (dim >= self.ndim()) return error.InvalidDim;
 
@@ -110,6 +121,32 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             }
 
             return result;
+        }
+
+        pub fn oneHot(self: *const Self, num_classes: ?usize) !Tensor(N + 1, .{ .T = T }) {
+            switch (@typeInfo(T)) {
+                .int => {
+                    const new_dim = if (num_classes) |nc| nc else blk: {
+                        const max_value = try self.maxAll();
+                        defer max_value.deinit();
+
+                        const max_v_item = try max_value.dataItem();
+                        break :blk @as(usize, @intCast(max_v_item + 1));
+                    };
+
+                    var result_tensor = try full(self.s_allocator(), try utils.array.insertDim(N, self.shape(), N, new_dim), 0);
+
+                    var self_iter = self.dataIter();
+                    while (self_iter.next()) |idx| {
+                        const val = try self.getData(idx);
+                        const dest_idx = try utils.array.insertDim(N, idx, N, @as(usize, @intCast(val)));
+                        try result_tensor.setData(dest_idx, 1);
+                    }
+
+                    return result_tensor;
+                },
+                else => @compileError("only support int tensor for oneHot"),
+            }
         }
 
         // elementwise method
@@ -1095,8 +1132,8 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             return self.layout.isContiguous();
         }
 
-        pub fn equal(self: *const Self, other: *const Self) bool {
-            if (!self.layout.equal(&other.layout)) return false;
+        pub fn equal(self: Self, other: Self) bool {
+            if (!self.layout.equal(other.layout)) return false;
 
             var self_iter = self.dataIter();
 
@@ -1104,7 +1141,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                 const sv = self.getData(idx) catch unreachable;
                 const ov = other.getData(idx) catch unreachable;
 
-                if (!sv.equal(ov)) return false;
+                if (sv != ov) return false;
             }
 
             return true;
@@ -1293,6 +1330,25 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
 }
 
 // create factory method
+pub fn fromScalar(allocator: std.mem.Allocator, value: anytype) !Tensor(
+    0,
+    .{ .T = utils.numberTypeComp(@TypeOf(value)) },
+) {
+    const T = utils.numberTypeComp(@TypeOf(value));
+
+    const layout = layout_t.Layout(0).init([0]usize{});
+    const Storage = storage_t.Storage(T, .Cpu);
+
+    const storage = try Storage.full(allocator, 1, @as(T, value));
+
+    return Tensor(0, .{ .T = T })
+        .fromDataImpl(
+        layout,
+        storage,
+        0,
+    );
+}
+
 pub fn fromArray(allocator: std.mem.Allocator, arr: anytype) !Tensor(
     utils.array.getArrayShapeComp(@TypeOf(arr)).len,
     .{ .T = utils.array.getArrayItemTypeComp(@TypeOf(arr)) },
@@ -1961,4 +2017,95 @@ test "softmax" {
 
     const t4_approx_equal = t4.approxEqual(t4d, 0.00001, 0.00001);
     try std.testing.expect(t4_approx_equal);
+}
+
+test "data item" {
+    const allocator = std.testing.allocator;
+
+    {
+        const t1 = try fromScalar(allocator, 2);
+        defer t1.deinit();
+
+        const item = try t1.dataItem();
+        try std.testing.expectEqual(item, 2);
+
+        std.debug.print("t1: {f} item: {}\n", .{ t1, item });
+    }
+
+    {
+        const t1 = try rand(allocator, [3]usize{ 2, 3, 5 }, -5.0, 5.0);
+        defer t1.deinit();
+        const t2 = try t1.maxAll();
+        defer t2.deinit();
+
+        const item = try t2.dataItem();
+        try std.testing.expectEqual(@TypeOf(item), utils.numberTypeComp(@TypeOf(5.0)));
+
+        std.debug.print("t2: {f} item: {}\n", .{ t2, item });
+    }
+}
+
+test "one hot" {
+    const allocator = std.testing.allocator;
+
+    {
+        const t1 = try arange(allocator, i32, .{ .end = 10 });
+        defer t1.deinit();
+
+        const t2 = try t1.oneHot(null);
+        defer t2.deinit();
+
+        const td = try fromArray(allocator, [_][10]i32{
+            .{ 1, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+            .{ 0, 1, 0, 0, 0, 0, 0, 0, 0, 0 },
+            .{ 0, 0, 1, 0, 0, 0, 0, 0, 0, 0 },
+            .{ 0, 0, 0, 1, 0, 0, 0, 0, 0, 0 },
+            .{ 0, 0, 0, 0, 1, 0, 0, 0, 0, 0 },
+            .{ 0, 0, 0, 0, 0, 1, 0, 0, 0, 0 },
+            .{ 0, 0, 0, 0, 0, 0, 1, 0, 0, 0 },
+            .{ 0, 0, 0, 0, 0, 0, 0, 1, 0, 0 },
+            .{ 0, 0, 0, 0, 0, 0, 0, 0, 1, 0 },
+            .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 },
+        });
+        defer td.deinit();
+
+        const eql_result = t2.equal(td);
+        try std.testing.expect(eql_result);
+
+        std.debug.print("t1: {f} t2: {f}\n", .{ t1, t2 });
+    }
+
+    {
+        const t1 = try arange(allocator, i32, .{ .end = 10 });
+        defer t1.deinit();
+
+        const t2 = try t1.reshape([2]usize{ 2, 5 });
+        defer t2.deinit();
+
+        const t3 = try t2.oneHot(null);
+        defer t3.deinit();
+
+        const td = try fromArray(allocator, [_][5][10]i32{
+            .{
+                .{ 1, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+                .{ 0, 1, 0, 0, 0, 0, 0, 0, 0, 0 },
+                .{ 0, 0, 1, 0, 0, 0, 0, 0, 0, 0 },
+                .{ 0, 0, 0, 1, 0, 0, 0, 0, 0, 0 },
+                .{ 0, 0, 0, 0, 1, 0, 0, 0, 0, 0 },
+            },
+            .{
+                .{ 0, 0, 0, 0, 0, 1, 0, 0, 0, 0 },
+                .{ 0, 0, 0, 0, 0, 0, 1, 0, 0, 0 },
+                .{ 0, 0, 0, 0, 0, 0, 0, 1, 0, 0 },
+                .{ 0, 0, 0, 0, 0, 0, 0, 0, 1, 0 },
+                .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 },
+            },
+        });
+        defer td.deinit();
+
+        const eql_result = t3.equal(td);
+        try std.testing.expect(eql_result);
+
+        std.debug.print("t2: {f} t3: {f}\n", .{ t2, t3 });
+    }
 }

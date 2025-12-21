@@ -198,6 +198,7 @@ pub fn Layout(comptime N: usize) type {
         }
 
         pub fn size(self: *const Self) usize {
+            if (N == 0) return 1;
             return product(&self._shape);
         }
 
