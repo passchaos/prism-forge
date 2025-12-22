@@ -1682,7 +1682,7 @@ test "tensor create" {
     }
 
     {
-        const t5 = try zeros(allocator, [3]usize{ 2, 3, 5 });
+        const t5 = try zeros(allocator, f32, [3]usize{ 2, 3, 5 });
         defer t5.deinit();
         std.debug.print("t5: {f}\n", .{t5});
     }
@@ -2042,35 +2042,52 @@ test "nan inf" {
 test "softmax" {
     const allocator = std.testing.allocator;
 
-    const t1 = try fromArray(allocator, [3]f32{ 0.3, 2.9, 4.0 });
-    defer t1.deinit();
-    const t2 = try t1.softmax();
-    defer t2.deinit();
+    {
+        const t1 = try fromArray(allocator, [3]f32{ 0.3, 2.9, 4.0 });
+        defer t1.deinit();
+        const t2 = try t1.softmax();
+        defer t2.deinit();
 
-    const td = try fromArray(allocator, [3]f32{ 0.01821127, 0.24519181, 0.73659691 });
-    defer td.deinit();
+        const td = try fromArray(allocator, [3]f32{ 0.01821127, 0.24519181, 0.73659691 });
+        defer td.deinit();
 
-    const approx_equal = t2.approxEqual(td, 0.00001, 0.00001);
-    try std.testing.expect(approx_equal);
-    std.debug.print("t2: {f} td: {f}\n", .{ t2, td });
+        const approx_equal = t2.approxEqual(td, 0.00001, 0.00001);
+        try std.testing.expect(approx_equal);
+        std.debug.print("t2: {f} td: {f}\n", .{ t2, td });
 
-    const t3 = try fromArray(allocator, [_][10]f32{
-        .{ 0.1, 0.05, 0.6, 0.0, 0.05, 0.1, 0.0, 0.1, 0.0, 0.0 },
-        .{ 0.1, 0.15, 0.5, 0.0, 0.05, 0.1, 0.0, 0.1, 0.0, 0.0 },
-    });
-    defer t3.deinit();
+        const t3 = try fromArray(allocator, [_][10]f32{
+            .{ 0.1, 0.05, 0.6, 0.0, 0.05, 0.1, 0.0, 0.1, 0.0, 0.0 },
+            .{ 0.1, 0.15, 0.5, 0.0, 0.05, 0.1, 0.0, 0.1, 0.0, 0.0 },
+        });
+        defer t3.deinit();
 
-    const t4 = try t3.softmax();
-    defer t4.deinit();
+        const t4 = try t3.softmax();
+        defer t4.deinit();
 
-    const t4d = try fromArray(allocator, [_][10]f32{
-        .{ 0.09832329, 0.09352801, 0.16210771, 0.0889666, 0.09352801, 0.09832329, 0.0889666, 0.09832329, 0.0889666, 0.0889666 },
-        .{ 0.09887603, 0.10394551, 0.1475057, 0.08946673, 0.09405379, 0.09887603, 0.08946673, 0.09887603, 0.08946673, 0.08946673 },
-    });
-    defer t4d.deinit();
+        const t4d = try fromArray(allocator, [_][10]f32{
+            .{ 0.09832329, 0.09352801, 0.16210771, 0.0889666, 0.09352801, 0.09832329, 0.0889666, 0.09832329, 0.0889666, 0.0889666 },
+            .{ 0.09887603, 0.10394551, 0.1475057, 0.08946673, 0.09405379, 0.09887603, 0.08946673, 0.09887603, 0.08946673, 0.08946673 },
+        });
+        defer t4d.deinit();
 
-    const t4_approx_equal = t4.approxEqual(t4d, 0.00001, 0.00001);
-    try std.testing.expect(t4_approx_equal);
+        const t4_approx_equal = t4.approxEqual(t4d, 0.00001, 0.00001);
+        try std.testing.expect(t4_approx_equal);
+    }
+
+    {
+        const t1 = try fromArray(allocator, [_][3]f64{
+            .{ 1.05414809, 0.63071653, 1.1328074 },
+        });
+        defer t1.deinit();
+        const t2 = try t1.softmax();
+        defer t2.deinit();
+
+        const expected_t2 = try fromArray(allocator, [_][3]f64{.{ 0.36541271, 0.23927078, 0.39531651 }});
+        defer expected_t2.deinit();
+
+        const t2_approx_equal = t2.approxEqual(expected_t2, 1e-8, 1e-8);
+        try std.testing.expect(t2_approx_equal);
+    }
 }
 
 test "data item" {
@@ -2242,5 +2259,19 @@ test "loss func" {
         try std.testing.expectApproxEqAbs(0.55433106, cross_entropy_v, 0.0001);
 
         std.debug.print("mse: {f} cross_entropy: {f}\n", .{ mse_loss, cross_entropy_loss });
+    }
+
+    {
+        const y = try fromArray(allocator, [3]f64{ 0.36541271, 0.23927078, 0.39531651 });
+        defer y.deinit();
+        const t = try fromArray(allocator, [3]f64{ 0.0, 0.0, 1.0 });
+        defer t.deinit();
+
+        const cross_entropy_t = try y.crossEntropy(t);
+        defer cross_entropy_t.deinit();
+
+        const cross_entropy = try cross_entropy_t.dataItem();
+
+        try std.testing.expectApproxEqAbs(0.9280682857864075, cross_entropy, 1e-7);
     }
 }

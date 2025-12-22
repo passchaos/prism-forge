@@ -5,6 +5,7 @@ const host = @import("device/host.zig");
 
 const layout_t = @import("layout.zig");
 const storage_t = @import("storage.zig");
+const log = @import("log.zig");
 
 const tensor = @import("tensor.zig");
 const Tensor = tensor.Tensor;
@@ -68,4 +69,27 @@ pub fn matmul(t1: anytype, t2: anytype) !Tensor(
     const storage = try storage_t.Storage(ER, .Cpu).initImpl(a1, buf);
 
     return try tensor.Tensor(nres, .{ .T = ER }).fromDataImpl(layout, storage, 0);
+}
+
+test "matmul" {
+    const allocator = std.testing.allocator;
+
+    const t1 = try tensor.fromArray(allocator, [_][2]f64{.{ 0.6, 0.9 }});
+    defer t1.deinit();
+    const t2 = try tensor.fromArray(allocator, [_][3]f64{
+        .{ 0.47355232, 0.9977393, 0.84668094 },
+        .{ 0.85557411, 0.03563661, 0.69422093 },
+    });
+    defer t2.deinit();
+
+    const t3 = try matmul(t1, t2);
+    defer t3.deinit();
+    const expected_t3 = try tensor.fromArray(allocator, [_][3]f64{
+        .{ 1.05414809, 0.63071653, 1.1328074 },
+    });
+    defer expected_t3.deinit();
+
+    const approx_compare_res = expected_t3.approxEqual(t3, 1e-8, 1e-8);
+    log.print(@src(), "Approximate comparison result: {}\n", .{approx_compare_res});
+    try std.testing.expect(approx_compare_res);
 }

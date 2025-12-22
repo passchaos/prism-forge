@@ -89,6 +89,7 @@ fn function2(
     comptime N: usize,
     comptime T: type,
     input: tensor.Tensor(N, .{ .T = T }),
+    _: void,
 ) T {
     var input_iter = input.shapeIter();
 
@@ -107,14 +108,14 @@ test "differential" {
     const arr = try tensor.fromArray(allocator, [_]DT{ 3.0, 4.0 });
     defer arr.deinit();
 
-    const v1 = try basic.numericalGradient(allocator, 1, DT, function2, arr);
+    const v1 = try basic.numericalGradient(allocator, 1, DT, void{}, function2, arr);
     defer v1.deinit();
 
     log.print(@src(), "v1: {f}\n", .{v1});
 
     var init_x = try tensor.fromArray(allocator, [_]DT{ -3.0, 4.0 });
     defer init_x.deinit();
-    try basic.gradientDescent(allocator, 1, DT, function2, &init_x, .{ .lr = 0.1 });
+    try basic.gradientDescent(allocator, 1, DT, void{}, function2, &init_x, .{ .lr = 0.1 });
     log.print(@src(), "init x: {f}\n", .{init_x});
 }
 
@@ -124,24 +125,31 @@ const SimpleNet = struct {
 
     const Self = @This();
 
-    fn deinit(self: *const Self) void {
-        return self.w.deinit();
+    // fn deinit(self: *const Self) void {
+    //     return self.w.deinit();
+    // }
+
+    fn resetWeight(self: *Self, new_w: Tensor2) void {
+        self.w.deinit();
+        self.w = new_w;
     }
 
-    fn init(allocator: std.mem.Allocator) !Self {
-        const w = try tensor.randNorm(allocator, [2]usize{ 2, 3 }, 0.0, 1.0);
-        return Self{ .w = w };
+    fn init(weight: Tensor2) Self {
+        return Self{ .w = weight };
     }
 
     fn predict(self: *const Self, x: Tensor2) !Tensor2 {
         return try matmul.matmul(x, self.w);
     }
 
-    fn loss(self: *const Self, x: Tensor2, t: Tensor2) !f32 {
+    fn loss(self: *const Self, x: Tensor2, t: Tensor2) !DT {
         const z = try self.predict(x);
+        // log.print(@src(), "z: {f}\n", .{z});
         defer z.deinit();
         const y = try z.softmax();
         defer y.deinit();
+
+        // log.print(@src(), "y: {f}\n", .{y});
 
         const cross_entropy = try y.crossEntropy(t);
         defer cross_entropy.deinit();
@@ -149,11 +157,33 @@ const SimpleNet = struct {
     }
 };
 
+fn tensor_loss(
+    comptime N: usize,
+    comptime T: type,
+    input: tensor.Tensor(N, .{ .T = T }),
+    ctx: struct {
+        x: tensor.Tensor(N, .{ .T = T }),
+        t: tensor.Tensor(N, .{ .T = T }),
+    },
+) T {
+    const net = SimpleNet.init(input);
+
+    const loss = net.loss(ctx.x, ctx.t) catch unreachable;
+
+    return loss;
+}
+
 test "simple net" {
     const allocator = std.testing.allocator;
 
-    const net = try SimpleNet.init(allocator);
-    defer net.deinit();
+    const weight = try tensor.fromArray(allocator, [_][3]DT{
+        .{ 0.47355232, 0.9977393, 0.84668094 },
+        .{ 0.85557411, 0.03563661, 0.69422093 },
+    });
+    defer weight.deinit();
+
+    var net = SimpleNet.init(weight);
+    // defer net.deinit();
 
     log.print(@src(), "w: {f}\n", .{net.w});
 
@@ -168,5 +198,21 @@ test "simple net" {
     defer t.deinit();
 
     const loss = try net.loss(x, t);
+    try std.testing.expectApproxEqAbs(0.9280682857864075, loss, 1e-15);
     log.print(@src(), "loss: {}\n", .{loss});
+
+    const result_t = try basic.numericalGradient(allocator, 2, DT, .{ .x = x, .t = t }, tensor_loss, weight);
+    // _ = result_t;
+    defer result_t.deinit();
+
+    const expected_result = try tensor.fromArray(allocator, [_][3]DT{
+        .{ 0.21924763, 0.14356247, -0.36281009 },
+        .{ 0.32887144, 0.2153437, -0.54421514 },
+    });
+    defer expected_result.deinit();
+
+    const approx_eq = result_t.approxEqual(expected_result, 1e-6, 1e-7);
+    try std.testing.expect(approx_eq);
+
+    std.debug.print("result_t: {f}\n", .{result_t});
 }

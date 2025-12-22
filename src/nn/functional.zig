@@ -38,7 +38,7 @@ pub fn crossEntropy(
 
             const scope = struct {
                 fn call(v: T, _: void) T {
-                    return -@log(v + 0.000001);
+                    return -@log(v + 1e-7);
                 }
             };
 
