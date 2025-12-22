@@ -16,7 +16,7 @@ pub fn logFn(
     _ = scope;
 
     const src = @src();
-    std.debug.print("{s}:{d} [{s}] " ++ format ++ "\n", .{
+    log.print(@src(), "{s}:{d} [{s}] " ++ format ++ "\n", .{
         src.file, src.line, @tagName(level),
     } ++ args);
     // std.log.defaultLog(level, scope, format, args);
@@ -84,16 +84,18 @@ fn generateXY() !void {
     }
 }
 
+const DT = f64;
 fn function2(
     comptime N: usize,
-    input: tensor.Tensor(N, .{}),
-) f32 {
+    comptime T: type,
+    input: tensor.Tensor(N, .{ .T = T }),
+) T {
     var input_iter = input.shapeIter();
 
-    var result: f32 = 0;
+    var result: T = 0;
 
     while (input_iter.next()) |idx| {
-        result += std.math.pow(f32, input.getData(idx) catch unreachable, 2);
+        result += std.math.pow(T, input.getData(idx) catch unreachable, 2);
     }
 
     return result;
@@ -102,24 +104,21 @@ fn function2(
 test "differential" {
     const allocator = std.testing.allocator;
 
-    std.testing.log_level = .debug;
-
-    const arr = try tensor.fromArray(allocator, [_]f32{ 3.0, 4.0 });
+    const arr = try tensor.fromArray(allocator, [_]DT{ 3.0, 4.0 });
     defer arr.deinit();
 
-    const v1 = try basic.numericalGradient(allocator, 1, function2, arr);
+    const v1 = try basic.numericalGradient(allocator, 1, DT, function2, arr);
     defer v1.deinit();
 
-    std.log.info("different", .{});
-    std.debug.print("v1: {f}\n", .{v1});
+    log.print(@src(), "v1: {f}\n", .{v1});
 
-    var init_x = try tensor.fromArray(allocator, [_]f32{ -3.0, 4.0 });
+    var init_x = try tensor.fromArray(allocator, [_]DT{ -3.0, 4.0 });
     defer init_x.deinit();
-    try basic.gradientDescent(allocator, 1, function2, &init_x, .{ .lr = 0.1 });
-    std.debug.print("init x: {f}\n", .{init_x});
+    try basic.gradientDescent(allocator, 1, DT, function2, &init_x, .{ .lr = 0.1 });
+    log.print(@src(), "init x: {f}\n", .{init_x});
 }
 
-pub const Tensor2 = tensor.Tensor(2, .{});
+pub const Tensor2 = tensor.Tensor(2, .{ .T = DT });
 const SimpleNet = struct {
     w: Tensor2,
 
@@ -156,19 +155,18 @@ test "simple net" {
     const net = try SimpleNet.init(allocator);
     defer net.deinit();
 
-    std.debug.print("w: {f}\n", .{net.w});
+    log.print(@src(), "w: {f}\n", .{net.w});
 
-    const x = try tensor.fromArray(allocator, [_][2]f32{
+    const x = try tensor.fromArray(allocator, [_][2]DT{
         .{ 0.6, 0.9 },
     });
     defer x.deinit();
 
-    const t = try tensor.fromArray(allocator, [_][3]f32{
+    const t = try tensor.fromArray(allocator, [_][3]DT{
         .{ 0.0, 0.0, 1.0 },
     });
     defer t.deinit();
 
     const loss = try net.loss(x, t);
-    std.log.info("hahah", .{});
-    std.debug.print("loss: {}\n", .{loss});
+    log.print(@src(), "loss: {}\n", .{loss});
 }
