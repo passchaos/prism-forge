@@ -2,6 +2,7 @@ const std = @import("std");
 const tensor = @import("tensor.zig");
 const layout = @import("layout.zig");
 const storage = @import("storage.zig");
+const log = @import("log.zig");
 
 const Tensor_2 = tensor.Tensor(2, .{});
 const Tensor_1 = tensor.Tensor(1, .{});
@@ -124,5 +125,5 @@ test "mnist images and labels" {
     const test_labels = res.test_labels;
     defer test_labels.deinit();
 
-    std.debug.print("train_images: {f} train_labels: {f} test_images: {f} test_labels: {f}\n", .{ train_images, train_labels, test_images, test_labels });
+    log.print(@src(), "train_images: {f} train_labels: {f} test_images: {f} test_labels: {f}\n", .{ train_images, train_labels, test_images, test_labels });
 }

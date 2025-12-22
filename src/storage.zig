@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("log.zig");
 
 const RefCount = struct {
     count: usize,
@@ -126,7 +127,7 @@ pub fn Storage(comptime T: type, comptime D: Device) type {
         pub fn initImpl(allocator: std.mem.Allocator, buf: []T) !Self {
             const ref_count = try allocator.create(RefCount);
             ref_count.count = 1;
-            // std.debug.print("init storage: buf= {*}\n", .{buf.ptr});
+            // log.print(@src(), "init storage: buf= {*}\n", .{buf.ptr});
 
             return Self{
                 .allocator = allocator,
@@ -176,7 +177,7 @@ pub fn Storage(comptime T: type, comptime D: Device) type {
 
             if (self._ref_count.count == 0) {
                 if (comptime D == .Cpu) {
-                    // std.debug.print("release storage: {*}\n", .{self._buf.ptr});
+                    // log.print(@src(), "release storage: {*}\n", .{self._buf.ptr});
                     self.allocator.free(self._buf);
                     self.allocator.destroy(self._ref_count);
                 }
@@ -212,7 +213,7 @@ test "ref_count" {
     const StorageF32 = Storage(f32, .Cpu);
 
     const buf = try allocator.alloc(f32, 10);
-    std.debug.print("buf: {*}\n", .{buf.ptr});
+    log.print(@src(), "buf: {*}\n", .{buf.ptr});
 
     // allocator.free(buf);
     var storage = try StorageF32.initImpl(allocator, buf);
@@ -235,7 +236,7 @@ test "ref_count" {
         defer s4.deinit();
         try std.testing.expectEqual(s1.refCount(), 5);
 
-        std.debug.print("storage: {f}\ns1: {f}\ns2: {f}\ns3: {f}\ns4: {f}\n", .{ storage, s1, s2, s3, s4 });
+        log.print(@src(), "storage: {f}\ns1: {f}\ns2: {f}\ns3: {f}\ns4: {f}\n", .{ storage, s1, s2, s3, s4 });
     }
 
     try std.testing.expect(storage.refCount() == 1);
@@ -261,7 +262,7 @@ test "arange" {
     try std.testing.expect(s1.len() == 10);
     try std.testing.expect(s1.dataSlice()[0] == 0);
     try std.testing.expect(s1.dataSlice()[9] == 9);
-    std.debug.print("s1: {f}\n", .{s1});
+    log.print(@src(), "s1: {f}\n", .{s1});
 }
 
 test "linspace" {
@@ -276,7 +277,7 @@ test "linspace" {
     });
     defer s1.deinit();
 
-    std.debug.print("s1: {f} data_slice: {any}\n", .{ s1, s1.dataSlice() });
+    log.print(@src(), "s1: {f} data_slice: {any}\n", .{ s1, s1.dataSlice() });
 
     try std.testing.expect(s1.len() == 10);
 }
@@ -293,7 +294,7 @@ test "random" {
     try std.testing.expect(s1.len() == 100);
     try std.testing.expect(s2.len() == 100);
 
-    std.debug.print("s1: {f} s2: {f}\n", .{ s1, s2 });
+    log.print(@src(), "s1: {f} s2: {f}\n", .{ s1, s2 });
 }
 
 test "cat" {
@@ -311,5 +312,5 @@ test "cat" {
 
     try std.testing.expectEqualSlices(f32, sc.dataSlice()[0..s1.len()], s1.dataSlice());
     try std.testing.expectEqualSlices(f32, sc.dataSlice()[s1.len()..], s2.dataSlice());
-    std.debug.print("s1: {any}\ns2: {any}\nsc: {any}\n", .{ s1.dataSlice(), s2.dataSlice(), sc.dataSlice() });
+    log.print(@src(), "s1: {any}\ns2: {any}\nsc: {any}\n", .{ s1.dataSlice(), s2.dataSlice(), sc.dataSlice() });
 }

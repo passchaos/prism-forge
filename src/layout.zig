@@ -1,5 +1,6 @@
 const std = @import("std");
 const utils = @import("./utils.zig");
+const log = @import("log.zig");
 const product = utils.product;
 
 pub fn Layout(comptime N: usize) type {
@@ -261,7 +262,7 @@ test "unsqueeze" {
     const Layout3 = Layout(3);
     const layout = Layout3.initRaw([_]usize{ 2, 3, 4 }, [_]usize{ 12, 4, 1 });
 
-    std.debug.print("layout: {f}\n", .{layout});
+    log.print(@src(), "layout: {f}\n", .{layout});
     const unsqueezed = try layout.unsqueeze(1);
     try std.testing.expectEqual(unsqueezed._shape, [_]usize{ 2, 1, 3, 4 });
     try std.testing.expectEqual(unsqueezed._stride, [_]usize{ 12, 12, 4, 1 });
@@ -269,7 +270,7 @@ test "unsqueeze" {
     const squeezed = try unsqueezed.squeeze(1);
     try std.testing.expectEqual(squeezed._shape, [_]usize{ 2, 3, 4 });
     try std.testing.expectEqual(squeezed._stride, [_]usize{ 12, 4, 1 });
-    std.debug.print("squeezed: {f}\n", .{squeezed});
+    log.print(@src(), "squeezed: {f}\n", .{squeezed});
 }
 
 test "cat or stack" {
@@ -287,9 +288,9 @@ test "cat or stack" {
 
     const ls = try Layout3.stack(&.{ l1, l3 }, 2);
     try std.testing.expectEqualDeep(ls.shape(), [4]usize{ 2, 3, 2, 4 });
-    std.debug.print("lc: {f} ls: {f}\n", .{ lc, ls });
+    log.print(@src(), "lc: {f} ls: {f}\n", .{ lc, ls });
 
-    // std.debug.print("layout: {f}\n", .{layout});
+    // log.print(@src(), "layout: {f}\n", .{layout});
     // const stacked = try layout.stack(1, layout);
     // try std.testing.expectEqual(stacked._shape, [_]usize{ 2, 2, 3, 4 });
     // try std.testing.expectEqual(stacked._stride, [_]usize{ 12, 12, 4, 1 });
@@ -361,6 +362,6 @@ test "shape iter" {
     var iter = layout.iter();
 
     while (iter.next()) |idx| {
-        std.debug.print("idx: {any}\n", .{idx});
+        log.print(@src(), "idx: {any}\n", .{idx});
     }
 }

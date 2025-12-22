@@ -1,6 +1,7 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const SDLBackend = @import("sdl-backend");
+const log = @import("log.zig");
 
 var win: ?dvui.Window = null;
 
@@ -88,11 +89,11 @@ pub fn beginPlotLoop(allocator_a: std.mem.Allocator) !void {
         for (dvui.events()) |event| {
             switch (event.evt) {
                 .window => if (event.evt.window.action == .close) {
-                    std.debug.print("window close\n", .{});
+                    log.print(@src(), "window close\n", .{});
                     break :main_loop;
                 },
                 .app => if (event.evt.app.action == .quit) {
-                    std.debug.print("app quit\n", .{});
+                    log.print(@src(), "app quit\n", .{});
                     break :main_loop;
                 },
                 else => {},

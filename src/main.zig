@@ -5,6 +5,7 @@ const DType = @import("dtype.zig").DataType;
 const plot = @import("plot.zig");
 const matmul = @import("matmul.zig");
 const basic = @import("nn/basic.zig");
+const log = @import("log.zig");
 
 pub fn logFn(
     comptime level: std.log.Level,
@@ -32,24 +33,24 @@ pub fn isStruct(comptime T: type) bool {
 
 fn matmulDemo(allocator: std.mem.Allocator) !void {
     const t1 = try tensor.rand(allocator, [2]usize{ 3000, 3000 }, 0.0, 1.0);
-    std.debug.print("t1: {f} dtype: {}\n", .{ t1.layout, @TypeOf(t1).T });
+    log.print(@src(), "t1: {f} dtype: {}\n", .{ t1.layout, @TypeOf(t1).T });
 
     var t2 = try tensor.randNorm(allocator, [2]usize{ 3000, 3000 }, 0.0, 1.0);
-    std.debug.print("t2: {f}\n", .{t2.layout});
+    log.print(@src(), "t2: {f}\n", .{t2.layout});
 
     t2.transpose_();
 
-    std.debug.print("is contiguous: {}\n", .{t2.isContiguous()});
+    log.print(@src(), "is contiguous: {}\n", .{t2.isContiguous()});
 
     const t2_tc = try t2.contiguous();
 
-    std.debug.print("is contiguous: t1= {} t2_tc= {}\n", .{ t1.isContiguous(), t2_tc.isContiguous() });
+    log.print(@src(), "is contiguous: t1= {} t2_tc= {}\n", .{ t1.isContiguous(), t2_tc.isContiguous() });
 
     const begin = std.time.milliTimestamp();
     const t3 = try matmul.matmul(t1, t2_tc);
     const end = std.time.milliTimestamp();
 
-    std.debug.print("t3: {f}\nelapsed: {d} milliseconds\n", .{ t3.layout, end - begin });
+    log.print(@src(), "t3: {f}\nelapsed: {d} milliseconds\n", .{ t3.layout, end - begin });
 }
 
 pub fn main() !void {

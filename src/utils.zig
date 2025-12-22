@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("log.zig");
 
 pub const array = struct {
     pub fn getArrayNDimComp(comptime T: type) usize {
@@ -457,11 +458,11 @@ test "get array len" {
     try std.testing.expectEqualSlices(usize, &[3]usize{ 2, 3, 4 }, &shape);
     try std.testing.expect(if (dtype == f32) true else false);
 
-    std.debug.print("shape: {any} dtype: {}\n", .{ shape, dtype });
+    log.print(@src(), "shape: {any} dtype: {}\n", .{ shape, dtype });
 
     const s: []const f32 = @ptrCast(&arr);
     try std.testing.expectEqual(s.len, 24);
-    std.debug.print("s: {any} len: {}\n", .{ s, s.len });
+    log.print(@src(), "s: {any} len: {}\n", .{ s, s.len });
 }
 
 test "broadcast shape" {
@@ -476,7 +477,7 @@ test "broadcast shape" {
     );
     try std.testing.expectEqual([2]usize{ 0, 1 }, broadcasted_stride);
 
-    std.debug.print("begin compatible handle\n", .{});
+    log.print(@src(), "begin compatible handle\n", .{});
     const compatible_broadcasted_shape = try compatibleBroacastShapes(
         2,
         orig_shape,

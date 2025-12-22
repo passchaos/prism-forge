@@ -1,6 +1,7 @@
 const std = @import("std");
 const utils = @import("utils.zig");
 const host = @import("./device/host.zig");
+const log = @import("./log.zig");
 
 const dtype_o = @import("./dtype.zig");
 const DataType = dtype_o.DataType;
@@ -1038,7 +1039,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                 return self;
             }
 
-            std.debug.print("run contiguous action\n", .{});
+            log.print(@src(), "run contiguous action\n", .{});
 
             const new_buf = try self.storage.allocator.alloc(T, self.size());
 
@@ -1210,7 +1211,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
 
             const init_index = [_]usize{0} ** N;
             self.fmtRecursive(writer, 0, init_index) catch |err| {
-                std.debug.print("meet failure: {}", .{err});
+                log.print(@src(), "meet failure: {}", .{err});
                 return std.Io.Writer.Error.WriteFailed;
             };
             _ = try writer.write("\n}");
@@ -1646,7 +1647,7 @@ test "from data directly" {
     try std.testing.expectEqual(t1.size(), 2 * 3 * 4);
     try std.testing.expect(if (@TypeOf(t1).T == f32) true else false);
 
-    std.debug.print("t1: {f}\n", .{t1});
+    log.print(@src(), "t1: {f}\n", .{t1});
 }
 
 test "tensor create" {
@@ -1655,13 +1656,13 @@ test "tensor create" {
     {
         const t1 = try arange(allocator, i32, .{ .start = 0, .step = 2, .end = 10 });
         defer t1.deinit();
-        std.debug.print("t1: {f}\n", .{t1});
+        log.print(@src(), "t1: {f}\n", .{t1});
     }
 
     {
         const t2 = try linspace(allocator, f32, .{ .start = 7, .end = 30, .steps = 5 });
         defer t2.deinit();
-        std.debug.print("t2: {f}\n", .{t2});
+        log.print(@src(), "t2: {f}\n", .{t2});
     }
 
     {
@@ -1671,19 +1672,19 @@ test "tensor create" {
         try std.testing.expect(t3.ndim() == 2);
         try std.testing.expectEqualDeep(a, t3.shape());
         a[0] = 11;
-        std.debug.print("t3: {f}\n", .{t3});
+        log.print(@src(), "t3: {f}\n", .{t3});
 
         const t4 = try fullLike(allocator, t3, 10.2);
         try std.testing.expect(@TypeOf(t4).T == f32);
         try std.testing.expectEqualDeep(t4.shape(), t3.shape());
         defer t4.deinit();
-        std.debug.print("t4: {f}\n", .{t4});
+        log.print(@src(), "t4: {f}\n", .{t4});
     }
 
     {
         const t5 = try zeros(allocator, [3]usize{ 2, 3, 5 });
         defer t5.deinit();
-        std.debug.print("t5: {f}\n", .{t5});
+        log.print(@src(), "t5: {f}\n", .{t5});
     }
 
     {
@@ -1701,13 +1702,13 @@ test "tensor create" {
 
         mean_a = 10.0;
         stddev = 3.0;
-        std.debug.print("mean_a: {} stddev: {} t4: {f}\n", .{ mean_a, stddev, t4 });
+        log.print(@src(), "mean_a: {} stddev: {} t4: {f}\n", .{ mean_a, stddev, t4 });
 
         const tc = try cat(allocator, &[3]@TypeOf(t1){ t1, t2, t3 }, 0);
         defer tc.deinit();
 
         try std.testing.expectEqualDeep(tc.shape(), [3]usize{ 5, 2, 3 });
-        std.debug.print("tc: {f}\n", .{tc});
+        log.print(@src(), "tc: {f}\n", .{tc});
 
         const meet_err =
             if (stack(allocator, &[3]@TypeOf(t1){ t1, t2, t3 }, 0)) |_| false else |_| true;
@@ -1717,7 +1718,7 @@ test "tensor create" {
         defer ts.deinit();
 
         try std.testing.expectEqualDeep(ts.shape(), [4]usize{ 2, 2, 2, 3 });
-        std.debug.print("ts: {f}\n", .{ts});
+        log.print(@src(), "ts: {f}\n", .{ts});
     }
 }
 
@@ -1727,14 +1728,14 @@ test "split" {
     const t1 = try rand(allocator, [3]usize{ 5, 2, 3 }, 0.0, 1.0);
     defer t1.deinit();
 
-    std.debug.print("t1: {f}\n", .{t1});
+    log.print(@src(), "t1: {f}\n", .{t1});
 
     {
         const result = try t1.split(allocator, 3, 0);
         defer allocator.free(result);
         for (result) |t| {
             defer t.deinit();
-            std.debug.print("split t: {f}\n", .{t});
+            log.print(@src(), "split t: {f}\n", .{t});
         }
     }
 
@@ -1743,7 +1744,7 @@ test "split" {
         defer allocator.free(result);
         for (result) |t| {
             defer t.deinit();
-            std.debug.print("chunk t: {f}\n", .{t});
+            log.print(@src(), "chunk t: {f}\n", .{t});
         }
     }
 
@@ -1757,7 +1758,7 @@ test "split" {
         }
 
         for (result) |t| {
-            std.debug.print("unbind t: {f} storage refcount: {*}\n", .{ t, &t.storage._ref_count });
+            log.print(@src(), "unbind t: {f} storage refcount: {*}\n", .{ t, &t.storage._ref_count });
         }
     }
 }
@@ -1769,16 +1770,16 @@ test "contiguous test" {
     defer t1.deinit();
 
     try std.testing.expect(t1.isContiguous());
-    std.debug.print("t1: {f}\n", .{t1});
+    log.print(@src(), "t1: {f}\n", .{t1});
 
     t1.transpose_();
     try std.testing.expect(!t1.isContiguous());
-    std.debug.print("t1 transpose_: {f}\n", .{t1});
+    log.print(@src(), "t1 transpose_: {f}\n", .{t1});
 
     const t1tc = try t1.contiguous();
     defer t1tc.deinit();
 
-    std.debug.print("t1tc: {f}\n", .{t1tc});
+    log.print(@src(), "t1tc: {f}\n", .{t1tc});
     try std.testing.expect(t1tc.layout.isContiguous());
 
     try std.testing.expectEqual(try t1.getData([_]usize{ 3, 2 }), try t1tc.getData([_]usize{ 3, 2 }));
@@ -1797,7 +1798,7 @@ test "map basic" {
     }.call;
     var t1 = try t.map(f32, 7.0, func1);
     defer t1.deinit();
-    std.debug.print("t1: {f}\n", .{t1});
+    log.print(@src(), "t1: {f}\n", .{t1});
 
     const func2 = struct {
         fn call(x: f32, ctx: f32) bool {
@@ -1806,7 +1807,7 @@ test "map basic" {
     }.call;
     const t2 = try t1.map(bool, 2.0, func2);
     defer t2.deinit();
-    std.debug.print("t2: {f}\n", .{t2});
+    log.print(@src(), "t2: {f}\n", .{t2});
 
     const func3 = struct {
         fn call(x: f32, ctx: f32) f32 {
@@ -1814,7 +1815,7 @@ test "map basic" {
         }
     }.call;
     t1.map_(-1.0, func3);
-    std.debug.print("t1: {f}\n", .{t1});
+    log.print(@src(), "t1: {f}\n", .{t1});
 }
 
 test "map bool" {
@@ -1826,7 +1827,7 @@ test "map bool" {
     const t2 = try t1.ge(0.0);
     defer t2.deinit();
 
-    std.debug.print("t1: {f} t2: {f}\n", .{ t1, t2 });
+    log.print(@src(), "t1: {f} t2: {f}\n", .{ t1, t2 });
 }
 
 test "math op" {
@@ -1841,7 +1842,7 @@ test "math op" {
         const t2 = try fullLike(allocator, t1, 1.0);
         try std.testing.expectEqualSlices(usize, &t1.shape(), &t2.shape());
         defer t2.deinit();
-        std.debug.print("t1: {f} t2: {f}\n", .{ t1, t2 });
+        log.print(@src(), "t1: {f} t2: {f}\n", .{ t1, t2 });
     }
 
     {
@@ -1849,16 +1850,16 @@ test "math op" {
         defer t1.deinit();
 
         t1.sin_();
-        std.debug.print("t1: {f}\n", .{t1});
+        log.print(@src(), "t1: {f}\n", .{t1});
 
         t1.relu_();
-        std.debug.print("relu t1: {f}\n", .{t1});
+        log.print(@src(), "relu t1: {f}\n", .{t1});
 
         t1.sigmoid_();
-        std.debug.print("sigmoid t1: {f}\n", .{t1});
+        log.print(@src(), "sigmoid t1: {f}\n", .{t1});
 
         t1.sqrt_();
-        std.debug.print("sqrt t1: {f}\n", .{t1});
+        log.print(@src(), "sqrt t1: {f}\n", .{t1});
     }
 }
 
@@ -1879,7 +1880,7 @@ test "data type conversion" {
     try std.testing.expectEqual(false, try t3.getData([_]usize{4}));
     try std.testing.expectEqual(true, try t3.getData([_]usize{3}));
 
-    std.debug.print("t1: {f} t2: {f} t3: {f}\n", .{ t1, t2, t3 });
+    log.print(@src(), "t1: {f} t2: {f} t3: {f}\n", .{ t1, t2, t3 });
 }
 
 test "reduce" {
@@ -1905,9 +1906,9 @@ test "reduce" {
         const t7 = try t1.meanAll();
         defer t7.deinit();
 
-        std.debug.print("t1: {f} t2: {f} t3: {f} t4: {f} t5: {f} t6: {f} t7: {f}\n", .{ t1, t2, t3, t4, t5, t6, t7 });
+        log.print(@src(), "t1: {f} t2: {f} t3: {f} t4: {f} t5: {f} t6: {f} t7: {f}\n", .{ t1, t2, t3, t4, t5, t6, t7 });
         // const t3 = try t1.mean(0);
-        // std.debug.print("t1: {f} t2: {f} t2 item: {} t3: {f}\n", .{ t1, t2, try t2.scalarItemComp(DataType.f32), t3 });
+        // log.print(@src(), "t1: {f} t2: {f} t2 item: {} t3: {f}\n", .{ t1, t2, try t2.scalarItemComp(DataType.f32), t3 });
     }
 
     {
@@ -1923,7 +1924,7 @@ test "reduce" {
         const all_t_all = try t2.allTrueAll();
         defer all_t_all.deinit();
 
-        std.debug.print("t2: {f} any_t: {f} all_t: {f} all_t_all: {f}\n", .{ t2, any_t, all_t, all_t_all });
+        log.print(@src(), "t2: {f} any_t: {f} all_t: {f} all_t_all: {f}\n", .{ t2, any_t, all_t, all_t_all });
     }
 }
 
@@ -1936,7 +1937,7 @@ test "binary op" {
         var t2 = try arange(allocator, f32, .{ .end = 9 });
         defer t2.deinit();
 
-        std.debug.print("t2: {f}\n", .{t2});
+        log.print(@src(), "t2: {f}\n", .{t2});
 
         const t2r = try t2.reshape([_]usize{ 3, 3 });
         defer t2r.deinit();
@@ -1944,7 +1945,7 @@ test "binary op" {
         const t3 = try t1.add(t2r);
         defer t3.deinit();
 
-        std.debug.print("t1: {f} t2: {f} t3: {f}\n", .{ t1, t2, t3 });
+        log.print(@src(), "t1: {f} t2: {f} t3: {f}\n", .{ t1, t2, t3 });
     }
 
     {
@@ -1953,7 +1954,7 @@ test "binary op" {
         const t2 = try t1.add(t1);
         defer t2.deinit();
 
-        std.debug.print("t1: {f} t2: {f}\n", .{ t1, t2 });
+        log.print(@src(), "t1: {f} t2: {f}\n", .{ t1, t2 });
     }
 }
 
@@ -1967,7 +1968,7 @@ test "masked" {
     const m1 = try fromArray(allocator, arr1);
     defer m1.deinit();
 
-    std.debug.print("t1: {f}\n", .{t1});
+    log.print(@src(), "t1: {f}\n", .{t1});
 
     try t1.maskedFill_(m1, 0.0);
 
@@ -1977,7 +1978,7 @@ test "masked" {
     try std.testing.expectEqual(0.0, t1.getData([_]usize{ 1, 3 }));
     try std.testing.expectEqual(0.0, t1.getData([_]usize{ 2, 1 }));
     try std.testing.expectEqual(0.0, t1.getData([_]usize{ 2, 3 }));
-    std.debug.print("masked t1: {f}\n", .{t1});
+    log.print(@src(), "masked t1: {f}\n", .{t1});
 }
 
 test "nan inf" {
@@ -2024,7 +2025,7 @@ test "nan inf" {
         is_finite.storage.dataSlice(),
     );
 
-    std.debug.print("t1: {f} is_inf: {f} is_pos_inf: {f} is_neg_inf: {f} is_nan: {f} is_finite: {f}\n", .{ t1, is_inf, is_pos_inf, is_neg_inf, is_nan, is_finite });
+    log.print(@src(), "t1: {f} is_inf: {f} is_pos_inf: {f} is_neg_inf: {f} is_nan: {f} is_finite: {f}\n", .{ t1, is_inf, is_pos_inf, is_neg_inf, is_nan, is_finite });
 
     t1.nanToNum_(.{ .nan = 0.0 });
     try std.testing.expectEqualSlices(
@@ -2032,10 +2033,10 @@ test "nan inf" {
         &[_]f32{ 1.0, std.math.inf(f32), 0.0, -std.math.inf(f32), -2.3 },
         t1.storage.dataSlice(),
     );
-    std.debug.print("nan_to_num: {f}\n", .{t1});
+    log.print(@src(), "nan_to_num: {f}\n", .{t1});
     t1.nanToNum_(.{ .nan = 0.0, .posinf = 1.0, .neginf = -3.0 });
     try std.testing.expectEqualSlices(f32, &[_]f32{ 1.0, 1.0, 0.0, -3.0, -2.3 }, t1.storage.dataSlice());
-    std.debug.print("inf_to_num: {f}\n", .{t1});
+    log.print(@src(), "inf_to_num: {f}\n", .{t1});
 }
 
 test "softmax" {
@@ -2051,7 +2052,7 @@ test "softmax" {
 
     const approx_equal = t2.approxEqual(td, 0.00001, 0.00001);
     try std.testing.expect(approx_equal);
-    std.debug.print("t2: {f} td: {f}\n", .{ t2, td });
+    log.print(@src(), "t2: {f} td: {f}\n", .{ t2, td });
 
     const t3 = try fromArray(allocator, [_][10]f32{
         .{ 0.1, 0.05, 0.6, 0.0, 0.05, 0.1, 0.0, 0.1, 0.0, 0.0 },
@@ -2082,7 +2083,7 @@ test "data item" {
         const item = try t1.dataItem();
         try std.testing.expectEqual(item, 2);
 
-        std.debug.print("t1: {f} item: {}\n", .{ t1, item });
+        log.print(@src(), "t1: {f} item: {}\n", .{ t1, item });
     }
 
     {
@@ -2094,7 +2095,7 @@ test "data item" {
         const item = try t2.dataItem();
         try std.testing.expectEqual(@TypeOf(item), utils.comptimeTypeEraseComp(@TypeOf(5.0)));
 
-        std.debug.print("t2: {f} item: {}\n", .{ t2, item });
+        log.print(@src(), "t2: {f} item: {}\n", .{ t2, item });
     }
 }
 
@@ -2125,7 +2126,7 @@ test "one hot" {
         const eql_result = t2.equal(td);
         try std.testing.expect(eql_result);
 
-        std.debug.print("t1: {f} t2: {f}\n", .{ t1, t2 });
+        log.print(@src(), "t1: {f} t2: {f}\n", .{ t1, t2 });
     }
 
     {
@@ -2159,7 +2160,7 @@ test "one hot" {
         const eql_result = t3.equal(td);
         try std.testing.expect(eql_result);
 
-        std.debug.print("t2: {f} t3: {f}\n", .{ t2, t3 });
+        log.print(@src(), "t2: {f} t3: {f}\n", .{ t2, t3 });
     }
 }
 
@@ -2179,7 +2180,7 @@ test "pad" {
         const eql_result = t2.equal(td);
         try std.testing.expect(eql_result);
 
-        std.debug.print("t1: {f} t2: {f}\n", .{ t1, t2 });
+        log.print(@src(), "t1: {f} t2: {f}\n", .{ t1, t2 });
     }
 
     {
@@ -2191,7 +2192,7 @@ test "pad" {
 
         try std.testing.expectEqual(t2.shape(), [_]usize{ 7, 10 });
 
-        std.debug.print("t1: {f} t2: {f}\n", .{ t1, t2 });
+        log.print(@src(), "t1: {f} t2: {f}\n", .{ t1, t2 });
     }
 }
 
@@ -2215,7 +2216,7 @@ test "loss func" {
         try std.testing.expectApproxEqAbs(0.0975, mse_v, 0.0001);
         try std.testing.expectApproxEqAbs(0.5108, cross_entropy_v, 0.0001);
 
-        std.debug.print("mse: {f} cross_entropy: {f}\n", .{ mse_loss, cross_entropy_loss });
+        log.print(@src(), "mse: {f} cross_entropy: {f}\n", .{ mse_loss, cross_entropy_loss });
     }
 
     {
@@ -2240,6 +2241,6 @@ test "loss func" {
         try std.testing.expectApproxEqAbs(0.21849997, mse_v, 0.0001);
         try std.testing.expectApproxEqAbs(0.55433106, cross_entropy_v, 0.0001);
 
-        std.debug.print("mse: {f} cross_entropy: {f}\n", .{ mse_loss, cross_entropy_loss });
+        log.print(@src(), "mse: {f} cross_entropy: {f}\n", .{ mse_loss, cross_entropy_loss });
     }
 }
