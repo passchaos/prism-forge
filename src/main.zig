@@ -62,7 +62,16 @@ pub fn main() !void {
 
     const allocator = arena.allocator();
 
-    try matmulDemo(allocator);
+    // try matmulDemo(allocator);
+    const t1 = try tensor.rand(allocator, [2]usize{ 3, 5 }, 2.0, 10.0);
+    const t2 = try tensor.rand(allocator, [2]usize{ 3, 5 }, 3.0, 9.0);
+
+    const t1am = try t1.argMax(1);
+    const t2am = try t2.argMin(1);
+
+    const t3 = try (try t1am.eql(t2am)).sumAll();
+
+    log.print(@src(), "t1am: {f} t2am: {f} t3: {f}\n", .{ t1am, t2am, t3 });
 
     // const t1 = try std.Thread.spawn(.{}, generateXY, .{});
 

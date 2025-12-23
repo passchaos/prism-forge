@@ -13,6 +13,41 @@ const layout_t = @import("./layout.zig");
 
 const F = @import("nn/functional.zig");
 
+pub fn BasicOpFuncsGenerator(comptime T: type) type {
+    return struct {
+        fn eql(a: T, b: T) bool {
+            switch (@typeInfo(T)) {
+                .array => |ai| return std.mem.eql(ai.child, &a, &b),
+                else => return a == b,
+            }
+        }
+        fn lt(a: T, b: T) bool {
+            return a < b;
+        }
+        fn le(a: T, b: T) bool {
+            return a <= b;
+        }
+        fn gt(a: T, b: T) bool {
+            return a > b;
+        }
+        fn ge(a: T, b: T) bool {
+            return a >= b;
+        }
+        fn add(a: T, b: T) T {
+            return a + b;
+        }
+        fn sub(a: T, b: T) T {
+            return a - b;
+        }
+        fn mul(a: T, b: T) T {
+            return a * b;
+        }
+        fn div(a: T, b: T) T {
+            return a / b;
+        }
+    };
+}
+
 pub fn ItemGenerator(comptime N: usize, comptime T: type) type {
     return struct {
         index: [N]usize,
@@ -88,6 +123,111 @@ pub fn ItemGenerator(comptime N: usize, comptime T: type) type {
     };
 }
 
+pub fn reduceWithBoolType(
+    comptime N: usize,
+    self: *const Tensor(N, .{ .T = bool }),
+    dm: usize,
+    op_func: fn (acc: ItemGenerator(N, i64), x: ItemGenerator(N, i64)) ItemGenerator(N, i64),
+    comptime RT: type,
+    post_func: ?fn (acc: ItemGenerator(N, i64), count: usize) RT,
+) !Tensor(N, .{ .T = RT }) {
+    var shape_i = self.shape();
+    shape_i[dm] = 1;
+
+    const data_len = utils.product(&shape_i);
+    var new_buf = try self.s_allocator().alloc(RT, data_len);
+
+    var shape_i_iter = layout_t.initShapeIterator(shape_i);
+    while (shape_i_iter.next()) |idx| {
+        const acc = blk: {
+            if (self.shape()[dm] == 1) {
+                const v_ii = try self.getData(idx);
+                break :blk ItemGenerator(N, i64){ .index = idx, .value = @as(i64, @intFromBool(v_ii)) };
+            } else {
+                var idx_i = idx;
+                var idx_i_1 = idx;
+                idx_i_1[dm] = 1;
+
+                var acc = op_func(
+                    .{ .index = idx_i, .value = @as(i64, @intFromBool(try self.getData(idx_i))) },
+                    .{ .index = idx_i_1, .value = @as(i64, @intFromBool(try self.getData(idx_i_1))) },
+                );
+
+                for (2..self.shape()[dm]) |k| {
+                    idx_i[dm] = k;
+                    acc = op_func(
+                        acc,
+                        .{ .index = idx_i, .value = @as(i64, @intFromBool(try self.getData(idx_i))) },
+                    );
+                }
+                break :blk acc;
+            }
+        };
+
+        const res = if (post_func) |pf|
+            pf(acc, self.shape()[dm])
+        else
+            @as(RT, acc.value);
+
+        const flat_idx = try utils.indexShapeToFlat(N, shape_i, idx);
+        new_buf[flat_idx] = res;
+    }
+
+    const layout = layout_t.Layout(N).init(shape_i);
+    const storage = try storage_t.Storage(RT, .Cpu).initImpl(self.s_allocator(), new_buf);
+
+    return try Tensor(N, .{ .T = RT }).fromDataImpl(layout, storage, 0);
+}
+
+pub fn reduceAllWithBoolType(
+    comptime N: usize,
+    self: *const Tensor(N, .{ .T = bool }),
+    op_func: fn (acc: ItemGenerator(N, i64), x: ItemGenerator(N, i64)) ItemGenerator(N, i64),
+    comptime RT: type,
+    post_func: ?fn (acc: ItemGenerator(N, i64), count: usize) RT,
+) !Tensor(0, .{ .T = RT }) {
+    var shape_iter = layout_t.initShapeIterator(self.shape());
+
+    const idx0 = shape_iter.next().?;
+    const idx1 = shape_iter.next().?;
+
+    var acc = op_func(
+        .{ .index = idx0, .value = @as(i64, @intFromBool(try self.getData(idx0))) },
+        .{ .index = idx1, .value = @as(i64, @intFromBool(try self.getData(idx1))) },
+    );
+
+    while (shape_iter.next()) |idx| {
+        acc = op_func(
+            acc,
+            .{ .index = idx, .value = @as(i64, @intFromBool(try self.getData(idx))) },
+        );
+    }
+
+    const new_buf = try self.s_allocator().alloc(RT, 1);
+
+    const layout = layout_t.Layout(0).init([_]usize{});
+
+    if (post_func) |pf| {
+        const count = self.size();
+        const posted_v = pf(acc, count);
+
+        new_buf[0] = posted_v;
+    } else {
+        new_buf[0] = @as(RT, acc.value);
+    }
+
+    const storage = try storage_t.Storage(RT, .Cpu).initImpl(
+        self.s_allocator(),
+        new_buf,
+    );
+
+    return try Tensor(0, .{ .T = RT }).fromDataImpl(
+        layout,
+        storage,
+        0,
+    );
+}
+
 pub fn Tensor(comptime N: usize, comptime storage_args: struct {
     T: type = f32,
     comptime D: Device = .Cpu,
@@ -97,6 +237,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
         const Storage = storage_t.Storage(storage_args.T, storage_args.D);
         const ShapeIterator = layout_t.ShapeIterator(N);
         const Item = ItemGenerator(N, T);
+        const BasicOpFuncs = BasicOpFuncsGenerator(T);
 
         pub const Tag = "Tensor";
         pub const T = storage_args.T;
@@ -306,49 +447,74 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             return try TI.fromDataImpl(layout, storage, 0);
         }
 
-        pub fn eql(self: *const Self, value: T) !Tensor(N, .{ .T = bool }) {
-            const func = struct {
-                fn call(v: T, ctx: T) bool {
-                    return v == ctx;
-                }
-            }.call;
-            return try self.map(value, bool, func);
+        pub fn eql(self: *const Self, value: anytype) !Tensor(N, .{ .T = bool }) {
+            const TV = @TypeOf(value);
+
+            switch (TV) {
+                @This() => {
+                    return try self.binaryOp(value, bool, BasicOpFuncs.eql);
+                },
+                T => {
+                    return try self.map(value, bool, BasicOpFuncs.eql);
+                },
+                else => @compileError("unsupported eql argument type" ++ " self: " ++ @typeName(@This()) ++ " input: " ++ @typeName(TV)),
+            }
         }
 
-        pub fn lt(self: *const Self, value: T) !Tensor(N, .{ .T = bool }) {
-            const func = struct {
-                fn call(v: T, ctx: T) bool {
-                    return v < ctx;
-                }
-            }.call;
-            return try self.map(value, bool, func);
+        pub fn lt(self: *const Self, value: anytype) !Tensor(N, .{ .T = bool }) {
+            const TV = @TypeOf(value);
+
+            switch (TV) {
+                @This() => {
+                    return try self.binaryOp(value, bool, BasicOpFuncs.lt);
+                },
+                T => {
+                    return try self.map(value, bool, BasicOpFuncs.lt);
+                },
+                else => @compileError("unsupported lt argument type" ++ " self: " ++ @typeName(@This()) ++ " input: " ++ @typeName(TV)),
+            }
         }
 
-        pub fn le(self: *const Self, value: T) !Tensor(N, .{ .T = bool }) {
-            const func = struct {
-                fn call(v: T, ctx: T) bool {
-                    return v <= ctx;
-                }
-            }.call;
-            return try self.map(value, bool, func);
+        pub fn le(self: *const Self, value: anytype) !Tensor(N, .{ .T = bool }) {
+            const TV = @TypeOf(value);
+
+            switch (TV) {
+                @This() => {
+                    return try self.binaryOp(value, bool, BasicOpFuncs.le);
+                },
+                T => {
+                    return try self.map(value, bool, BasicOpFuncs.le);
+                },
+                else => @compileError("unsupported le argument type" ++ " self: " ++ @typeName(@This()) ++ " input: " ++ @typeName(TV)),
+            }
         }
 
-        pub fn gt(self: *const Self, value: T) !Tensor(N, .{ .T = bool }) {
-            const func = struct {
-                fn call(v: T, ctx: T) bool {
-                    return v > ctx;
-                }
-            }.call;
-            return try self.map(value, bool, func);
+        pub fn gt(self: *const Self, value: anytype) !Tensor(N, .{ .T = bool }) {
+            const TV = @TypeOf(value);
+
+            switch (TV) {
+                @This() => {
+                    return try self.binaryOp(value, bool, BasicOpFuncs.gt);
+                },
+                T => {
+                    return try self.map(value, bool, BasicOpFuncs.gt);
+                },
+                else => @compileError("unsupported gt argument type" ++ " self: " ++ @typeName(@This()) ++ " input: " ++ @typeName(TV)),
+            }
         }
 
-        pub fn ge(self: *const Self, value: T) !Tensor(N, .{ .T = bool }) {
-            const func = struct {
-                fn call(v: T, ctx: T) bool {
-                    return v >= ctx;
-                }
-            }.call;
-            return try self.map(value, bool, func);
+        pub fn ge(self: *const Self, value: anytype) !Tensor(N, .{ .T = bool }) {
+            const TV = @TypeOf(value);
+
+            switch (TV) {
+                @This() => {
+                    return try self.binaryOp(value, bool, BasicOpFuncs.ge);
+                },
+                T => {
+                    return try self.map(value, bool, BasicOpFuncs.ge);
+                },
+                else => @compileError("unsupported ge argument type" ++ " self: " ++ @typeName(@This()) ++ " input: " ++ @typeName(TV)),
+            }
         }
 
         pub fn maskedFill_(self: *Self, mask: Tensor(N, .{ .T = bool }), value: T) !void {
@@ -440,35 +606,23 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             const TV = @TypeOf(value);
 
             if (TV == @This()) {
-                const func = struct {
-                    fn call(v: T, other: T) T {
-                        return v + other;
-                    }
-                }.call;
-
-                return try self.binaryOp_(@as(@This(), value), func);
+                return try self.binaryOp_(@as(@This(), value), BasicOpFuncs.add);
             }
 
             if (TV == T or (TV == comptime_float and @typeInfo(T) == .float) or (TV == comptime_int and @typeInfo(T) == .int)) {
                 const vv = @as(T, value);
 
-                const func = struct {
-                    fn call(v: T, ctx: T) T {
-                        return v + ctx;
-                    }
-                }.call;
-
-                return self.map_(vv, func);
+                return self.map_(vv, BasicOpFuncs.add);
             }
 
             @compileError("unsupported add_ argument type " ++ @typeName(TV) ++ " for tensor of type " ++ @typeName(T));
         }
 
-        pub fn add(self: *const Self, value: anytype) !Tensor(N, .{ .T = if (T == bool) usize else T }) {
+        pub fn add(self: *const Self, value: anytype) !Tensor(N, .{ .T = if (T == bool) isize else T }) {
             const TV = @TypeOf(value);
             switch (TV) {
                 @This() => {
-                    const RT = if (T == bool) usize else T;
+                    const RT = if (T == bool) isize else T;
                     const func = struct {
                         fn call(v: T, other: T) RT {
                             if (T == bool) {
@@ -483,15 +637,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                     return try self.binaryOp(@as(@This(), value), RT, func);
                 },
                 T => {
-                    const vv = @as(T, value);
-
-                    const func = struct {
-                        fn call(v: T, ctx: T) T {
-                            return v + ctx;
-                        }
-                    }.call;
-
-                    return try self.map(vv, T, func);
+                    return try self.map(value, T, BasicOpFuncs.add);
                 },
                 else => @compileError("unsupported add argument type" ++ " self: " ++ @typeName(@This()) ++ " input: " ++ @typeName(TV)),
             }
@@ -501,25 +647,13 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             const TV = @TypeOf(value);
 
             if (TV == @This()) {
-                const func = struct {
-                    fn call(v: T, other: T) T {
-                        return v - other;
-                    }
-                }.call;
-
-                return try self.binaryOp_(@as(@This(), value), func);
+                return try self.binaryOp_(@as(@This(), value), BasicOpFuncs.sub);
             }
 
             if (TV == T or (TV == comptime_float and @typeInfo(T) == .float) or (TV == comptime_int and @typeInfo(T) == .int)) {
                 const vv = @as(T, value);
 
-                const func = struct {
-                    fn call(v: T, ctx: T) T {
-                        return v - ctx;
-                    }
-                }.call;
-
-                return self.map_(vv, func);
+                return self.map_(vv, BasicOpFuncs.sub);
             }
 
             @compileError("unsupported sub_ argument type " ++ @typeName(TV) ++ " for tensor of type " ++ @typeName(T));
@@ -529,24 +663,12 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             const TV = @TypeOf(value);
             switch (TV) {
                 @This() => {
-                    const func = struct {
-                        fn call(v: T, other: T) T {
-                            return v - other;
-                        }
-                    }.call;
-
-                    return try self.binaryOp(@as(@This(), value), T, func);
+                    return try self.binaryOp(@as(@This(), value), T, BasicOpFuncs.sub);
                 },
                 T => {
                     const vv = @as(T, value);
 
-                    const func = struct {
-                        fn call(v: T, ctx: T) T {
-                            return v - ctx;
-                        }
-                    }.call;
-
-                    return try self.map(vv, T, func);
+                    return try self.map(vv, T, BasicOpFuncs.sub);
                 },
                 else => @compileError("unsupported sub argument type" ++ " self: " ++ @typeName(@This()) ++ " input: " ++ @typeName(TV)),
             }
@@ -556,25 +678,13 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             const TV = @TypeOf(value);
 
             if (TV == @This()) {
-                const func = struct {
-                    fn call(v: T, other: T) T {
-                        return v * other;
-                    }
-                }.call;
-
-                return try self.binaryOp_(@as(@This(), value), func);
+                return try self.binaryOp_(@as(@This(), value), BasicOpFuncs.mul);
             }
 
             if (TV == T or (TV == comptime_float and @typeInfo(T) == .float) or (TV == comptime_int and @typeInfo(T) == .int)) {
                 const vv = @as(T, value);
 
-                const func = struct {
-                    fn call(v: T, ctx: T) T {
-                        return v * ctx;
-                    }
-                }.call;
-
-                return self.map_(vv, func);
+                return self.map_(vv, BasicOpFuncs.mul);
             }
 
             @compileError("unsupported mul_ argument type " ++ @typeName(TV) ++ " for tensor of type " ++ @typeName(T));
@@ -584,24 +694,12 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             const TV = @TypeOf(value);
             switch (TV) {
                 @This() => {
-                    const func = struct {
-                        fn call(v: T, other: T) T {
-                            return v * other;
-                        }
-                    }.call;
-
-                    return try self.binaryOp(@as(@This(), value), T, func);
+                    return try self.binaryOp(@as(@This(), value), T, BasicOpFuncs.mul);
                 },
                 T => {
                     const vv = @as(T, value);
 
-                    const func = struct {
-                        fn call(v: T, ctx: T) T {
-                            return v * ctx;
-                        }
-                    }.call;
-
-                    return try self.map(vv, T, func);
+                    return try self.map(vv, T, BasicOpFuncs.mul);
                 },
                 else => @compileError("unsupported mul argument type" ++ " self: " ++ @typeName(@This()) ++ " input: " ++ @typeName(TV)),
             }
@@ -611,25 +709,13 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             const TV = @TypeOf(value);
 
             if (TV == @This()) {
-                const func = struct {
-                    fn call(v: T, other: T) T {
-                        return v / other;
-                    }
-                }.call;
-
-                return try self.binaryOp_(@as(@This(), value), func);
+                return try self.binaryOp_(@as(@This(), value), BasicOpFuncs.div);
             }
 
             if (TV == T or ((TV == comptime_float or TV == comptime_int) and @typeInfo(T) == .float) or (TV == comptime_int and @typeInfo(T) == .int)) {
                 const vv = @as(T, value);
 
-                const func = struct {
-                    fn call(v: T, ctx: T) T {
-                        return v / ctx;
-                    }
-                }.call;
-
-                return self.map_(vv, func);
+                return self.map_(vv, BasicOpFuncs.div);
             }
 
             @compileError("unsupported div_ argument type " ++ @typeName(TV) ++ " for tensor of type " ++ @typeName(T));
@@ -640,25 +726,13 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
 
             switch (TV) {
                 @This() => {
-                    const func = struct {
-                        fn call(v: T, other: T) T {
-                            return v / other;
-                        }
-                    }.call;
-
-                    return try self.binaryOp(@as(@This(), value), T, func);
+                    return try self.binaryOp(@as(@This(), value), T, BasicOpFuncs.div);
                 },
                 T => {
                     const RT = comptime utils.tensor.tensorArithmeticTypeCast(T, @TypeOf(value));
                     const vv = @as(RT, value);
 
-                    const func = struct {
-                        fn call(v: T, ctx: T) T {
-                            return v / ctx;
-                        }
-                    }.call;
-
-                    return try self.map(vv, T, func);
+                    return try self.map(vv, T, BasicOpFuncs.div);
                 },
                 else => @compileError("unsupported div argument type" ++ " self: " ++ @typeName(@This()) ++ " input: " ++ @typeName(TV)),
             }
@@ -937,12 +1011,20 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             );
         }
 
-        pub fn sum(self: *const Self, dim: usize) !Self {
-            return try self.reduce(dim, Item.sum, T, null);
+        pub fn sum(self: *const Self, dim: usize) !Tensor(N, .{ .T = if (T == bool) i64 else T }) {
+            if (T == bool) {
+                return try reduceWithBoolType(N, self, dim, ItemGenerator(N, i64).sum, i64, null);
+            } else {
+                return try self.reduce(dim, Item.sum, T, null);
+            }
         }
 
-        pub fn sumAll(self: *const Self) !Tensor(0, .{ .T = T }) {
-            return try self.reduceAll(Item.sum, T, null);
+        pub fn sumAll(self: *const Self) !Tensor(0, .{ .T = if (T == bool) i64 else T }) {
+            if (T == bool) {
+                return try reduceAllWithBoolType(N, self, ItemGenerator(N, i64).sum, i64, null);
+            } else {
+                return try self.reduceAll(Item.sum, T, null);
+            }
         }
 
         pub fn max(self: *const Self, dim: usize) !Self {
