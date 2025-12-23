@@ -154,6 +154,45 @@ pub const tensor = struct {
             @compileError("Unsupported matmul type" ++ @typeName(TE1));
         }
     }
+
+    pub fn tensorArithmeticTypeCast(comptime A: type, comptime B: type) type {
+        if (!isNumber(A) or !isNumber(B)) @compileError("only support number type handle");
+
+        const A1 = comptimeTypeEraseComp(A);
+        const B1 = comptimeTypeEraseComp(B);
+
+        const type_size_a = @sizeOf(A1);
+        const type_size_b = @sizeOf(B1);
+
+        if (isTypedInt(A1)) {
+            if (isTypedInt(B1)) {
+                if (type_size_a >= type_size_b) {
+                    return A1;
+                } else {
+                    return B1;
+                }
+            } else {
+                // if one is float, result is float
+                return B1;
+            }
+        } else {
+            if (isTypedInt(B1)) {
+                return A1;
+            } else {
+                if (type_size_a >= type_size_b) {
+                    return A1;
+                } else {
+                    return B1;
+                }
+            }
+        }
+    }
+    pub fn isTensor(comptime T: type) bool {
+        if (@hasDecl(T, "Tag") and T.Tag == "Tensor") {
+            return true;
+        }
+        return false;
+    }
 };
 
 pub fn approxEqual(comptime T: type, a: T, b: T, relEps: T, absEps: T) bool {
@@ -173,20 +212,35 @@ test "approx equal" {
 }
 
 pub fn isNumber(comptime T: type) bool {
-    return comptime isFloat(T) or isInt(T);
+    return comptime isTypeFloat(T) or isTypeInt(T) or isComptimeFloat(T) or isComptimeInt(T);
 }
 
-pub fn isFloat(comptime T: type) bool {
+pub fn isTypeFloat(comptime T: type) bool {
     return switch (@typeInfo(T)) {
         .float => true,
         else => false,
     };
 }
 
+pub fn isTypeInt(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .int => true,
+        else => false,
+    };
+}
+
+pub fn isComptimeFloat(comptime T: type) bool {
+    return T == comptime_float;
+}
+
+pub fn isComptimeInt(comptime T: type) bool {
+    return T == comptime_int;
+}
+
 pub fn comptimeTypeEraseComp(comptime T: type) type {
     return comptime switch (@typeInfo(T)) {
-        .comptime_float => f32,
-        .comptime_int => i32,
+        .comptime_float => f64,
+        .comptime_int => i64,
         else => T,
     };
 }
@@ -194,15 +248,8 @@ pub fn comptimeTypeEraseComp(comptime T: type) type {
 pub fn floatBasicType(comptime T: type) type {
     return comptime switch (@typeInfo(T)) {
         inline .float => |_| T,
-        inline .comptime_float => f32,
+        inline .comptime_float => f64,
         inline else => @compileError("only support f32 and f64"),
-    };
-}
-
-pub fn isInt(comptime T: type) bool {
-    return switch (@typeInfo(T)) {
-        .int => true,
-        else => false,
     };
 }
 

@@ -22,6 +22,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
         const Storage = storage_t.Storage(storage_args.T, storage_args.D);
         const ShapeIterator = layout_t.ShapeIterator(N);
 
+        pub const Tag = "Tensor";
         pub const T = storage_args.T;
         pub const D = storage_args.D;
         pub const DIMS = N;
@@ -551,31 +552,32 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             @compileError("unsupported div_ argument type " ++ @typeName(TV) ++ " for tensor of type " ++ @typeName(T));
         }
 
-        pub fn div(self: *const Self, value: anytype) !Self {
+        pub fn div(self: *const Self, value: anytype) !Tensor(N, .{ .T = utils.tensor.tensorArithmeticTypeCast(T, @TypeOf(value)) }) {
             const TV = @TypeOf(value);
-            switch (TV) {
-                @This() => {
-                    const func = struct {
-                        fn call(v: T, other: T) T {
-                            return v / other;
-                        }
-                    }.call;
 
-                    return try self.binaryOp(@as(@This(), value), func);
-                },
-                T => {
-                    const vv = @as(T, value);
+            if (utils.tensor.isTensor(TV)) {
+                const func = struct {
+                    fn call(v: T, other: T) T {
+                        return v / other;
+                    }
+                }.call;
 
-                    const func = struct {
-                        fn call(v: T, ctx: T) T {
-                            return v / ctx;
-                        }
-                    }.call;
-
-                    return try self.map(T, vv, func);
-                },
-                else => @compileError("unsupported div argument type" ++ " self: " ++ @typeName(@This()) ++ " input: " ++ @typeName(TV)),
+                return try self.binaryOp(@as(@This(), value), func);
             }
+
+            if (utils.isNumber(TV)) {
+                const RT = comptime utils.tensor.tensorArithmeticTypeCast(T, @TypeOf(value));
+                const vv = @as(RT, value);
+
+                const func = struct {
+                    fn call(v: T, ctx: T) T {
+                        return v / ctx;
+                    }
+                }.call;
+
+                return try self.map(T, vv, func);
+            }
+            @compileError("unsupported div argument type" ++ " self: " ++ @typeName(@This()) ++ " input: " ++ @typeName(TV));
         }
 
         pub fn sin_(self: *Self) void {
