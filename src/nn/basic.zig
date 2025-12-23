@@ -13,7 +13,7 @@ pub fn numericalGradient(
         comptime T: type,
         tensor.Tensor(N, .{ .T = T }),
         ctx_f: @TypeOf(ctx),
-    ) T,
+    ) anyerror!T,
     tval: tensor.Tensor(N, .{ .T = T }),
 ) !tensor.Tensor(N, .{ .T = T }) {
     const h = 1e-4;
@@ -26,13 +26,13 @@ pub fn numericalGradient(
         const tmp_val = try tval_v.getData(idx);
 
         try tval_v.setData(idx, tmp_val + h);
-        const fxh1 = f(N, T, tval_v, ctx);
+        const fxh1 = try f(N, T, tval_v, ctx);
 
         // std.debug.print("tval_v: {f}\n", .{tval_v});
         // std.debug.print("idx: {any} fxh1: {}\n", .{ idx, fxh1 });
 
         try tval_v.setData(idx, tmp_val - h);
-        const fxh2 = f(N, T, tval_v, ctx);
+        const fxh2 = try f(N, T, tval_v, ctx);
         // std.debug.print("idx: {any} fxh2: {}\n", .{ idx, fxh2 });
 
         try grad.setData(idx, (fxh1 - fxh2) / (h + h));
@@ -53,7 +53,7 @@ pub fn gradientDescent(
         comptime T: type,
         tensor.Tensor(N, .{ .T = T }),
         ctx_f: @TypeOf(ctx),
-    ) T,
+    ) anyerror!T,
     init_x: *tensor.Tensor(N, .{ .T = T }),
     args: struct { lr: T = 0.01, step_number: usize = 100 },
 ) !void {

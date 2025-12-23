@@ -90,13 +90,13 @@ fn function2(
     comptime T: type,
     input: tensor.Tensor(N, .{ .T = T }),
     _: void,
-) T {
+) anyerror!T {
     var input_iter = input.shapeIter();
 
     var result: T = 0;
 
     while (input_iter.next()) |idx| {
-        result += std.math.pow(T, input.getData(idx) catch unreachable, 2);
+        result += std.math.pow(T, try input.getData(idx), 2);
     }
 
     return result;
@@ -165,10 +165,10 @@ fn tensor_loss(
         x: tensor.Tensor(N, .{ .T = T }),
         t: tensor.Tensor(N, .{ .T = T }),
     },
-) T {
+) anyerror!T {
     const net = SimpleNet.init(input);
 
-    const loss = net.loss(ctx.x, ctx.t) catch unreachable;
+    const loss = try net.loss(ctx.x, ctx.t);
 
     return loss;
 }
