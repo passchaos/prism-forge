@@ -13,6 +13,81 @@ const layout_t = @import("./layout.zig");
 
 const F = @import("nn/functional.zig");
 
+pub fn ItemGenerator(comptime N: usize, comptime T: type) type {
+    return struct {
+        index: [N]usize,
+        value: T,
+
+        const Self = @This();
+
+        fn arg(acc: Self, _: usize) [N]usize {
+            return acc.index;
+        }
+
+        fn mean(acc: Self, count: usize) f64 {
+            return @as(f64, acc.value) / @as(f64, @floatFromInt(count));
+        }
+
+        fn orOp(acc: Self, val: Self) Self {
+            if (T != bool)
+                @compileError("only support bool, unsupported type " ++ @typeName(T));
+            const v_result = acc.value or val.value;
+
+            return .{ .index = acc.index, .value = v_result };
+        }
+
+        fn andOp(acc: Self, val: Self) Self {
+            if (T != bool)
+                @compileError("only support bool, unsupported type " ++ @typeName(T));
+
+            const v_result = acc.value and val.value;
+
+            return .{ .index = acc.index, .value = v_result };
+        }
+
+        fn sum(acc: Self, val: Self) Self {
+            const v_result = acc.value + val.value;
+
+            return .{ .index = acc.index, .value = v_result };
+        }
+
+        fn max(acc: Self, val: Self) Self {
+            if (acc.value >= val.value) {
+                return .{
+                    .index = acc.index,
+                    .value = acc.value,
+                };
+            } else {
+                return .{
+                    .index = val.index,
+                    .value = val.value,
+                };
+            }
+        }
+
+        fn min(acc: Self, val: Self) Self {
+            if (acc.value <= val.value) {
+                return .{
+                    .index = acc.index,
+                    .value = acc.value,
+                };
+            } else {
+                return .{
+                    .index = val.index,
+                    .value = val.value,
+                };
+            }
+        }
+
+        fn prod(acc: Self, val: Self) Self {
+            return .{
+                .index = acc.index,
+                .value = acc.value * val.value,
+            };
+        }
+    };
+}
+
 pub fn Tensor(comptime N: usize, comptime storage_args: struct {
     T: type = f32,
     comptime D: Device = .Cpu,
@@ -21,6 +96,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
         const StorageArgs = storage_args;
         const Storage = storage_t.Storage(storage_args.T, storage_args.D);
         const ShapeIterator = layout_t.ShapeIterator(N);
+        const Item = ItemGenerator(N, T);
 
         pub const Tag = "Tensor";
         pub const T = storage_args.T;
@@ -555,29 +631,30 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
         pub fn div(self: *const Self, value: anytype) !Tensor(N, .{ .T = utils.tensor.tensorArithmeticTypeCast(T, @TypeOf(value)) }) {
             const TV = @TypeOf(value);
 
-            if (utils.tensor.isTensor(TV)) {
-                const func = struct {
-                    fn call(v: T, other: T) T {
-                        return v / other;
-                    }
-                }.call;
+            switch (TV) {
+                @This() => {
+                    const func = struct {
+                        fn call(v: T, other: T) T {
+                            return v / other;
+                        }
+                    }.call;
 
-                return try self.binaryOp(@as(@This(), value), func);
+                    return try self.binaryOp(@as(@This(), value), func);
+                },
+                T => {
+                    const RT = comptime utils.tensor.tensorArithmeticTypeCast(T, @TypeOf(value));
+                    const vv = @as(RT, value);
+
+                    const func = struct {
+                        fn call(v: T, ctx: T) T {
+                            return v / ctx;
+                        }
+                    }.call;
+
+                    return try self.map(T, vv, func);
+                },
+                else => @compileError("unsupported div argument type" ++ " self: " ++ @typeName(@This()) ++ " input: " ++ @typeName(TV)),
             }
-
-            if (utils.isNumber(TV)) {
-                const RT = comptime utils.tensor.tensorArithmeticTypeCast(T, @TypeOf(value));
-                const vv = @as(RT, value);
-
-                const func = struct {
-                    fn call(v: T, ctx: T) T {
-                        return v / ctx;
-                    }
-                }.call;
-
-                return try self.map(T, vv, func);
-            }
-            @compileError("unsupported div argument type" ++ " self: " ++ @typeName(@This()) ++ " input: " ++ @typeName(TV));
         }
 
         pub fn sin_(self: *Self) void {
@@ -753,68 +830,82 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
         pub fn reduce(
             self: *const Self,
             dm: usize,
-            op_func: fn (acc: T, x: T) T,
-            comptime PT: type,
-            post_func: ?fn (acc: T, count: usize) PT,
-        ) !Tensor(N, .{ .T = PT }) {
+            op_func: fn (acc: Item, x: Item) Item,
+            comptime RT: type,
+            post_func: ?fn (acc: Item, count: usize) RT,
+        ) !Tensor(N, .{ .T = RT }) {
             var shape_i = self.shape();
             shape_i[dm] = 1;
 
             const data_len = utils.product(&shape_i);
-            var new_buf = try self.s_allocator().alloc(PT, data_len);
+            var new_buf = try self.s_allocator().alloc(RT, data_len);
 
             var shape_i_iter = layout_t.initShapeIterator(shape_i);
             while (shape_i_iter.next()) |idx| {
-                var acc = blk: {
+                const acc = blk: {
                     if (self.shape()[dm] == 1) {
-                        break :blk try self.getData(idx);
+                        const v_ii = try self.getData(idx);
+                        break :blk Item{ .index = idx, .value = v_ii };
                     } else {
                         var idx_i = idx;
                         var idx_i_1 = idx;
                         idx_i_1[dm] = 1;
 
-                        var acc = op_func(try self.getData(idx_i), try self.getData(idx_i_1));
+                        var acc = op_func(
+                            .{ .index = idx_i, .value = try self.getData(idx_i) },
+                            .{ .index = idx_i_1, .value = try self.getData(idx_i_1) },
+                        );
 
                         for (2..self.shape()[dm]) |k| {
                             idx_i[dm] = k;
-                            acc = op_func(acc, try self.getData(idx_i));
+                            acc = op_func(
+                                acc,
+                                .{ .index = idx_i, .value = try self.getData(idx_i) },
+                            );
                         }
                         break :blk acc;
                     }
                 };
 
-                if (post_func) |pf| {
-                    acc = pf(acc, self.shape()[dm]);
-                }
+                const res = if (post_func) |pf|
+                    pf(acc, self.shape()[dm])
+                else
+                    @as(RT, acc.value);
 
                 const flat_idx = try utils.indexShapeToFlat(N, shape_i, idx);
-                new_buf[flat_idx] = acc;
+                new_buf[flat_idx] = res;
             }
 
             const layout = Layout.init(shape_i);
-            const storage = try storage_t.Storage(PT, .Cpu).initImpl(self.s_allocator(), new_buf);
+            const storage = try storage_t.Storage(RT, .Cpu).initImpl(self.s_allocator(), new_buf);
 
-            return try Tensor(N, .{ .T = PT }).fromDataImpl(layout, storage, 0);
+            return try Tensor(N, .{ .T = RT }).fromDataImpl(layout, storage, 0);
         }
 
         pub fn reduceAll(
             self: *const Self,
-            op_func: fn (acc: T, x: T) T,
-            comptime PT: type,
-            post_func: ?fn (acc: T, count: usize) PT,
-        ) !Tensor(0, .{ .T = PT }) {
+            op_func: fn (acc: Item, x: Item) Item,
+            comptime RT: type,
+            post_func: ?fn (acc: Item, count: usize) RT,
+        ) !Tensor(0, .{ .T = RT }) {
             var shape_iter = ShapeIterator.init(self.shape());
 
             const idx0 = shape_iter.next().?;
             const idx1 = shape_iter.next().?;
 
-            var acc = op_func(try self.getData(idx0), try self.getData(idx1));
+            var acc = op_func(
+                .{ .index = idx0, .value = try self.getData(idx0) },
+                .{ .index = idx1, .value = try self.getData(idx1) },
+            );
 
             while (shape_iter.next()) |idx| {
-                acc = op_func(acc, try self.getData(idx));
+                acc = op_func(
+                    acc,
+                    .{ .index = idx, .value = try self.getData(idx) },
+                );
             }
 
-            const new_buf = try self.s_allocator().alloc(PT, 1);
+            const new_buf = try self.s_allocator().alloc(RT, 1);
 
             const layout = layout_t.Layout(0).init([_]usize{});
 
@@ -824,158 +915,91 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
 
                 new_buf[0] = posted_v;
             } else {
-                new_buf[0] = acc;
+                new_buf[0] = @as(RT, acc.value);
             }
 
-            const storage = try storage_t.Storage(PT, .Cpu).initImpl(self.s_allocator(), new_buf);
+            const storage = try storage_t.Storage(RT, .Cpu).initImpl(
+                self.s_allocator(),
+                new_buf,
+            );
 
-            return try Tensor(0, .{ .T = PT }).fromDataImpl(layout, storage, 0);
+            return try Tensor(0, .{ .T = RT }).fromDataImpl(
+                layout,
+                storage,
+                0,
+            );
         }
 
         pub fn sum(self: *const Self, dim: usize) !Self {
-            const func = struct {
-                fn op_func(acc: T, val: T) T {
-                    return acc + val;
-                }
-            }.op_func;
-            return try self.reduce(dim, func, T, null);
+            return try self.reduce(dim, Item.sum, T, null);
         }
 
         pub fn sumAll(self: *const Self) !Tensor(0, .{ .T = T }) {
-            const func = struct {
-                fn op_func(acc: T, val: T) T {
-                    return acc + val;
-                }
-            }.op_func;
-            return try self.reduceAll(func, T, null);
+            return try self.reduceAll(Item.sum, T, null);
         }
 
         pub fn max(self: *const Self, dim: usize) !Self {
-            const scope = struct {
-                fn op_func(acc: T, val: T) T {
-                    return @max(acc, val);
-                }
-            };
-            return try self.reduce(dim, scope.op_func, T, null);
+            return try self.reduce(dim, Item.max, T, null);
+        }
+
+        pub fn argMax(self: *const Self, dim: usize) !Tensor(N, .{ .T = [N]usize }) {
+            return try self.reduce(dim, Item.max, [N]usize, Item.arg);
         }
 
         pub fn maxAll(self: *const Self) !Tensor(0, .{ .T = T }) {
-            const scope = struct {
-                fn op_func(acc: T, val: T) T {
-                    return @max(acc, val);
-                }
-            };
-            return try self.reduceAll(scope.op_func, T, null);
+            return try self.reduceAll(Item.max, T, null);
+        }
+
+        pub fn argMaxAll(self: *const Self) !Tensor(0, .{ .T = [N]usize }) {
+            return try self.reduceAll(Item.max, [N]usize, Item.arg);
         }
 
         pub fn min(self: *const Self, dim: usize) !Self {
-            const scope = struct {
-                fn op_func(acc: T, val: T) T {
-                    return @min(acc, val);
-                }
-            };
-            return try self.reduce(dim, scope.op_func, T, null);
+            return try self.reduce(dim, Item.min, T, null);
+        }
+
+        pub fn argMin(self: *const Self, dim: usize) !Tensor(N, .{ .T = [N]usize }) {
+            return try self.reduce(dim, Item.min, [N]usize, Item.arg);
         }
 
         pub fn minAll(self: *const Self) !Tensor(0, .{ .T = T }) {
-            const scope = struct {
-                fn op_func(acc: T, val: T) T {
-                    return @min(acc, val);
-                }
-            };
-            return try self.reduceAll(scope.op_func, T, null);
+            return try self.reduceAll(Item.min, T, null);
+        }
+
+        pub fn argMinAll(self: *const Self) !Tensor(0, .{ .T = [N]usize }) {
+            return try self.reduceAll(Item.min, [N]usize, Item.arg);
         }
 
         pub fn prod(self: *const Self, dim: usize) !Self {
-            const scope = struct {
-                fn op_func(acc: T, val: T) T {
-                    return acc * val;
-                }
-            };
-            return try self.reduce(dim, scope.op_func, T, null);
+            return try self.reduce(dim, Item.prod, T, null);
         }
 
         pub fn prodAll(self: *const Self) !Tensor(0, .{ .T = T }) {
-            const scope = struct {
-                fn op_func(acc: T, val: T) T {
-                    return acc * val;
-                }
-            };
-            return try self.reduceAll(scope.op_func, T, null);
+            return try self.reduceAll(Item.prod, T, null);
         }
 
-        pub fn mean(self: *const Self, dim: usize) !Self {
-            const scope = struct {
-                fn op_func(acc: T, val: T) T {
-                    return acc + val;
-                }
-                fn post_func(acc: T, count: usize) T {
-                    return acc / @as(T, @floatFromInt(count));
-                }
-            };
-
-            return try self.reduce(dim, scope.op_func, T, scope.post_func);
+        pub fn mean(self: *const Self, dim: usize) !Tensor(N, .{ .T = f64 }) {
+            return try self.reduce(dim, Item.sum, f64, Item.mean);
         }
 
-        pub fn meanAll(self: *const Self) !Tensor(0, .{ .T = T }) {
-            const scope = struct {
-                fn op_func(acc: T, val: T) T {
-                    return acc + val;
-                }
-                fn post_func(acc: T, count: usize) T {
-                    return acc / @as(T, @floatFromInt(count));
-                }
-            };
-
-            return try self.reduceAll(scope.op_func, T, scope.post_func);
+        pub fn meanAll(self: *const Self) !Tensor(0, .{ .T = f64 }) {
+            return try self.reduceAll(Item.sum, f64, Item.mean);
         }
 
         pub fn anyTrue(self: *const Self, dim: usize) !Tensor(N, .{ .T = bool }) {
-            if (T != bool) @compileError("unsupported type " ++ @typeName(T));
-
-            const scope = struct {
-                fn op_func(acc: bool, val: bool) bool {
-                    return acc or val;
-                }
-            };
-
-            return try self.reduce(dim, scope.op_func, bool, null);
+            return try self.reduce(dim, Item.orOp, bool, null);
         }
 
         pub fn anyTrueAll(self: *const Self) !Tensor(0, .{ .T = bool }) {
-            if (T != bool) @compileError("unsupported type " ++ @typeName(T));
-
-            const scope = struct {
-                fn op_func(acc: bool, val: bool) bool {
-                    return acc or val;
-                }
-            };
-
-            return try self.reduceAll(scope.op_func, bool, null);
+            return try self.reduceAll(Item.orOp, bool, null);
         }
 
         pub fn allTrue(self: *const Self, dim: usize) !Tensor(N, .{ .T = bool }) {
-            if (T != bool) @compileError("unsupported type " ++ @typeName(T));
-
-            const scope = struct {
-                fn op_func(acc: bool, val: bool) bool {
-                    return acc and val;
-                }
-            };
-
-            return try self.reduceAll(dim, scope.op_func, bool, null);
+            return try self.reduce(dim, Item.andOp, bool, null);
         }
 
         pub fn allTrueAll(self: *const Self) !Tensor(0, .{ .T = bool }) {
-            if (T != bool) @compileError("unsupported type " ++ @typeName(T));
-
-            const scope = struct {
-                fn op_func(acc: bool, val: bool) bool {
-                    return acc and val;
-                }
-            };
-
-            return try self.reduceAll(scope.op_func, bool, null);
+            return try self.reduceAll(Item.andOp, bool, null);
         }
 
         // create method
@@ -1183,6 +1207,10 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                 const sv = self.getData(idx) catch unreachable;
                 const ov = other.getData(idx) catch unreachable;
 
+                switch (@typeInfo(T)) {
+                    .array => |ai| return std.mem.eql(ai.child, &sv, &ov),
+                    else => return sv == ov,
+                }
                 if (sv != ov) return false;
             }
 
@@ -1223,7 +1251,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             const dims = self.ndim();
 
             if (depth == dims) {
-                try writer.print("{}", .{try self.getData(indices)});
+                try writer.print("{any}", .{try self.getData(indices)});
             } else if (depth == dims - 1) {
                 try self.fmt1dSlice(writer, depth, indices);
             } else {
@@ -1339,7 +1367,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                     var idx = base_indices;
                     idx[depth] = i;
 
-                    try writer.print("{}", .{try self.getData(idx)});
+                    try writer.print("{any}", .{try self.getData(idx)});
                 }
             } else {
                 for (0..pad_show_count) |i| {
@@ -1350,7 +1378,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                     var idx = base_indices;
                     idx[depth] = i;
 
-                    try writer.print("{}", .{try self.getData(idx)});
+                    try writer.print("{any}", .{try self.getData(idx)});
                 }
                 _ = try writer.write(" ... ");
 
@@ -1358,7 +1386,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                     var idx = base_indices;
                     idx[depth] = i;
 
-                    try writer.print("{}", .{try self.getData(idx)});
+                    try writer.print("{any}", .{try self.getData(idx)});
 
                     if (i < current_dim_size - 1) {
                         _ = try writer.write(" ");
@@ -1403,6 +1431,31 @@ pub fn fromScalar(allocator: std.mem.Allocator, value: anytype) !Tensor(
         storage,
         0,
     );
+}
+
+pub fn fromArraySpecifyDimension(allocator: std.mem.Allocator, comptime N: usize, arr: anytype) !Tensor(
+    utils.array.getArrayShapeCompWithDepth(@TypeOf(arr), N).len,
+    .{ .T = utils.array.getArrayItemTypeCompWithDepth(@TypeOf(arr), N) },
+) {
+    const shape = comptime utils.array.getArrayShapeCompWithDepth(@TypeOf(arr), N);
+    const AN = comptime utils.array.getArrayNDimComp(@TypeOf(arr));
+    if (N > AN) {
+        @compileError("can't specify dimension larger than arr, arr dimension: " ++ N);
+    }
+
+    const T = comptime utils.array.getArrayItemTypeCompWithDepth(@TypeOf(arr), N);
+    const element_count = comptime utils.array.getArrayElementCountCompWithDepth(@TypeOf(arr), N);
+
+    const new_buf = try allocator.alloc(T, element_count);
+
+    const arr_s: []const T = @ptrCast(&arr);
+    // array is in stack, must copy to heap
+    @memcpy(new_buf, arr_s);
+
+    const layout = layout_t.Layout(shape.len).init(shape);
+    const storage = try storage_t.Storage(T, .Cpu).initImpl(allocator, new_buf);
+
+    return Tensor(N, .{ .T = T }).fromDataImpl(layout, storage, 0);
 }
 
 pub fn fromArray(allocator: std.mem.Allocator, arr: anytype) !Tensor(
@@ -1917,16 +1970,60 @@ test "reduce" {
         const t2 = try t1.gt(0.5);
         defer t2.deinit();
 
-        const any_t = try t2.anyTrueAll();
+        const any_t = try t2.anyTrue(0);
         defer any_t.deinit();
-        const any_t_all = try t2.allTrueAll();
+        const any_t_all = try t2.anyTrueAll();
         defer any_t_all.deinit();
-        const all_t = try t2.allTrueAll();
+        const all_t = try t2.allTrue(0);
         defer all_t.deinit();
         const all_t_all = try t2.allTrueAll();
         defer all_t_all.deinit();
 
-        std.debug.print("t2: {f} any_t: {f} all_t: {f} all_t_all: {f}\n", .{ t2, any_t, all_t, all_t_all });
+        std.debug.print("t2: {f} any_t: {f} any_t_all: {f} all_t: {f} all_t_all: {f}\n", .{ t2, any_t, any_t_all, all_t, all_t_all });
+    }
+}
+
+test "reduce arg" {
+    const allocator = std.testing.allocator;
+
+    const t2 = try fromArray(allocator, [2][3]f32{
+        .{ 0.7, 0.2, 0.3 },
+        .{ 0.4, 0.5, 0.6 },
+    });
+    defer t2.deinit();
+
+    {
+        const r1 = try t2.max(0);
+        defer r1.deinit();
+
+        const r1_e = try fromArray(allocator, [_][3]f32{
+            .{ 0.7, 0.5, 0.6 },
+        });
+        defer r1_e.deinit();
+        try std.testing.expect(r1.equal(r1_e));
+
+        const r2 = try t2.argMax(0);
+        defer r2.deinit();
+
+        const r2_e = try fromArraySpecifyDimension(allocator, 2, [1][3][2]usize{
+            .{
+                .{ 0, 0 },
+                .{ 1, 1 },
+                .{ 1, 2 },
+            },
+        });
+        defer r2_e.deinit();
+
+        log.print(@src(), "r2: {f} r2_e: {f}\n", .{ r2, r2_e });
+        try std.testing.expect(r2.equal(r2_e));
+
+        const r3 = try t2.maxAll();
+        defer r3.deinit();
+        const r4 = try t2.argMaxAll();
+        defer r4.deinit();
+
+        try std.testing.expectEqual(try r4.dataItem(), [2]usize{ 0, 0 });
+        log.print(@src(), "r1: {f} r2: {f} r3: {f} r4: {f}\n", .{ r1, r2, r3, r4 });
     }
 }
 

@@ -19,14 +19,33 @@ pub const array = struct {
         }
     }
 
+    pub fn getArrayShapeCompWithDepth(comptime T: type, comptime D: usize) [D]usize {
+        switch (@typeInfo(T)) {
+            .array => return dimsHelperWithDepth(T, D),
+            else => @compileError("Unsupported type" ++ @typeName(T)),
+        }
+    }
+
     pub fn getArrayElementCountComp(comptime T: type) usize {
         const shape = getArrayShapeComp(T);
+        return product(&shape);
+    }
+
+    pub fn getArrayElementCountCompWithDepth(comptime T: type, comptime D: usize) usize {
+        const shape = getArrayShapeCompWithDepth(T, D);
         return product(&shape);
     }
 
     pub fn getArrayItemTypeComp(comptime T: type) type {
         return switch (@typeInfo(T)) {
             .array => return typeHelper(T),
+            else => @compileError("Unsupported type" ++ @typeName(T)),
+        };
+    }
+
+    pub fn getArrayItemTypeCompWithDepth(comptime T: type, comptime D: usize) type {
+        return switch (@typeInfo(T)) {
+            .array => return typeHelperWithDepth(T, D),
             else => @compileError("Unsupported type" ++ @typeName(T)),
         };
     }
@@ -41,9 +60,33 @@ pub const array = struct {
         }
     }
 
+    fn dimsHelperWithDepth(comptime T: type, comptime D: usize) [D]usize {
+        switch (@typeInfo(T)) {
+            .array => |arr| {
+                if (D == 1) return [_]usize{arr.len};
+                const child_dims = comptime dimsHelperWithDepth(arr.child, D - 1);
+                return [_]usize{arr.len} ++ child_dims;
+            },
+            else => return [_]usize{},
+        }
+    }
+
     fn typeHelper(comptime T: type) type {
         return switch (@typeInfo(T)) {
             .array => |arr| return typeHelper(arr.child),
+            else => |_| return T,
+        };
+    }
+
+    fn typeHelperWithDepth(comptime T: type, depth: usize) type {
+        return switch (@typeInfo(T)) {
+            .array => |arr| {
+                if (depth == 1) {
+                    return arr.child;
+                } else {
+                    return typeHelperWithDepth(arr.child, depth - 1);
+                }
+            },
             else => |_| return T,
         };
     }
@@ -164,8 +207,8 @@ pub const tensor = struct {
         const type_size_a = @sizeOf(A1);
         const type_size_b = @sizeOf(B1);
 
-        if (isTypedInt(A1)) {
-            if (isTypedInt(B1)) {
+        if (isTypeInt(A1)) {
+            if (isTypeInt(B1)) {
                 if (type_size_a >= type_size_b) {
                     return A1;
                 } else {
@@ -176,7 +219,7 @@ pub const tensor = struct {
                 return B1;
             }
         } else {
-            if (isTypedInt(B1)) {
+            if (isTypeInt(B1)) {
                 return A1;
             } else {
                 if (type_size_a >= type_size_b) {
@@ -188,7 +231,7 @@ pub const tensor = struct {
         }
     }
     pub fn isTensor(comptime T: type) bool {
-        if (@hasDecl(T, "Tag") and T.Tag == "Tensor") {
+        if (@hasDecl(T, "Tag") and std.mem.eql(u8, T.Tag, "Tensor")) {
             return true;
         }
         return false;
