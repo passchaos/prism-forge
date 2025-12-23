@@ -284,8 +284,8 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
 
         pub fn map(
             self: *const Self,
-            comptime RT: type,
             ctx: anytype,
+            comptime RT: type,
             func: fn (T, utils.comptimeTypeEraseComp(@TypeOf(ctx))) RT,
         ) !Tensor(N, .{ .T = RT }) {
             const TI = Tensor(N, .{ .T = RT });
@@ -312,7 +312,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                     return v == ctx;
                 }
             }.call;
-            return try self.map(bool, value, func);
+            return try self.map(value, bool, func);
         }
 
         pub fn lt(self: *const Self, value: T) !Tensor(N, .{ .T = bool }) {
@@ -321,7 +321,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                     return v < ctx;
                 }
             }.call;
-            return try self.map(bool, value, func);
+            return try self.map(value, bool, func);
         }
 
         pub fn le(self: *const Self, value: T) !Tensor(N, .{ .T = bool }) {
@@ -330,7 +330,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                     return v <= ctx;
                 }
             }.call;
-            return try self.map(bool, value, func);
+            return try self.map(value, bool, func);
         }
 
         pub fn gt(self: *const Self, value: T) !Tensor(N, .{ .T = bool }) {
@@ -339,7 +339,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                     return v > ctx;
                 }
             }.call;
-            return try self.map(bool, value, func);
+            return try self.map(value, bool, func);
         }
 
         pub fn ge(self: *const Self, value: T) !Tensor(N, .{ .T = bool }) {
@@ -348,7 +348,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                     return v >= ctx;
                 }
             }.call;
-            return try self.map(bool, value, func);
+            return try self.map(value, bool, func);
         }
 
         pub fn maskedFill_(self: *Self, mask: Tensor(N, .{ .T = bool }), value: T) !void {
@@ -383,8 +383,9 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
         pub fn binaryOp(
             self: Self,
             b: Self,
-            op_func: fn (x: T, y: T) T,
-        ) !Self {
+            comptime RT: type,
+            op_func: fn (x: T, y: T) RT,
+        ) !Tensor(N, .{ .T = RT }) {
             const target_shape = try utils.compatibleBroacastShapes(
                 N,
                 self.shape(),
@@ -396,7 +397,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             const c = try b.broadcastTo(target_shape);
             defer c.deinit();
 
-            var new_buf = try self.s_allocator().alloc(T, utils.product(&target_shape));
+            var new_buf = try self.s_allocator().alloc(RT, utils.product(&target_shape));
 
             var iter_a = a.shapeIter();
 
@@ -413,12 +414,12 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             }
 
             const layout = Layout.init(target_shape);
-            const storage = try Storage.initImpl(
+            const storage = try storage_t.Storage(RT, .Cpu).initImpl(
                 self.s_allocator(),
                 new_buf,
             );
 
-            return try Self.fromDataImpl(layout, storage, 0);
+            return try Tensor(N, .{ .T = RT }).fromDataImpl(layout, storage, 0);
         }
 
         pub fn clamp_(self: *Self, min_a: T, max_a: T) void {
@@ -463,17 +464,23 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             @compileError("unsupported add_ argument type " ++ @typeName(TV) ++ " for tensor of type " ++ @typeName(T));
         }
 
-        pub fn add(self: *const Self, value: anytype) !Self {
+        pub fn add(self: *const Self, value: anytype) !Tensor(N, .{ .T = if (T == bool) usize else T }) {
             const TV = @TypeOf(value);
             switch (TV) {
                 @This() => {
+                    const RT = if (T == bool) usize else T;
                     const func = struct {
-                        fn call(v: T, other: T) T {
+                        fn call(v: T, other: T) RT {
+                            if (T == bool) {
+                                const v1: RT = @intFromBool(v);
+                                const v2: RT = @intFromBool(other);
+                                return v1 + v2;
+                            }
                             return v + other;
                         }
                     }.call;
 
-                    return try self.binaryOp(@as(@This(), value), func);
+                    return try self.binaryOp(@as(@This(), value), RT, func);
                 },
                 T => {
                     const vv = @as(T, value);
@@ -484,7 +491,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                         }
                     }.call;
 
-                    return try self.map(T, vv, func);
+                    return try self.map(vv, T, func);
                 },
                 else => @compileError("unsupported add argument type" ++ " self: " ++ @typeName(@This()) ++ " input: " ++ @typeName(TV)),
             }
@@ -528,7 +535,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                         }
                     }.call;
 
-                    return try self.binaryOp(@as(@This(), value), func);
+                    return try self.binaryOp(@as(@This(), value), T, func);
                 },
                 T => {
                     const vv = @as(T, value);
@@ -539,7 +546,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                         }
                     }.call;
 
-                    return try self.map(T, vv, func);
+                    return try self.map(vv, T, func);
                 },
                 else => @compileError("unsupported sub argument type" ++ " self: " ++ @typeName(@This()) ++ " input: " ++ @typeName(TV)),
             }
@@ -583,7 +590,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                         }
                     }.call;
 
-                    return try self.binaryOp(@as(@This(), value), func);
+                    return try self.binaryOp(@as(@This(), value), T, func);
                 },
                 T => {
                     const vv = @as(T, value);
@@ -594,7 +601,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                         }
                     }.call;
 
-                    return try self.map(T, vv, func);
+                    return try self.map(vv, T, func);
                 },
                 else => @compileError("unsupported mul argument type" ++ " self: " ++ @typeName(@This()) ++ " input: " ++ @typeName(TV)),
             }
@@ -639,7 +646,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                         }
                     }.call;
 
-                    return try self.binaryOp(@as(@This(), value), func);
+                    return try self.binaryOp(@as(@This(), value), T, func);
                 },
                 T => {
                     const RT = comptime utils.tensor.tensorArithmeticTypeCast(T, @TypeOf(value));
@@ -651,7 +658,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                         }
                     }.call;
 
-                    return try self.map(T, vv, func);
+                    return try self.map(vv, T, func);
                 },
                 else => @compileError("unsupported div argument type" ++ " self: " ++ @typeName(@This()) ++ " input: " ++ @typeName(TV)),
             }
@@ -733,7 +740,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                     return std.math.isNan(v);
                 }
             }.call;
-            return try self.map(bool, void{}, func);
+            return try self.map(void{}, bool, func);
         }
 
         pub fn isInf(self: *const Self) !Tensor(N, .{ .T = bool }) {
@@ -742,7 +749,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                     return std.math.isInf(v);
                 }
             }.call;
-            return try self.map(bool, void{}, func);
+            return try self.map(void{}, bool, func);
         }
 
         pub fn isPositiveInf(self: *const Self) !Tensor(N, .{ .T = bool }) {
@@ -751,7 +758,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                     return std.math.isPositiveInf(v);
                 }
             }.call;
-            return try self.map(bool, void{}, func);
+            return try self.map(void{}, bool, func);
         }
 
         pub fn isNegativeInf(self: *const Self) !Tensor(N, .{ .T = bool }) {
@@ -760,7 +767,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                     return std.math.isNegativeInf(v);
                 }
             }.call;
-            return try self.map(bool, void{}, func);
+            return try self.map(void{}, bool, func);
         }
 
         pub fn isFinite(self: *const Self) !Tensor(N, .{ .T = bool }) {
@@ -769,7 +776,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                     return std.math.isFinite(v);
                 }
             }.call;
-            return try self.map(bool, void{}, func);
+            return try self.map(void{}, bool, func);
         }
 
         pub fn nanToNum_(self: *Self, args: struct {
@@ -1851,7 +1858,7 @@ test "map basic" {
             return x * ctx;
         }
     }.call;
-    var t1 = try t.map(f32, 7.0, func1);
+    var t1 = try t.map(7.0, f32, func1);
     defer t1.deinit();
     std.debug.print("t1: {f}\n", .{t1});
 
@@ -2031,9 +2038,19 @@ test "binary op" {
     const allocator = std.testing.allocator;
 
     {
+        const t1 = try fromArray(allocator, [3]bool{ true, false, true });
+        defer t1.deinit();
+        const t2 = try fromArray(allocator, [3]bool{ false, true, true });
+        defer t2.deinit();
+        const t3 = try t1.add(t2);
+        defer t3.deinit();
+        std.debug.print("t1: {f} t2: {f} t3: {f}\n", .{ t1, t2, t3 });
+    }
+
+    {
         const t1 = try rand(allocator, [_]usize{ 3, 3 }, 10.0, 20.0);
         defer t1.deinit();
-        var t2 = try arange(allocator, f32, .{ .end = 9 });
+        var t2 = try arange(allocator, f64, .{ .end = 9 });
         defer t2.deinit();
 
         std.debug.print("t2: {f}\n", .{t2});
