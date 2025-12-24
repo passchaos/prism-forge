@@ -406,6 +406,66 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             return result;
         }
 
+        pub fn gather(
+            self: *const Self,
+            dim: usize,
+            index_tensor: Tensor(N, .{ .T = usize }),
+        ) !Self {
+            if (dim >= N) {
+                return error.InvalidDimArgument;
+            }
+
+            const new_shape = index_tensor.shape();
+
+            const new_buf = try self.s_allocator().alloc(T, index_tensor.size());
+
+            var index_t_iter = index_tensor.shapeIter();
+            while (index_t_iter.next()) |idx| {
+                const index_d_v = try index_tensor.getData(idx);
+                if (index_d_v >= self.shape()[dim]) {
+                    return error.IndexOutOfBounds;
+                }
+
+                var idx_input = idx;
+                idx_input[dim] = try index_tensor.getData(idx);
+
+                const value_input = try self.getData(idx_input);
+                const flat_idx_out = try utils.indexShapeToFlat(N, new_shape, idx);
+
+                new_buf[flat_idx_out] = value_input;
+            }
+
+            const layout = Layout.init(new_shape);
+            const storage = try Storage.initImpl(self.s_allocator(), new_buf);
+
+            return try Self.fromDataImpl(layout, storage, 0);
+        }
+
+        pub fn scatter_(self: *Self, dim: usize, index_tensor: Tensor(N, .{ .T = usize }), value_src: anytype) !void {
+            const VST = @TypeOf(value_src);
+
+            switch (VST) {
+                Self, T => {
+                    var index_iter = index_tensor.shapeIter();
+
+                    while (index_iter.next()) |idx| {
+                        const index_value = try index_tensor.getData(idx);
+                        if (index_value >= self.shape()[dim]) {
+                            return error.IndexOutOfBounds;
+                        }
+
+                        var idx_self = idx;
+                        idx_self[dim] = index_value;
+
+                        const value = if (VST == Self) try value_src.getData(idx) else value_src;
+
+                        try self.setData(idx_self, value);
+                    }
+                },
+                else => @compileError("Unsupported type for scatter_ " ++ @typeName(VST)),
+            }
+        }
+
         pub fn mseLoss(self: Self, other: Self) !Tensor(0, .{ .T = T }) {
             return try F.mseLoss(N, T, self, other);
         }
@@ -2471,5 +2531,84 @@ test "loss func" {
         const cross_entropy = try cross_entropy_t.dataItem();
 
         try std.testing.expectApproxEqAbs(0.9280682857864075, cross_entropy, 1e-7);
+    }
+}
+
+test "gather_scatter" {
+    const allocator = std.testing.allocator;
+
+    {
+        const t1 = try fromArray(allocator, [2][2]i32{
+            .{ 1, 2 },
+            .{ 3, 4 },
+        });
+        defer t1.deinit();
+
+        const index_t = try fromArray(allocator, [2][2]usize{
+            .{ 0, 0 },
+            .{ 1, 0 },
+        });
+        defer index_t.deinit();
+
+        const t2 = try t1.gather(1, index_t);
+        defer t2.deinit();
+
+        const t2_e = try fromArray(allocator, [2][2]i32{
+            .{ 1, 1 },
+            .{ 4, 3 },
+        });
+        defer t2_e.deinit();
+
+        const compare_result = t2.equal(t2_e);
+        try std.testing.expect(compare_result);
+    }
+
+    {
+        const t1 = try arange(allocator, i8, .{ .start = 1, .end = 11 });
+        defer t1.deinit();
+        const t2 = try t1.reshape([2]usize{ 2, 5 });
+        defer t2.deinit();
+
+        const index_t = try fromArray(allocator, [2][2]usize{
+            .{ 0, 1 },
+            .{ 2, 0 },
+        });
+        defer index_t.deinit();
+
+        var input = try zeros(allocator, i8, [2]usize{ 3, 5 });
+        defer input.deinit();
+
+        try input.scatter_(0, index_t, t2);
+
+        const t3_e = try fromArray(allocator, [3][5]i8{ .{ 1, 0, 0, 4, 0 }, .{ 0, 2, 0, 0, 0 }, .{ 0, 0, 3, 0, 0 } });
+        defer t3_e.deinit();
+
+        const compare_result = input.equal(t3_e);
+        try std.testing.expect(compare_result);
+    }
+
+    {
+        var input = try zeros(allocator, f32, [2]usize{ 3, 5 });
+        defer input.deinit();
+
+        const index_t = try fromArray(allocator, [1][2]usize{.{ 0, 1 }});
+        defer index_t.deinit();
+
+        try input.scatter_(0, index_t, @as(f32, 2.0));
+
+        const input_e = try fromArray(
+            allocator,
+            [3][5]f32{
+                .{ 2.0, 0.0, 0.0, 0.0, 0.0 },
+                .{ 0.0, 2.0, 0.0, 0.0, 0.0 },
+                .{ 0.0, 0.0, 0.0, 0.0, 0.0 },
+            },
+        );
+        defer input_e.deinit();
+
+        const compare_result = input.equal(input_e);
+        try std.testing.expect(compare_result);
+
+        std.debug.print("input: {f}\n", .{input});
     }
 }
