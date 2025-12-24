@@ -406,6 +406,31 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             return result;
         }
 
+        pub fn indexSelect(self: *const Self, dim: usize, indices: []const usize) !Self {
+            if (dim >= N) {
+                return error.InvalidDimArgument;
+            }
+
+            if (indices.len >= self.shape()[dim]) {
+                return error.IndexOutOfBounds;
+            }
+
+            var new_shape = self.shape();
+            new_shape[dim] = indices.len;
+
+            var indices_t = try zeros(self.s_allocator(), usize, new_shape);
+            defer indices_t.deinit();
+
+            var index_iter = indices_t.shapeIter();
+            while (index_iter.next()) |idx| {
+                try indices_t.setData(idx, indices[idx[dim]]);
+            }
+
+            // log.print(@src(), "indices_t: {f}\n", .{indices_t});
+
+            return try self.gather(dim, indices_t);
+        }
+
         pub fn gather(
             self: *const Self,
             dim: usize,
@@ -2534,7 +2559,7 @@ test "loss func" {
     }
 }
 
-test "gather_scatter" {
+test "gather_scatter_indexed" {
     const allocator = std.testing.allocator;
 
     {
@@ -2561,6 +2586,49 @@ test "gather_scatter" {
 
         const compare_result = t2.equal(t2_e);
         try std.testing.expect(compare_result);
+    }
+
+    {
+        const t1 = try fromArray(allocator, [3][4]f32{
+            .{ 1.0, 2.0, 3.0, 4.0 },
+            .{ 5.0, 6.0, 7.0, 8.0 },
+            .{ 9.0, 10.0, 11.0, 12.0 },
+        });
+        defer t1.deinit();
+        log.print(@src(), "indexSelct: t1= {f}\n", .{t1});
+
+        {
+            const t2 = try t1.indexSelect(1, &.{ 1, 2 });
+            defer t2.deinit();
+
+            const t2_e = try fromArray(allocator, [3][2]f32{
+                .{ 2.0, 3.0 },
+                .{ 6.0, 7.0 },
+                .{ 10.0, 11.0 },
+            });
+            defer t2_e.deinit();
+
+            const compare_result = t2.equal(t2_e);
+            try std.testing.expect(compare_result);
+
+            std.debug.print("indexSelect: t2= {f}\n", .{t2});
+        }
+
+        {
+            const t2 = try t1.indexSelect(0, &.{ 1, 2 });
+            defer t2.deinit();
+
+            const t2_e = try fromArray(allocator, [2][4]f32{
+                .{ 5.0, 6.0, 7.0, 8.0 },
+                .{ 9.0, 10.0, 11.0, 12.0 },
+            });
+            defer t2_e.deinit();
+
+            const compare_result = t2.equal(t2_e);
+            try std.testing.expect(compare_result);
+
+            std.debug.print("indexSelect: t2= {f}\n", .{t2});
+        }
     }
 
     {
