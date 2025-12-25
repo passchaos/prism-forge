@@ -24,6 +24,10 @@ const matmul = @import("matmul.zig");
 //     .logFn = logFn,
 // };
 
+// test {
+//     std.testing.refAllDeclsRecursive(@This());
+// }
+
 pub fn bufferedPrint() !void {
     // Stdout is for the actual output of your application, for example if you
     // are implementing gzip, then only the compressed bytes should be sent to

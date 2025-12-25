@@ -11,6 +11,8 @@ const storage_t = @import("./storage.zig");
 const Device = storage_t.Device;
 const layout_t = @import("./layout.zig");
 
+const matmul_t = @import("./matmul.zig");
+
 const F = @import("nn/functional.zig");
 
 pub fn BasicOpFuncsGenerator(comptime T: type) type {
@@ -508,6 +510,13 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             }
         }
 
+        pub fn matmul(self: Self, other: anytype) !Tensor(
+            utils.tensor.matmulResultNDimComp(Self, @TypeOf(other)),
+            .{ .T = utils.tensor.matmulResultElementTypeComp(Self, @TypeOf(other)) },
+        ) {
+            return try matmul_t.matmul(self, other);
+        }
+
         pub fn map(
             self: *const Self,
             ctx: anytype,
@@ -793,34 +802,38 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
         pub fn div_(self: *Self, value: anytype) !void {
             const TV = @TypeOf(value);
 
-            if (TV == @This()) {
-                return try self.binaryOp_(@as(@This(), value), BasicOpFuncs.div);
+            switch (TV) {
+                @This() => return try self.binaryOp_(@as(@This(), value), BasicOpFuncs.div),
+                T => {
+                    const vv = @as(T, value);
+
+                    return self.map_(vv, BasicOpFuncs.div);
+                },
+                else => @compileError("unsupported div_ argument type " ++ @typeName(TV) ++ " for tensor of type " ++ @typeName(T)),
             }
-
-            if (TV == T or ((TV == comptime_float or TV == comptime_int) and @typeInfo(T) == .float) or (TV == comptime_int and @typeInfo(T) == .int)) {
-                const vv = @as(T, value);
-
-                return self.map_(vv, BasicOpFuncs.div);
-            }
-
-            @compileError("unsupported div_ argument type " ++ @typeName(TV) ++ " for tensor of type " ++ @typeName(T));
         }
 
         pub fn div(self: *const Self, value: anytype) !Tensor(N, .{ .T = utils.tensor.tensorArithmeticTypeCast(T, @TypeOf(value)) }) {
             const TV = @TypeOf(value);
 
-            switch (TV) {
-                @This() => {
-                    return try self.binaryOp(@as(@This(), value), T, BasicOpFuncs.div);
-                },
-                T => {
-                    const RT = comptime utils.tensor.tensorArithmeticTypeCast(T, @TypeOf(value));
-                    const vv = @as(RT, value);
-
-                    return try self.map(vv, T, BasicOpFuncs.div);
-                },
-                else => @compileError("unsupported div argument type" ++ " self: " ++ @typeName(@This()) ++ " input: " ++ @typeName(TV)),
+            if (comptime TV == @This()) {
+                return try self.binaryOp(@as(@This(), value), T, BasicOpFuncs.div);
             }
+
+            if (comptime utils.isNumber(TV)) {
+                const RT = comptime utils.arithmetricTypePromotion(T, @TypeOf(value));
+                const vv = utils.promoteNumberType(RT, value);
+
+                const func = struct {
+                    fn call(v: T, o: RT) RT {
+                        return utils.promoteNumberType(RT, v) / o;
+                    }
+                }.call;
+
+                return try self.map(vv, RT, func);
+            }
+
+            @compileError("unsupported div argument type" ++ " self: " ++ @typeName(@This()) ++ " input: " ++ @typeName(TV));
         }
 
         pub fn sin_(self: *Self) void {

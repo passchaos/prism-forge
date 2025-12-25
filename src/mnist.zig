@@ -60,11 +60,11 @@ pub fn loadLabels(allocator: std.mem.Allocator, path: []const u8) !tensor.Tensor
     return try tensor.fromData(1, u8, allocator, new_buf, [1]usize{new_buf.len});
 }
 
-pub fn loadDatas(allocator: std.mem.Allocator) !struct {
-    train_images: tensor.Tensor(2, .{}),
-    train_labels: tensor.Tensor(2, .{}),
-    test_images: tensor.Tensor(2, .{}),
-    test_labels: tensor.Tensor(2, .{}),
+pub fn loadDatas(comptime T: type, allocator: std.mem.Allocator) !struct {
+    train_images: tensor.Tensor(2, .{ .T = T }),
+    train_labels: tensor.Tensor(2, .{ .T = T }),
+    test_images: tensor.Tensor(2, .{ .T = T }),
+    test_labels: tensor.Tensor(2, .{ .T = T }),
 } {
     const env_home = std.posix.getenv("HOME").?;
 
@@ -75,18 +75,18 @@ pub fn loadDatas(allocator: std.mem.Allocator) !struct {
     defer train_images.deinit();
 
     const func = struct {
-        fn call(v: u8, _: void) f32 {
-            return @as(f32, @floatFromInt(v)) / 255.0;
+        fn call(v: u8, _: void) T {
+            return @as(T, @floatFromInt(v)) / 255.0;
         }
     }.call;
-    const train_images_one = try train_images.map(f32, void{}, func);
+    const train_images_one = try train_images.map(void{}, T, func);
 
     const path_labels = try std.fs.path.join(allocator, &.{ env_home, "Work/mnist/train-labels.idx1-ubyte" });
     defer allocator.free(path_labels);
 
     const train_labels = try loadLabels(allocator, path_labels);
     defer train_labels.deinit();
-    const train_labels_oh = try train_labels.oneHot(f32, 10);
+    const train_labels_oh = try train_labels.oneHot(T, 10);
 
     const path_test_images = try std.fs.path.join(allocator, &.{ env_home, "Work/mnist/t10k-images.idx3-ubyte" });
     defer allocator.free(path_test_images);
@@ -94,14 +94,14 @@ pub fn loadDatas(allocator: std.mem.Allocator) !struct {
     var test_images = try loadImages(allocator, path_test_images);
     defer test_images.deinit();
 
-    const test_images_one = try test_images.map(f32, void{}, func);
+    const test_images_one = try test_images.map(void{}, T, func);
 
     const path_test_labels = try std.fs.path.join(allocator, &.{ env_home, "Work/mnist/t10k-labels.idx1-ubyte" });
     defer allocator.free(path_test_labels);
 
     const test_labels = try loadLabels(allocator, path_test_labels);
     defer test_labels.deinit();
-    const test_labels_oh = try test_labels.oneHot(f32, 10);
+    const test_labels_oh = try test_labels.oneHot(T, 10);
 
     return .{
         .train_images = train_images_one,

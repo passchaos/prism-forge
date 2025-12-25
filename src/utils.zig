@@ -230,6 +230,7 @@ pub const tensor = struct {
             }
         }
     }
+
     pub fn isTensor(comptime T: type) bool {
         if (@hasDecl(T, "Tag") and std.mem.eql(u8, T.Tag, "Tensor")) {
             return true;
@@ -237,6 +238,59 @@ pub const tensor = struct {
         return false;
     }
 };
+
+pub fn arithmetricTypePromotion(comptime A: type, comptime B: type) type {
+    if (!isNumber(A) or !isNumber(B)) @compileError("only support number type handle");
+
+    const A1 = comptimeTypeEraseComp(A);
+    const B1 = comptimeTypeEraseComp(B);
+
+    const type_size_a = @sizeOf(A1);
+    const type_size_b = @sizeOf(B1);
+
+    if (isTypeInt(A1)) {
+        if (isTypeInt(B1)) {
+            if (type_size_a >= type_size_b) {
+                return A1;
+            } else {
+                return B1;
+            }
+        } else {
+            // if one is float, result is float
+            return B1;
+        }
+    } else {
+        if (isTypeInt(B1)) {
+            return A1;
+        } else {
+            if (type_size_a >= type_size_b) {
+                return A1;
+            } else {
+                return B1;
+            }
+        }
+    }
+}
+
+pub fn promoteNumberType(comptime TT: type, value: anytype) TT {
+    const VT = @TypeOf(value);
+
+    if (comptime VT == TT) return value;
+
+    if (comptime isTypeFloat(TT)) {
+        if (comptime isTypeFloat(VT)) {
+            return @floatCast(value);
+        } else {
+            return @floatFromInt(value);
+        }
+    } else {
+        if (isTypeInt(VT)) {
+            return @intCast(value);
+        } else {
+            return @intFromFloat(value);
+        }
+    }
+}
 
 pub fn approxEqual(comptime T: type, a: T, b: T, relEps: T, absEps: T) bool {
     return std.math.approxEqAbs(T, a, b, absEps) or
@@ -255,12 +309,13 @@ test "approx equal" {
 }
 
 pub fn isNumber(comptime T: type) bool {
-    return comptime isTypeFloat(T) or isTypeInt(T) or isComptimeFloat(T) or isComptimeInt(T);
+    return comptime isTypeFloat(T) or isTypeInt(T);
 }
 
 pub fn isTypeFloat(comptime T: type) bool {
     return switch (@typeInfo(T)) {
         .float => true,
+        .comptime_float => true,
         else => false,
     };
 }
@@ -268,6 +323,7 @@ pub fn isTypeFloat(comptime T: type) bool {
 pub fn isTypeInt(comptime T: type) bool {
     return switch (@typeInfo(T)) {
         .int => true,
+        .comptime_int => true,
         else => false,
     };
 }

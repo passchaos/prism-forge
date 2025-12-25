@@ -92,3 +92,8 @@ fn generateXY() !void {
         val += 0.1;
     }
 }
+
+test {
+    std.testing.refAllDeclsRecursive(@This());
+    std.testing.refAllDeclsRecursive(basic);
+}

@@ -2,38 +2,36 @@ const std = @import("std");
 const tensor = @import("../tensor.zig");
 const log = @import("../log.zig");
 const matmul = @import("../matmul.zig");
+const mnist = @import("../mnist.zig");
 
 const DT = f64;
 const Tensor2 = tensor.Tensor(2, .{ .T = DT });
 
 pub fn function2(
-    comptime N: usize,
-    comptime T: type,
-    input: tensor.Tensor(N, .{ .T = T }),
+    input: Tensor2,
     _: void,
-) anyerror!T {
+) anyerror!DT {
     var input_iter = input.shapeIter();
 
-    var result: T = 0;
+    var result: Tensor2.T = 0;
 
     while (input_iter.next()) |idx| {
-        result += std.math.pow(T, try input.getData(idx), 2);
+        result += std.math.pow(Tensor2.T, try input.getData(idx), 2);
     }
 
     return result;
 }
 
-fn tensor_loss(
-    comptime N: usize,
-    comptime T: type,
-    input: tensor.Tensor(N, .{ .T = T }),
-    ctx: struct {
-        x: tensor.Tensor(N, .{ .T = T }),
-        t: tensor.Tensor(N, .{ .T = T }),
-    },
-) anyerror!T {
-    const net = SimpleNet.init(input);
+const LossArgument = struct {
+    x: Tensor2,
+    t: Tensor2,
+};
 
+fn net_loss(
+    _: *Tensor2,
+    net: anytype,
+    ctx: LossArgument,
+) anyerror!Tensor2.T {
     const loss = try net.loss(ctx.x, ctx.t);
 
     return loss;
@@ -44,9 +42,9 @@ pub const SimpleNet = struct {
 
     const Self = @This();
 
-    // fn deinit(self: *const Self) void {
-    //     return self.w.deinit();
-    // }
+    fn deinit(self: *const Self) void {
+        return self.w.deinit();
+    }
 
     fn resetWeight(self: *Self, new_w: Tensor2) void {
         self.w.deinit();
@@ -79,39 +77,36 @@ pub const SimpleNet = struct {
 // if f return !T, compile will hang or meet unnormal compile error
 pub fn numericalGradient(
     allocator: std.mem.Allocator,
-    comptime N: usize,
-    comptime T: type,
+    net: anytype,
     ctx: anytype,
     f: fn (
-        comptime N: usize,
-        comptime T: type,
-        tensor.Tensor(N, .{ .T = T }),
-        ctx_f: @TypeOf(ctx),
-    ) anyerror!T,
-    tval: tensor.Tensor(N, .{ .T = T }),
-) !tensor.Tensor(N, .{ .T = T }) {
+        *Tensor2,
+        anytype,
+        @TypeOf(ctx),
+    ) anyerror!Tensor2.T,
+    tval: *Tensor2,
+) !Tensor2 {
     const h = 1e-4;
 
-    var tval_v = tval;
-    var grad = try tensor.zerosLike(allocator, tval);
+    var grad = try tensor.zerosLike(allocator, tval.*);
 
-    var x_v_iter = tval_v.shapeIter();
+    var x_v_iter = tval.shapeIter();
     while (x_v_iter.next()) |idx| {
-        const tmp_val = try tval_v.getData(idx);
+        const tmp_val = try tval.getData(idx);
 
-        try tval_v.setData(idx, tmp_val + h);
-        const fxh1 = try f(N, T, tval_v, ctx);
+        try tval.setData(idx, tmp_val + h);
+        const fxh1 = try f(tval, net, ctx);
 
         // std.debug.print("tval_v: {f}\n", .{tval_v});
         // std.debug.print("idx: {any} fxh1: {}\n", .{ idx, fxh1 });
 
-        try tval_v.setData(idx, tmp_val - h);
-        const fxh2 = try f(N, T, tval_v, ctx);
+        try tval.setData(idx, tmp_val - h);
+        const fxh2 = try f(tval, net, ctx);
         // std.debug.print("idx: {any} fxh2: {}\n", .{ idx, fxh2 });
 
         try grad.setData(idx, (fxh1 - fxh2) / (h + h));
 
-        try tval_v.setData(idx, tmp_val);
+        try tval.setData(idx, tmp_val);
     }
 
     return grad;
@@ -119,20 +114,16 @@ pub fn numericalGradient(
 
 pub fn gradientDescent(
     allocator: std.mem.Allocator,
-    comptime N: usize,
-    comptime T: type,
     ctx: anytype,
     f: fn (
-        comptime N: usize,
-        comptime T: type,
-        tensor.Tensor(N, .{ .T = T }),
+        Tensor2,
         ctx_f: @TypeOf(ctx),
-    ) anyerror!T,
-    init_x: *tensor.Tensor(N, .{ .T = T }),
-    args: struct { lr: T = 0.01, step_number: usize = 100 },
+    ) anyerror!Tensor2.T,
+    init_x: *Tensor2,
+    args: struct { lr: Tensor2.T = 0.01, step_number: usize = 100 },
 ) !void {
     for (0..args.step_number) |_| {
-        var grad = try numericalGradient(allocator, N, T, ctx, f, init_x.*);
+        var grad = try numericalGradient(allocator, ctx, f, init_x.*);
         defer grad.deinit();
 
         try grad.mul_(args.lr);
@@ -141,20 +132,162 @@ pub fn gradientDescent(
     }
 }
 
+pub const TwoLayerNet = struct {
+    params: std.StringHashMap(Tensor2),
+    allocator: std.mem.Allocator,
+
+    const Self = @This();
+
+    fn deinit(self: *Self) void {
+        var map_iter = self.params.iterator();
+        while (map_iter.next()) |v| {
+            v.value_ptr.deinit();
+        }
+        self.params.deinit();
+    }
+
+    fn init(
+        allocator: std.mem.Allocator,
+        input_size: usize,
+        hidden_size: usize,
+        output_size: usize,
+        weight_init_std: DT,
+    ) !Self {
+        var params_i = std.StringHashMap(Tensor2).init(allocator);
+
+        var w1 = try tensor.randNorm(
+            allocator,
+            [2]usize{ input_size, hidden_size },
+            0.0,
+            1.0,
+        );
+        try w1.mul_(weight_init_std);
+
+        const b1 = try tensor.zeros(allocator, DT, [2]usize{ 1, hidden_size });
+
+        var w2 = try tensor.randNorm(
+            allocator,
+            [2]usize{ hidden_size, output_size },
+            0.0,
+            1.0,
+        );
+        try w2.mul_(weight_init_std);
+
+        const b2 = try tensor.zeros(allocator, DT, [2]usize{ 1, output_size });
+
+        try params_i.put("W1", w1);
+        try params_i.put("b1", b1);
+        try params_i.put("W2", w2);
+        try params_i.put("b2", b2);
+        return Self{
+            .params = params_i,
+            .allocator = allocator,
+        };
+    }
+
+    fn predict(self: *const Self, x: Tensor2) !Tensor2 {
+        const W1 = self.params.get("W1").?;
+        const b1 = self.params.get("b1").?;
+        const W2 = self.params.get("W2").?;
+        const b2 = self.params.get("b2").?;
+
+        var a1 = try x.matmul(W1);
+        defer a1.deinit();
+
+        try a1.add_(b1);
+        a1.sigmoid_();
+
+        var a2 = try a1.matmul(W2);
+        defer a2.deinit();
+        try a2.add_(b2);
+
+        const y = try a2.softmax();
+
+        return y;
+    }
+
+    fn loss(self: *const Self, x: Tensor2, t: Tensor2) !DT {
+        const y = try self.predict(x);
+        defer y.deinit();
+
+        const loss_t = try y.crossEntropy(t);
+        return loss_t.dataItem();
+    }
+
+    fn accuracy(self: *const Self, x: Tensor2, t: Tensor2) !DT {
+        const y = try self.predict(x);
+
+        const y1 = try y.argMax(1);
+        const t1 = try t.argMax(1);
+
+        const eql_t = try y1.eql(t1);
+
+        log.print(@src(), "eql_t: {f}\n", .{eql_t});
+        var eql_sum = try eql_t.sumAll();
+
+        const eql_t_d = try eql_sum.div(@as(DT, @floatFromInt(x.shape()[0])));
+
+        return try eql_t_d.dataItem();
+    }
+
+    fn numericalGradientM(self: Self, x: Tensor2, t: Tensor2) !std.StringHashMap(Tensor2) {
+        var grads = std.StringHashMap(Tensor2).init(self.allocator);
+
+        const w1 = try numericalGradient(self.allocator, self, LossArgument{
+            .x = x,
+            .t = t,
+        }, net_loss, self.params.getPtr("W1").?);
+        const w2 = try numericalGradient(self.allocator, self, LossArgument{
+            .x = x,
+            .t = t,
+        }, net_loss, self.params.getPtr("W2").?);
+        const b1 = try numericalGradient(self.allocator, self, LossArgument{
+            .x = x,
+            .t = t,
+        }, net_loss, self.params.getPtr("b1").?);
+        const b2 = try numericalGradient(self.allocator, self, LossArgument{
+            .x = x,
+            .t = t,
+        }, net_loss, self.params.getPtr("b2").?);
+
+        try grads.put("W1", w1);
+        try grads.put("W2", w2);
+        try grads.put("b1", b1);
+        try grads.put("b2", b2);
+
+        return grads;
+    }
+};
+
+// pub fn twoLayerNetTrain(allocator: std.mem.Allocator, batch_size: usize) !void {
+//     const datas = try mnist.loadDatas(DT, allocator);
+
+//     const train_images = datas.train_images;
+//     const train_labels = datas.train_labels;
+//     const test_images = datas.test_images;
+//     const test_labels = datas.test_labels;
+
+//     var train_loss_list = try std.ArrayList(DT).initCapacity(allocator, 100);
+//     var train_accuracy_list = try std.ArrayList(DT).initCapacity(allocator, 100);
+//     var test_accuracy_list = try std.ArrayList(DT).initCapacity(allocator, 100);
+
+//     const iter_per_epoch = @max(train)
+// }
+
 test "differential" {
     const allocator = std.testing.allocator;
 
-    const arr = try tensor.fromArray(allocator, [_]DT{ 3.0, 4.0 });
+    const arr = try tensor.fromArray(allocator, [_][2]DT{.{ 3.0, 4.0 }});
     defer arr.deinit();
 
-    const v1 = try numericalGradient(allocator, 1, DT, void{}, function2, arr);
+    const v1 = try numericalGradient(allocator, void{}, function2, arr);
     defer v1.deinit();
 
     log.print(@src(), "v1: {f}\n", .{v1});
 
-    var init_x = try tensor.fromArray(allocator, [_]DT{ -3.0, 4.0 });
+    var init_x = try tensor.fromArray(allocator, [_][2]DT{.{ -3.0, 4.0 }});
     defer init_x.deinit();
-    try gradientDescent(allocator, 1, DT, void{}, function2, &init_x, .{ .lr = 0.1 });
+    try gradientDescent(allocator, void{}, function2, &init_x, .{ .lr = 0.1 });
     log.print(@src(), "init x: {f}\n", .{init_x});
 }
 
@@ -165,10 +298,9 @@ test "simple net" {
         .{ 0.47355232, 0.9977393, 0.84668094 },
         .{ 0.85557411, 0.03563661, 0.69422093 },
     });
-    defer weight.deinit();
 
     var net = SimpleNet.init(weight);
-    // defer net.deinit();
+    defer net.deinit();
 
     log.print(@src(), "w: {f}\n", .{net.w});
 
@@ -186,7 +318,13 @@ test "simple net" {
     try std.testing.expectApproxEqAbs(0.9280682857864075, loss, 1e-15);
     log.print(@src(), "loss: {}\n", .{loss});
 
-    const result_t = try numericalGradient(allocator, 2, DT, .{ .x = x, .t = t }, tensor_loss, weight);
+    const result_t = try numericalGradient(
+        allocator,
+        &net,
+        LossArgument{ .x = x, .t = t },
+        net_loss,
+        &net.w,
+    );
     // _ = result_t;
     defer result_t.deinit();
 
@@ -200,4 +338,43 @@ test "simple net" {
     try std.testing.expect(approx_eq);
 
     std.debug.print("result_t: {f}\n", .{result_t});
+}
+
+test "two_layer_net" {
+    const t_allocator = std.testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(t_allocator);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+
+    const datas = try mnist.loadDatas(DT, allocator);
+
+    const train_images = datas.train_images;
+    const train_labels = datas.train_labels;
+    // const test_images = datas.test_images;
+    // const test_labels = datas.test_labels;
+
+    var two_layer_net = try TwoLayerNet.init(allocator, 784, 100, 10, 0.01);
+    defer two_layer_net.deinit();
+
+    {
+        const batch_idx = &.{ 0, 1, 2 };
+        const batch_train_images = try train_images.indexSelect(0, batch_idx);
+        const batch_train_labels = try train_labels.indexSelect(0, batch_idx);
+
+        const compute_labels = try two_layer_net.predict(batch_train_images);
+        log.print(@src(), "compute labels: {f}\n", .{compute_labels});
+
+        const loss = try two_layer_net.loss(batch_train_images, batch_train_labels);
+        const accuracy = try two_layer_net.accuracy(batch_train_images, batch_train_labels);
+        log.print(@src(), "loss: {} accuracy: {}\n", .{ loss, accuracy });
+
+        const gradient = try two_layer_net.numericalGradientM(batch_train_images, batch_train_labels);
+        var grad_iter = gradient.iterator();
+
+        while (grad_iter.next()) |entry| {
+            log.print(@src(), "grad: key= {s} value= {f}\n", .{ entry.key_ptr.*, entry.value_ptr });
+        }
+    }
 }
