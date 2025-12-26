@@ -47,14 +47,16 @@ fn init() !void {
 }
 
 pub fn print(comptime src: std.builtin.SourceLocation, comptime format: []const u8, args: anytype) void {
-    if (logger) |lg| {
-        lg.print(src, format, args) catch |err| {
-            std.debug.print("meet error: {}\n", .{err});
-        };
-    } else {
+    if (logger == null) {
         std.debug.print("init logger\n", .{});
         init() catch |err| {
             std.debug.print("init meet error: {}\n", .{err});
+        };
+    }
+
+    if (logger) |lg| {
+        lg.print(src, format, args) catch |err| {
+            std.debug.print("meet error: {}\n", .{err});
         };
     }
 }

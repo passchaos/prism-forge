@@ -301,7 +301,7 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, batch_size: usize) !void {
     );
     defer net.deinit();
 
-    for (0..iters_num) |_| {
+    for (0..iters_num) |idx| {
         const batch_mask = try tensor.rand(allocator, [1]usize{batch_size}, @as(usize, 0), train_size);
         defer batch_mask.deinit();
 
@@ -330,7 +330,7 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, batch_size: usize) !void {
         }
 
         const loss = try net.loss(x_batch, t_batch);
-        log.print(@src(), "loss: {}\n", .{loss});
+        log.print(@src(), "idx: {} loss: {}\n", .{ idx, loss });
     }
 }
 
