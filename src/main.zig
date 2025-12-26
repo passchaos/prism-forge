@@ -61,11 +61,10 @@ pub fn main() !void {
 
     // try matmulDemo(allocator);
 
-    // const t1 = try std.Thread.spawn(.{}, generateXY, .{});
+    const t1 = try std.Thread.spawn(.{}, basic.twoLayerNetTrain, .{ allocator, 100 });
 
-    // try plot.beginPlotLoop(allocator);
-    // t1.join();
-    try basic.twoLayerNetTrain(allocator, 100);
+    try plot.beginPlotLoop(allocator);
+    t1.join();
 }
 
 fn generateXY() !void {

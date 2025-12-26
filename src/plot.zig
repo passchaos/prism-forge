@@ -136,7 +136,7 @@ fn plotImpl() !void {
         .max = axis_info.x_max,
         .ticks = .{
             .side = .left_or_top,
-            .subticks = true,
+            .subticks = false,
         },
         .gridline_color = gridline_color,
         .subtick_gridline_color = subtick_gridline_color,
@@ -145,7 +145,7 @@ fn plotImpl() !void {
         .name = "Y Axis",
         .min = axis_info.y_min,
         .max = axis_info.y_max,
-        .ticks = .{ .side = .both, .subticks = true },
+        .ticks = .{ .side = .both, .subticks = false },
         .gridline_color = gridline_color,
         .subtick_gridline_color = subtick_gridline_color,
     };

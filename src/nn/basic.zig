@@ -3,6 +3,7 @@ const tensor = @import("../tensor.zig");
 const log = @import("../log.zig");
 const matmul = @import("../matmul.zig");
 const mnist = @import("../mnist.zig");
+const plot = @import("../plot.zig");
 
 const DT = f64;
 const Tensor2 = tensor.Tensor(2, .{ .T = DT });
@@ -292,6 +293,13 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, batch_size: usize) !void {
     const train_size = train_images.shape()[0];
     const learning_rate = 0.1;
 
+    log.print(@src(), "train_size= {} batch_size= {} iter_num= {} learning_rate= {}", .{
+        train_size,
+        batch_size,
+        iters_num,
+        learning_rate,
+    });
+
     var net = try TwoLayerNet.init(
         allocator,
         784,
@@ -330,6 +338,8 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, batch_size: usize) !void {
         }
 
         const loss = try net.loss(x_batch, t_batch);
+
+        try plot.appendData("idx", &.{@as(f64, @floatFromInt(idx))}, &.{loss});
         log.print(@src(), "idx: {} loss: {}\n", .{ idx, loss });
     }
 }

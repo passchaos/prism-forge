@@ -5,7 +5,7 @@ const blasapi = switch (builtin.os.tag) {
     else => @compileError("Unsupported os"),
 };
 
-pub fn matmul(comptime T: type, a: [*]const T, b: [*]const T, c: [*]T, m_i: usize, n_i: usize, k_i: usize) void {
+pub fn matmul(comptime T: type, a: [*c]const T, b: [*c]const T, c: [*c]T, m_i: usize, n_i: usize, k_i: usize) void {
     const m = @as(c_int, @intCast(m_i));
     const n = @as(c_int, @intCast(n_i));
     const k = @as(c_int, @intCast(k_i));

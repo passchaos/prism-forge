@@ -10,6 +10,10 @@ const log = @import("log.zig");
 const tensor = @import("tensor.zig");
 const Tensor = tensor.Tensor;
 
+var thread_pool: ?std.Thread.Pool = null;
+
+const N_JOBS: usize = 8;
+
 // op method
 pub fn matmul(t1: anytype, t2: anytype) !Tensor(
     utils.tensor.matmulResultNDimComp(@TypeOf(t1), @TypeOf(t2)),
@@ -56,14 +60,67 @@ pub fn matmul(t1: anytype, t2: anytype) !Tensor(
     const n = rhs.shape()[1];
     const k = lhs.shape()[1];
 
-    const a: [*c]const ER = @ptrCast(lhs.storage.dataSlice());
+    const a: []const ER = @ptrCast(lhs.storage.dataSlice());
     const b: [*c]const ER = @ptrCast(rhs.storage.dataSlice());
 
     const buf = try a1.alloc(ER, m * n);
 
-    const c: [*c]ER = @ptrCast(buf);
+    const c: []ER = @ptrCast(buf);
 
-    host.matmul(ER, a, b, c, m, n, k);
+    if (thread_pool == null) {
+        var tp: std.Thread.Pool = undefined;
+        try std.Thread.Pool.init(&tp, .{ .allocator = a1, .n_jobs = 8 });
+
+        thread_pool = tp;
+    }
+
+    // split logic
+    const part_index_size = (m + N_JOBS - 1) / N_JOBS;
+
+    var wait_group: std.Thread.WaitGroup = .{};
+    wait_group.reset();
+
+    for (0..N_JOBS) |i| {
+        const start_line = i * part_index_size;
+        const end_line = @min(start_line + part_index_size, m);
+
+        const a_start = start_line * k;
+        const a_end = end_line * k;
+        const c_start = start_line * n;
+        const c_end = end_line * n;
+
+        // log.print(
+        //     @src(),
+        //     "m= {} k= {} n= {} a_s= {} a_e= {} c_s= {} c_e= {}\n",
+        //     .{
+        //         end_line - start_line + 1,
+        //         k,
+        //         n,
+        //         a_start,
+        //         a_end,
+        //         c_start,
+        //         c_end,
+        //     },
+        // );
+
+        thread_pool.?.spawnWg(
+            &wait_group,
+            host.matmul,
+            .{
+                ER,
+                @as([*c]const ER, @ptrCast(a[a_start..a_end])),
+                b,
+                @as([*c]ER, @ptrCast(c[c_start..c_end])),
+                end_line - start_line + 1,
+                n,
+                k,
+            },
+        );
+    }
+
+    thread_pool.?.waitAndWork(&wait_group);
+
+    // host.matmul(ER, a, b, c, m, n, k);
 
     const layout = layout_t.Layout(nres).init([2]usize{ m, n });
     const storage = try storage_t.Storage(ER, .Cpu).initImpl(a1, buf);
