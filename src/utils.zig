@@ -201,8 +201,8 @@ pub const tensor = struct {
     pub fn tensorArithmeticTypeCast(comptime A: type, comptime B: type) type {
         if (!isNumber(A) or !isNumber(B)) @compileError("only support number type handle");
 
-        const A1 = comptimeTypeEraseComp(A);
-        const B1 = comptimeTypeEraseComp(B);
+        const A1 = comptimeNumberTypeEraseComp(A);
+        const B1 = comptimeNumberTypeEraseComp(B);
 
         const type_size_a = @sizeOf(A1);
         const type_size_b = @sizeOf(B1);
@@ -242,8 +242,8 @@ pub const tensor = struct {
 pub fn arithmetricTypePromotion(comptime A: type, comptime B: type) type {
     if (!isNumber(A) or !isNumber(B)) @compileError("only support number type handle");
 
-    const A1 = comptimeTypeEraseComp(A);
-    const B1 = comptimeTypeEraseComp(B);
+    const A1 = comptimeNumberTypeEraseComp(A);
+    const B1 = comptimeNumberTypeEraseComp(B);
 
     const type_size_a = @sizeOf(A1);
     const type_size_b = @sizeOf(B1);
@@ -336,7 +336,7 @@ pub fn isComptimeInt(comptime T: type) bool {
     return T == comptime_int;
 }
 
-pub fn comptimeTypeEraseComp(comptime T: type) type {
+pub fn comptimeNumberTypeEraseComp(comptime T: type) type {
     return comptime switch (@typeInfo(T)) {
         .comptime_float => f64,
         .comptime_int => i64,

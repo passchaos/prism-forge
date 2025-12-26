@@ -1,5 +1,6 @@
 const std = @import("std");
 const log = @import("log.zig");
+const utils = @import("utils.zig");
 
 const RefCount = struct {
     count: usize,
@@ -88,18 +89,23 @@ pub fn Storage(comptime T: type, comptime D: Device) type {
         }
 
         pub fn rand(allocator: std.mem.Allocator, element_count: usize, low: T, high: T) !Self {
-            if (comptime T != f32 and T != f64) {
-                @compileError("Unsupported type" ++ @typeName(T));
-            }
+            const ET = comptime utils.comptimeNumberTypeEraseComp(T);
 
-            const buf = try allocator.alloc(T, element_count);
+            const buf = try allocator.alloc(ET, element_count);
 
             var rpng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
             const rng = rpng.random();
 
             for (buf) |*elem| {
-                const u = rng.float(T);
-                elem.* = low + (high - low) * u;
+                if (comptime utils.isTypeFloat(ET)) {
+                    if (ET != f32 and ET != f64) {
+                        const u = rng.float(T);
+                        elem.* = low + (high - low) * u;
+                        @compileError("Unsupported type" ++ @typeName(T));
+                    }
+                } else {
+                    elem.* = rng.intRangeLessThan(ET, low, high);
+                }
             }
 
             return try Self.initImpl(allocator, buf);

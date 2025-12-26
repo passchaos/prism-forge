@@ -36,6 +36,10 @@
             .url = "git+https://github.com/david-vanderson/dvui?ref=main#21bdf887f6bb7980841c043fe7abc6903e56d727",
             .hash = "dvui-0.4.0-dev-AQFJmQzr2QAmt7EtAowpUC_jlBxmoo-kB5bO8xnEgc8p",
         },
+        .zeit = .{
+            .url = "git+https://github.com/rockorager/zeit?ref=main#7ac64d72dbfb1a4ad549102e7d4e232a687d32d8",
+            .hash = "zeit-0.6.0-5I6bk36tAgATpSl9wjFmRPMqYN2Mn0JQHgIcRNcqDpJA",
+        },
     },
     .paths = .{
         "build.zig",

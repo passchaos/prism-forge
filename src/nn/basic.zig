@@ -211,21 +211,29 @@ pub const TwoLayerNet = struct {
         defer y.deinit();
 
         const loss_t = try y.crossEntropy(t);
+        defer loss_t.deinit();
+
         return loss_t.dataItem();
     }
 
     fn accuracy(self: *const Self, x: Tensor2, t: Tensor2) !DT {
         const y = try self.predict(x);
+        defer y.deinit();
 
         const y1 = try y.argMax(1);
+        defer y1.deinit();
         const t1 = try t.argMax(1);
+        defer t1.deinit();
 
         const eql_t = try y1.eql(t1);
+        defer eql_t.deinit();
 
         log.print(@src(), "eql_t: {f}\n", .{eql_t});
         var eql_sum = try eql_t.sumAll();
+        defer eql_sum.deinit();
 
         const eql_t_d = try eql_sum.div(@as(DT, @floatFromInt(x.shape()[0])));
+        defer eql_t_d.deinit();
 
         return try eql_t_d.dataItem();
     }
@@ -237,14 +245,17 @@ pub const TwoLayerNet = struct {
             .x = x,
             .t = t,
         }, net_loss, self.params.getPtr("W1").?);
+
         const w2 = try numericalGradient(self.allocator, self, LossArgument{
             .x = x,
             .t = t,
         }, net_loss, self.params.getPtr("W2").?);
+
         const b1 = try numericalGradient(self.allocator, self, LossArgument{
             .x = x,
             .t = t,
         }, net_loss, self.params.getPtr("b1").?);
+
         const b2 = try numericalGradient(self.allocator, self, LossArgument{
             .x = x,
             .t = t,
@@ -259,20 +270,69 @@ pub const TwoLayerNet = struct {
     }
 };
 
-// pub fn twoLayerNetTrain(allocator: std.mem.Allocator, batch_size: usize) !void {
-//     const datas = try mnist.loadDatas(DT, allocator);
+pub fn twoLayerNetTrain(allocator: std.mem.Allocator, batch_size: usize) !void {
+    const datas = try mnist.loadDatas(DT, allocator);
 
-//     const train_images = datas.train_images;
-//     const train_labels = datas.train_labels;
-//     const test_images = datas.test_images;
-//     const test_labels = datas.test_labels;
+    const train_images = datas.train_images;
+    defer train_images.deinit();
+    const train_labels = datas.train_labels;
+    defer train_labels.deinit();
+    const test_images = datas.test_images;
+    defer test_images.deinit();
+    const test_labels = datas.test_labels;
+    defer test_labels.deinit();
 
-//     var train_loss_list = try std.ArrayList(DT).initCapacity(allocator, 100);
-//     var train_accuracy_list = try std.ArrayList(DT).initCapacity(allocator, 100);
-//     var test_accuracy_list = try std.ArrayList(DT).initCapacity(allocator, 100);
+    // var train_loss_list = try std.ArrayList(DT).initCapacity(allocator, 100);
+    // var train_accuracy_list = try std.ArrayList(DT).initCapacity(allocator, 100);
+    // var test_accuracy_list = try std.ArrayList(DT).initCapacity(allocator, 100);
 
-//     const iter_per_epoch = @max(train)
-// }
+    // const iter_per_epoch = @max(train)
+
+    const iters_num = 1000;
+    const train_size = train_images.shape()[0];
+    const learning_rate = 0.1;
+
+    var net = try TwoLayerNet.init(
+        allocator,
+        784,
+        50,
+        10,
+        0.01,
+    );
+    defer net.deinit();
+
+    for (0..iters_num) |_| {
+        const batch_mask = try tensor.rand(allocator, [1]usize{batch_size}, @as(usize, 0), train_size);
+        defer batch_mask.deinit();
+
+        const batch_indices = batch_mask.dataSliceRaw();
+
+        const x_batch = try train_images.indexSelect(0, batch_indices);
+        defer x_batch.deinit();
+        const t_batch = try train_labels.indexSelect(0, batch_indices);
+        defer t_batch.deinit();
+
+        var grads = try net.numericalGradientM(x_batch, t_batch);
+        defer grads.deinit();
+
+        {
+            var grads_iter = grads.iterator();
+            while (grads_iter.next()) |entry| {
+                const param = entry.key_ptr;
+
+                var grad = entry.value_ptr;
+                defer grad.deinit();
+
+                try grad.mul_(learning_rate);
+
+                try net.params.getPtr(param.*).?.sub_(grad.*);
+            }
+        }
+
+        const loss = try net.loss(x_batch, t_batch);
+        log.print(@src(), "loss: {}\n", .{loss});
+    }
+}
 
 test "differential" {
     const allocator = std.testing.allocator;
@@ -341,19 +401,18 @@ test "simple net" {
 }
 
 test "two_layer_net" {
-    const t_allocator = std.testing.allocator;
-
-    var arena = std.heap.ArenaAllocator.init(t_allocator);
-    defer arena.deinit();
-
-    const allocator = arena.allocator();
+    const allocator = std.testing.allocator;
 
     const datas = try mnist.loadDatas(DT, allocator);
 
     const train_images = datas.train_images;
+    defer train_images.deinit();
     const train_labels = datas.train_labels;
-    // const test_images = datas.test_images;
-    // const test_labels = datas.test_labels;
+    defer train_labels.deinit();
+    const test_images = datas.test_images;
+    defer test_images.deinit();
+    const test_labels = datas.test_labels;
+    defer test_labels.deinit();
 
     var two_layer_net = try TwoLayerNet.init(allocator, 784, 100, 10, 0.01);
     defer two_layer_net.deinit();
@@ -361,20 +420,26 @@ test "two_layer_net" {
     {
         const batch_idx = &.{ 0, 1, 2 };
         const batch_train_images = try train_images.indexSelect(0, batch_idx);
+        defer batch_train_images.deinit();
         const batch_train_labels = try train_labels.indexSelect(0, batch_idx);
+        defer batch_train_labels.deinit();
 
         const compute_labels = try two_layer_net.predict(batch_train_images);
-        log.print(@src(), "compute labels: {f}\n", .{compute_labels});
+        defer compute_labels.deinit();
+        log.print(@src(), "compute labels: {f}\n", .{compute_labels.layout});
 
         const loss = try two_layer_net.loss(batch_train_images, batch_train_labels);
         const accuracy = try two_layer_net.accuracy(batch_train_images, batch_train_labels);
         log.print(@src(), "loss: {} accuracy: {}\n", .{ loss, accuracy });
 
-        const gradient = try two_layer_net.numericalGradientM(batch_train_images, batch_train_labels);
+        var gradient = try two_layer_net.numericalGradientM(batch_train_images, batch_train_labels);
+        defer gradient.deinit();
+
         var grad_iter = gradient.iterator();
 
         while (grad_iter.next()) |entry| {
-            log.print(@src(), "grad: key= {s} value= {f}\n", .{ entry.key_ptr.*, entry.value_ptr });
+            defer entry.value_ptr.deinit();
+            log.print(@src(), "grad: key= {s} value= {f}\n", .{ entry.key_ptr.*, entry.value_ptr.layout });
         }
     }
 }

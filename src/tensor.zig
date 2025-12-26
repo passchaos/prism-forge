@@ -502,7 +502,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
         }
 
         // elementwise method
-        pub fn map_(self: *Self, ctx: anytype, func: fn (T, utils.comptimeTypeEraseComp(@TypeOf(ctx))) T) void {
+        pub fn map_(self: *Self, ctx: anytype, func: fn (T, utils.comptimeNumberTypeEraseComp(@TypeOf(ctx))) T) void {
             var iter = self.shapeIter();
 
             while (iter.next()) |idx| {
@@ -521,7 +521,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             self: *const Self,
             ctx: anytype,
             comptime RT: type,
-            func: fn (T, utils.comptimeTypeEraseComp(@TypeOf(ctx))) RT,
+            func: fn (T, utils.comptimeNumberTypeEraseComp(@TypeOf(ctx))) RT,
         ) !Tensor(N, .{ .T = RT }) {
             const TI = Tensor(N, .{ .T = RT });
 
@@ -1357,6 +1357,10 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             return ShapeIterator.init(self.shape());
         }
 
+        pub fn dataSliceRaw(self: *const Self) []T {
+            return self.storage.dataSlice()[self._storage_offset .. self._storage_offset + self.size()];
+        }
+
         pub fn deinit(self: *const Self) void {
             self.storage.deinit();
         }
@@ -1603,9 +1607,9 @@ pub fn fromData(comptime N: usize, comptime T: type, allocator: std.mem.Allocato
 
 pub fn fromScalar(allocator: std.mem.Allocator, value: anytype) !Tensor(
     0,
-    .{ .T = utils.comptimeTypeEraseComp(@TypeOf(value)) },
+    .{ .T = utils.comptimeNumberTypeEraseComp(@TypeOf(value)) },
 ) {
-    const T = utils.comptimeTypeEraseComp(@TypeOf(value));
+    const T = utils.comptimeNumberTypeEraseComp(@TypeOf(value));
 
     const layout = layout_t.Layout(0).init([0]usize{});
     const Storage = storage_t.Storage(T, .Cpu);
@@ -1711,12 +1715,12 @@ pub fn linspace(allocator: std.mem.Allocator, comptime T: type, args: struct {
 
 pub fn full(allocator: std.mem.Allocator, shapes_a: anytype, value: anytype) !Tensor(
     utils.array.getArrayShapeComp(@TypeOf(shapes_a))[0],
-    .{ .T = utils.comptimeTypeEraseComp(@TypeOf(value)) },
+    .{ .T = utils.comptimeNumberTypeEraseComp(@TypeOf(value)) },
 ) {
     const NDIM = comptime utils.array.getArrayNDimComp(@TypeOf(shapes_a));
     if (NDIM != 1) @compileError("only support 1-d array");
 
-    const T = utils.comptimeTypeEraseComp(@TypeOf(value));
+    const T = utils.comptimeNumberTypeEraseComp(@TypeOf(value));
     const N = comptime shapes_a.len;
 
     const Layout = layout_t.Layout(N);
@@ -1734,7 +1738,7 @@ pub fn full(allocator: std.mem.Allocator, shapes_a: anytype, value: anytype) !Te
 pub fn fullLike(allocator: std.mem.Allocator, tensor: anytype, value: anytype) !Tensor(
     @TypeOf(tensor).DIMS,
     .{
-        .T = utils.comptimeTypeEraseComp(@TypeOf(value)),
+        .T = utils.comptimeNumberTypeEraseComp(@TypeOf(value)),
     },
 ) {
     return try full(allocator, tensor.shape(), value);
@@ -1786,13 +1790,13 @@ pub fn eye(allocator: std.mem.Allocator, row: usize, column: usize, value: anyty
 
 pub fn rand(allocator: std.mem.Allocator, shapes_a: anytype, low: anytype, high: @TypeOf(low)) !Tensor(
     utils.array.getArrayShapeComp(@TypeOf(shapes_a))[0],
-    .{ .T = utils.floatBasicType(@TypeOf(low)) },
+    .{ .T = utils.comptimeNumberTypeEraseComp(@TypeOf(low)) },
 ) {
     const NDIM = comptime utils.array.getArrayNDimComp(@TypeOf(shapes_a));
     if (NDIM != 1) @compileError("only support 1-d array");
 
     const N = comptime utils.array.getArrayShapeComp(@TypeOf(shapes_a))[0];
-    const T = utils.floatBasicType(@TypeOf(low));
+    const T = utils.comptimeNumberTypeEraseComp(@TypeOf(low));
 
     const layout = layout_t.Layout(N).init(shapes_a);
     const size = layout.size();
@@ -2406,7 +2410,7 @@ test "data item" {
         defer t2.deinit();
 
         const item = try t2.dataItem();
-        try std.testing.expectEqual(@TypeOf(item), utils.comptimeTypeEraseComp(@TypeOf(5.0)));
+        try std.testing.expectEqual(@TypeOf(item), utils.comptimeNumberTypeEraseComp(@TypeOf(5.0)));
 
         std.debug.print("t2: {f} item: {}\n", .{ t2, item });
     }
