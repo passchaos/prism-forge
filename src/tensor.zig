@@ -13,8 +13,6 @@ const layout_t = @import("./layout.zig");
 
 const matmul_t = @import("./matmul.zig");
 
-const F = @import("nn/functional.zig");
-
 pub const View = struct {
     const Range = struct {
         start: usize,
@@ -523,11 +521,44 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
         }
 
         pub fn mseLoss(self: Self, other: Self) !Tensor(0, .{ .T = T }) {
-            return try F.mseLoss(N, T, self, other);
+            var a = self;
+            try a.sub_(other);
+            a.powi_(2);
+
+            var res = try a.sumAll();
+            try res.div_(@as(T, 2));
+
+            return res;
         }
 
         pub fn crossEntropy(self: Self, other: Self) !Tensor(0, .{ .T = T }) {
-            return try F.crossEntropy(N, T, self, other);
+            switch (@typeInfo(T)) {
+                .float => |_| {
+                    const batch_size = switch (N) {
+                        1 => 1,
+                        2 => self.shape()[0],
+                        inline else => @compileError("unsuported dimension"),
+                    };
+
+                    var a = self;
+
+                    const scope = struct {
+                        fn call(v: T, _: void) T {
+                            return -@log(v + 1e-7);
+                        }
+                    };
+
+                    a.map_(void{}, scope.call);
+
+                    try a.mul_(other);
+
+                    var res = try a.sumAll();
+                    try res.div_(@as(T, @floatFromInt(batch_size)));
+
+                    return res;
+                },
+                else => @compileError("unsupported type"),
+            }
         }
 
         // elementwise method
@@ -2638,7 +2669,10 @@ test "loss func" {
         const y = try fromArray(allocator, [_]f32{ 0.1, 0.05, 0.6, 0.0, 0.05, 0.1, 0.0, 0.1, 0.0, 0.0 });
         defer y.deinit();
 
-        const mse_loss = try y.mseLoss(t);
+        const y_c = try y.clone();
+        defer y_c.deinit();
+
+        const mse_loss = try y_c.mseLoss(t);
         defer mse_loss.deinit();
         const cross_entropy_loss = try y.crossEntropy(t);
         defer cross_entropy_loss.deinit();
@@ -2663,7 +2697,10 @@ test "loss func" {
         });
         defer y.deinit();
 
-        const mse_loss = try y.mseLoss(t);
+        const y_c = try y.clone();
+        defer y_c.deinit();
+
+        const mse_loss = try y_c.mseLoss(t);
         defer mse_loss.deinit();
         const cross_entropy_loss = try y.crossEntropy(t);
         defer cross_entropy_loss.deinit();
