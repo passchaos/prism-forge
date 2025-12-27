@@ -98,10 +98,11 @@ pub fn Storage(comptime T: type, comptime D: Device) type {
 
             for (buf) |*elem| {
                 if (comptime utils.isTypeFloat(ET)) {
-                    if (ET != f32 and ET != f64) {
+                    if (ET == f32 or ET == f64) {
                         const u = rng.float(T);
                         elem.* = low + (high - low) * u;
-                        @compileError("Unsupported type" ++ @typeName(T));
+                    } else {
+                        @compileError("Unsupported type " ++ @typeName(T));
                     }
                 } else {
                     elem.* = rng.intRangeLessThan(ET, low, high);
