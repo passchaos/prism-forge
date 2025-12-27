@@ -20,6 +20,28 @@ pub const View = struct {
         start: usize,
         end: usize,
     };
+
+    fn resultSqueezeDim(comptime svt: type) usize {
+        return switch (@typeInfo(svt)) {
+            .array => |at| blk: {
+                if (at.child == Range) {
+                    break :blk 0;
+                }
+
+                switch (@typeInfo(at.child)) {
+                    .int, .comptime_int => break :blk at.len,
+                    else => @compileError("unsupported slice view array item type: " ++ @typeName(svt)),
+                }
+                break :blk 0;
+            },
+            else => 0,
+        };
+        // if (@TypeOf(svt) == .array and utils.array.getArrayItemTypeComp(@TypeOf(svt)) == .Range) {
+        //     return utils.array.getArrayLengthComp(@TypeOf(svt));
+        // } else {
+        //     return 0;
+        // }
+    }
 };
 
 pub fn BasicOpFuncsGenerator(comptime T: type) type {
@@ -257,7 +279,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
 
         const Self = @This();
 
-        _base: ?*const Self = null,
+        _base: ?*const anyopaque = null,
         storage: Storage,
         layout: Layout,
         _storage_offset: usize = 0,
@@ -1308,16 +1330,50 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
 
         // layout view method
         pub fn sharedView(self: *const Self, slice_views: anytype) !Tensor(
-            N,
+            N - View.resultSqueezeDim(@TypeOf(slice_views)),
             .{ .T = T },
         ) {
             switch (@typeInfo(@TypeOf(slice_views))) {
                 .array => |sva| {
                     const SVN = sva.len;
 
-                    const sviews: [SVN]View.Range = switch (@typeInfo(sva.child)) {
-                        .@"struct" => slice_views,
-                        .int, .comptime_int => blk: {
+                    switch (@typeInfo(sva.child)) {
+                        .@"struct" => {
+                            var base_idx = [_]usize{0} ** N;
+                            var new_shape = [_]usize{0} ** N;
+
+                            for (0..N) |i| {
+                                if (i >= SVN) {
+                                    new_shape[i] = self.shape()[i];
+                                } else {
+                                    const sv = slice_views[i];
+                                    const dim_start = sv.start;
+
+                                    const dim_end = @min(sv.end, self.shape()[i]);
+                                    std.debug.print("dim start: {} end: {}\n", .{ dim_start, dim_end });
+
+                                    if (dim_start >= dim_end) return error.InvalidSliceRange;
+
+                                    base_idx[i] = dim_start;
+                                    new_shape[i] = dim_end - dim_start;
+                                }
+                            }
+
+                            var base_offset = try utils.indexToFlat(&base_idx, &self.shape(), &self.stride());
+                            base_offset += self._storage_offset;
+
+                            const new_layout = Layout.initRaw(new_shape, self.stride());
+
+                            const new_storage = self.storage.shared();
+
+                            return Self{
+                                ._base = self,
+                                .storage = new_storage,
+                                .layout = new_layout,
+                                ._storage_offset = base_offset,
+                            };
+                        },
+                        .int, .comptime_int => {
                             var new_slice_views = [_]View.Range{.{ .start = 0, .end = 0 }} ** SVN;
 
                             for (slice_views, 0..) |svo, i| {
@@ -1327,43 +1383,35 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                                 new_slice_views[i].end = @intCast(svo + 1);
                             }
 
-                            break :blk new_slice_views;
+                            const RN = N - SVN;
+                            var base_idx = [_]usize{0} ** N;
+                            var new_shape = [_]usize{0} ** RN;
+
+                            for (0..N) |i| {
+                                if (i >= SVN) {
+                                    if (RN > 0) {
+                                        new_shape[i - SVN] = self.shape()[i];
+                                    }
+                                } else {
+                                    base_idx[i] = slice_views[i];
+                                }
+                            }
+
+                            var base_offset = try utils.indexToFlat(&base_idx, &self.shape(), &self.stride());
+                            base_offset += self._storage_offset;
+
+                            const new_layout = layout_t.Layout(RN).init(new_shape);
+                            const new_storage = self.storage.shared();
+
+                            return Tensor(RN, .{ .T = T }){
+                                ._base = self,
+                                .storage = new_storage,
+                                .layout = new_layout,
+                                ._storage_offset = base_offset,
+                            };
                         },
                         else => @compileError("unsupported slice view item type"),
-                    };
-
-                    // sva.child
-                    var base_idx = [_]usize{0} ** N;
-                    var new_shape = [_]usize{0} ** N;
-
-                    for (0..N) |i| {
-                        if (i >= SVN) {
-                            new_shape[i] = self.shape()[i];
-                        } else {
-                            const sv = sviews[i];
-                            const dim_start = sv.start;
-
-                            const dim_end = @min(sv.end, self.shape()[i]);
-
-                            if (dim_start >= dim_end) return error.InvalidSliceRange;
-
-                            base_idx[i] = dim_start;
-                            new_shape[i] = dim_end - dim_start;
-                        }
                     }
-
-                    var base_offset = try utils.indexToFlat(&base_idx, &self.shape(), &self.stride());
-                    base_offset += self._storage_offset;
-
-                    const new_layout = Layout.initRaw(new_shape, self.stride());
-                    const new_storage = self.storage.shared();
-
-                    return Self{
-                        ._base = self,
-                        .storage = new_storage,
-                        .layout = new_layout,
-                        ._storage_offset = base_offset,
-                    };
                 },
                 else => {
                     const new_storage = self.storage.shared();
@@ -2777,11 +2825,11 @@ test "shared_view" {
 
     var iv2 = try input.sharedView([1]usize{1});
     defer iv2.deinit();
-    try std.testing.expectEqual(iv2.shape(), [2]usize{ 1, 5 });
+    try std.testing.expectEqual(iv2.shape(), [1]usize{5});
 
     var iv3 = try input.sharedView([2]usize{ 2, 4 });
     defer iv3.deinit();
-    try std.testing.expectEqual(iv3.shape(), [2]usize{ 1, 1 });
+    try std.testing.expectEqual(iv3.shape(), [0]usize{});
 
     var iv4 = try input.sharedView([2]View.Range{ .{ .start = 1, .end = 3 }, .{ .start = 1, .end = 3 } });
     defer iv4.deinit();
