@@ -271,7 +271,7 @@ pub const TwoLayerNet = struct {
     }
 };
 
-pub fn twoLayerNetTrain(allocator: std.mem.Allocator, batch_size: usize) !void {
+pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, batch_size: usize, learning_rate: f64) !void {
     const datas = try mnist.loadDatas(DT, allocator);
 
     const train_images = datas.train_images;
@@ -289,9 +289,7 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, batch_size: usize) !void {
 
     // const iter_per_epoch = @max(train)
 
-    const iters_num = 1000;
     const train_size = train_images.shape()[0];
-    const learning_rate = 0.1;
 
     log.print(@src(), "train_size= {} batch_size= {} iter_num= {} learning_rate= {}", .{
         train_size,

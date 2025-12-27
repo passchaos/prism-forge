@@ -78,15 +78,15 @@ pub fn build(b: *std.Build) void {
 
     const dvui_dep = b.dependency("dvui", .{ .target = target, .optimize = optimize, .backend = .sdl3 });
 
-    mod.addImport("dvui", dvui_dep.module("dvui_sdl3"));
-    mod.addImport("sdl-backend", dvui_dep.module("sdl3"));
+    // mod.addImport("dvui", dvui_dep.module("dvui_sdl3"));
+    // mod.addImport("sdl-backend", dvui_dep.module("sdl3"));
 
     exe_mod.addImport("dvui", dvui_dep.module("dvui_sdl3"));
     exe_mod.addImport("sdl-backend", dvui_dep.module("sdl3"));
 
     const zeit_dep = b.dependency("zeit", .{ .target = target, .optimize = optimize });
-    mod.addImport("zeit", zeit_dep.module("zeit"));
-    exe_mod.addImport("zeit", zeit_dep.module("zeit"));
+    const zeit_mod = zeit_dep.module("zeit");
+    exe_mod.addImport("zeit", zeit_mod);
 
     // Here we define an executable. An executable needs to have a root module
     // which needs to expose a `main` function. While we could add a main function
