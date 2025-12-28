@@ -19,56 +19,25 @@ pub fn Relu(comptime N: usize, comptime T: type) type {
             return Self{};
         }
 
-        pub fn forward(self: *Self, x: *Tensor) !void {
+        pub fn forward(self: *Self, x: *const Tensor) !Tensor {
             if (self.mask) |m_i| {
                 m_i.deinit();
             }
             self.mask = try x.le(@as(T, 0));
+
+            var nr = try x.clone();
             // log.print(@src(), "mask layout: {f}\n", .{self.mask.?.layout});
 
-            try x.maskFill_(self.mask.?, @as(T, 0));
-        }
+            try nr.maskFill_(self.mask.?, @as(T, 0));
 
-        pub fn backward(self: *Self, dout: *Tensor) !void {
-            try dout.maskFill_(self.mask.?, @as(T, 0));
-        }
-    };
-}
-
-pub fn Sigmoid(comptime N: usize, comptime T: type) type {
-    const Tensor = tensor.Tensor(N, .{ .T = T });
-
-    return struct {
-        out: ?Tensor,
-
-        const Self = @This();
-
-        pub fn deinit(self: *Self) void {
-            self.out.?.deinit();
-        }
-
-        pub fn init() Sigmoid {
-            return Sigmoid{};
-        }
-
-        pub fn forward(self: *Self, x: *const Tensor) !Tensor {
-            x.sigmoid_();
-
-            self.out = x.*;
-
-            return x;
+            return nr;
         }
 
         pub fn backward(self: *Self, dout: *const Tensor) !Tensor {
-            var tmp = try dout.clone();
-            try tmp
-                .mul_(@as(T, -1));
+            var res = try dout.clone();
+            try res.maskFill_(self.mask.?, @as(T, 0));
 
-            try tmp.add_(@as(T, 1));
-            try tmp.mul_(dout);
-            try tmp.mul_(self.out.?);
-
-            return tmp;
+            return res;
         }
     };
 }

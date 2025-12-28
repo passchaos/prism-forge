@@ -222,11 +222,12 @@ pub const TwoLayerNet = struct {
         var x_1 = try self.affine1.forward(x);
         defer x_1.deinit();
 
-        try self.relu1.forward(&x_1);
+        var x_2 = try self.relu1.forward(&x_1);
+        defer x_2.deinit();
 
-        const x_2 = try self.affine2.forward(&x_1);
+        const x_3 = try self.affine2.forward(&x_2);
 
-        return x_2;
+        return x_3;
     }
 
     fn loss(self: *Self, x: *const Tensor2, t: *const Tensor2) !DT {
@@ -310,10 +311,11 @@ pub const TwoLayerNet = struct {
         defer dout1.deinit();
         // log.print(@src(), "dout1 layout: {f}\n", .{dout1.layout});
 
-        try self.relu1.backward(&dout1);
+        var dout2 = try self.relu1.backward(&dout1);
+        defer dout2.deinit();
         // log.print(@src(), "dout2 layout: {f}\n", .{dout2.layout});
 
-        const dout3 = try self.affine1.backward(&dout1);
+        const dout3 = try self.affine1.backward(&dout2);
         defer dout3.deinit();
         // log.print(@src(), "dw1: {f} db1: {f}\n", .{ self.affine1.dw.?, self.affine1.db.? });
 
