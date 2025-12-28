@@ -539,6 +539,11 @@ pub fn generateBroadcastStride(
             } else if (o_dim == 1 and n_dim > 1) {
                 new_stride[@intCast(new_i)] = 0;
             } else {
+                log.print(
+                    @src(),
+                    "orig_shape: {any} orig_stride: {any} target_shape: {any}\n",
+                    .{ orig_shape, orig_stride, target_shape },
+                );
                 return error.ShapeMismatch;
             }
 

@@ -520,8 +520,9 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             }
         }
 
-        pub fn mseLoss(self: Self, other: Self) !Tensor(0, .{ .T = T }) {
-            var a = self;
+        pub fn mseLoss(self: *const Self, other: *const Self) !Tensor(0, .{ .T = T }) {
+            var a = try self.clone();
+            defer a.deinit();
             try a.sub_(other);
             a.powi_(2);
 
@@ -531,7 +532,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             return res;
         }
 
-        pub fn crossEntropy(self: Self, other: Self) !Tensor(0, .{ .T = T }) {
+        pub fn crossEntropy(self: *const Self, other: *const Self) !Tensor(0, .{ .T = T }) {
             switch (@typeInfo(T)) {
                 .float => |_| {
                     const batch_size = switch (N) {
@@ -540,7 +541,8 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                         inline else => @compileError("unsuported dimension"),
                     };
 
-                    var a = self;
+                    var a = try self.clone();
+                    defer a.deinit();
 
                     const scope = struct {
                         fn call(v: T, _: void) T {
@@ -570,11 +572,52 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             }
         }
 
-        pub fn matmul(self: Self, other: anytype) !Tensor(
-            utils.tensor.matmulResultNDimComp(Self, @TypeOf(other)),
-            .{ .T = utils.tensor.matmulResultElementTypeComp(Self, @TypeOf(other)) },
-        ) {
-            return try matmul_t.matmul(self, other);
+        pub fn matmul(self: *const Self, other: *const Self) !Self {
+            if (T != f32 and T != f64) {
+                @compileError("only support f32 and f64 matmul" ++ " T: " ++ @typeName(T));
+            }
+
+            if (self.shape()[1] != other.shape()[0]) {
+                return error.ShapeMismatch;
+            }
+
+            var lhs = self;
+            var rhs = other;
+
+            if (!lhs.isContiguous()) {
+                lhs = &(try lhs.contiguous());
+            }
+            defer {
+                if (!self.isContiguous()) {
+                    lhs.deinit();
+                }
+            }
+            if (!rhs.isContiguous()) {
+                rhs = &(try rhs.contiguous());
+            }
+            defer {
+                if (!other.isContiguous()) {
+                    rhs.deinit();
+                }
+            }
+
+            const m = lhs.shape()[0];
+            const n = rhs.shape()[1];
+            const k = lhs.shape()[1];
+
+            const a: []const T = @ptrCast(lhs.storage.dataSlice());
+            const b: [*c]const T = @ptrCast(rhs.storage.dataSlice());
+
+            const buf = try self.s_allocator().alloc(T, m * n);
+
+            const c: []T = @ptrCast(buf);
+
+            host.matmul(T, @as([*c]const T, @ptrCast(a)), b, @as([*c]T, @ptrCast(c)), m, n, k);
+
+            const layout = Layout.init([2]usize{ m, n });
+            const storage = try Storage.initImpl(self.s_allocator(), buf);
+
+            return try Self.fromDataImpl(layout, storage, 0);
         }
 
         pub fn map(
@@ -629,7 +672,10 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             }
         }
 
-        pub fn le(self: *const Self, value: anytype) !Tensor(N, .{ .T = bool }) {
+        pub fn le(self: *const Self, value: anytype) !Tensor(
+            N,
+            .{ .T = bool },
+        ) {
             const TV = @TypeOf(value);
 
             switch (TV) {
@@ -671,7 +717,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             }
         }
 
-        pub fn maskedFill_(self: *Self, mask: Tensor(N, .{ .T = bool }), value: T) !void {
+        pub fn maskFill_(self: *Self, mask: Tensor(N, .{ .T = bool }), value: T) !void {
             var mask_i = mask;
 
             try mask_i.broadcastTo_(self.shape());
@@ -685,10 +731,10 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             }
         }
 
-        pub fn binaryOp_(self: *Self, b: Self, op_func: fn (x: T, y: T) T) !void {
+        pub fn binaryOp_(self: *Self, b: *const Self, op_func: fn (x: T, y: T) T) !void {
             // inplace method: need broadcast to self shape
-            var b_i = b;
-            try b_i.broadcastTo_(self.shape());
+            var b_i = try b.broadcastTo(self.shape());
+            defer b_i.deinit();
 
             var iter = self.shapeIter();
 
@@ -759,8 +805,8 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
         pub fn add_(self: *Self, value: anytype) !void {
             const TV = @TypeOf(value);
 
-            if (TV == @This()) {
-                return try self.binaryOp_(@as(@This(), value), BasicOpFuncs.add);
+            if (TV == *@This() or TV == *const @This()) {
+                return try self.binaryOp_(value, BasicOpFuncs.add);
             }
 
             if (TV == T or (TV == comptime_float and @typeInfo(T) == .float) or (TV == comptime_int and @typeInfo(T) == .int)) {
@@ -800,8 +846,8 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
         pub fn sub_(self: *Self, value: anytype) !void {
             const TV = @TypeOf(value);
 
-            if (TV == @This()) {
-                return try self.binaryOp_(@as(@This(), value), BasicOpFuncs.sub);
+            if (TV == *const @This() or TV == *@This()) {
+                return try self.binaryOp_(value, BasicOpFuncs.sub);
             }
 
             if (TV == T or (TV == comptime_float and @typeInfo(T) == .float) or (TV == comptime_int and @typeInfo(T) == .int)) {
@@ -810,7 +856,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                 return self.map_(vv, BasicOpFuncs.sub);
             }
 
-            @compileError("unsupported sub_ argument type " ++ @typeName(TV) ++ " for tensor of type " ++ @typeName(T));
+            @compileError("unsupported sub_ argument type " ++ @typeName(TV) ++ " for tensor of type " ++ @typeName(Self));
         }
 
         pub fn sub(self: *const Self, value: anytype) !Self {
@@ -831,8 +877,8 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
         pub fn mul_(self: *Self, value: anytype) !void {
             const TV = @TypeOf(value);
 
-            if (TV == @This()) {
-                return try self.binaryOp_(@as(@This(), value), BasicOpFuncs.mul);
+            if (TV == *const @This()) {
+                return try self.binaryOp_(value, BasicOpFuncs.mul);
             }
 
             if (TV == T or (TV == comptime_float and @typeInfo(T) == .float) or (TV == comptime_int and @typeInfo(T) == .int)) {
@@ -863,7 +909,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             const TV = @TypeOf(value);
 
             switch (TV) {
-                @This() => return try self.binaryOp_(@as(@This(), value), BasicOpFuncs.div),
+                *const @This() => return try self.binaryOp_(value, BasicOpFuncs.div),
                 T => {
                     const vv = @as(T, value);
 
@@ -965,6 +1011,15 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             return self.map_(void{}, func);
         }
 
+        pub fn abs_(self: *Self) void {
+            const func = struct {
+                fn call(v: T, _: void) T {
+                    return @abs(v);
+                }
+            }.call;
+            return self.map_(void{}, func);
+        }
+
         // check
         pub fn isNan(self: *const Self) !Tensor(N, .{ .T = bool }) {
             const func = struct {
@@ -1060,7 +1115,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             const vs = try v.sum(N - 1);
             defer vs.deinit();
 
-            try v.div_(vs);
+            try v.div_(&vs);
 
             return v;
         }
@@ -1312,7 +1367,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                 return self;
             }
 
-            std.debug.print("run contiguous action\n", .{});
+            // std.debug.print("run contiguous action\n", .{});
 
             const new_buf = try self.storage.allocator.alloc(T, self.size());
 
@@ -1331,7 +1386,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
         }
 
         // attributes
-        pub fn broadcastTo(self: Self, target_shape: anytype) !Self {
+        pub fn broadcastTo(self: *const Self, target_shape: anytype) !Self {
             const new_layout = try self.layout.broadcastTo(N, target_shape);
 
             const storage = self.storage.shared();
@@ -1352,7 +1407,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             return self.storage.dataSlice()[idx];
         }
 
-        pub fn setData(self: *Self, indices: [N]usize, value: T) !void {
+        pub fn setData(self: *Self, indices: anytype, value: T) !void {
             var idx = try utils.indexToFlat(&indices, &self.shape(), &self.stride());
             idx += self._storage_offset;
 
@@ -1460,6 +1515,19 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
         pub fn transpose_(self: *Self) void {
             if (N != 2) @compileError("only support 2d tensor");
             self.layout = self.layout.transpose(0, 1) catch unreachable;
+        }
+
+        pub fn transpose(self: *Self) Self {
+            if (N != 2) @compileError("only support 2d tensor");
+            const new_layout = self.layout.transpose(0, 1) catch unreachable;
+            const new_storage = self.storage.shared();
+
+            return Self{
+                ._base = self,
+                .storage = new_storage,
+                .layout = new_layout,
+                ._storage_offset = self._storage_offset,
+            };
         }
 
         pub fn permute_(self: *Self, perm: [N]usize) !void {
@@ -2416,7 +2484,7 @@ test "masked" {
 
     std.debug.print("t1: {f}\n", .{t1});
 
-    try t1.maskedFill_(m1, 0.0);
+    try t1.maskFill_(m1, 0.0);
 
     try std.testing.expectEqual(0.0, t1.getData([_]usize{ 0, 0 }));
     try std.testing.expectEqual(0.0, t1.getData([_]usize{ 0, 2 }));
@@ -2672,9 +2740,9 @@ test "loss func" {
         const y_c = try y.clone();
         defer y_c.deinit();
 
-        const mse_loss = try y_c.mseLoss(t);
+        const mse_loss = try y_c.mseLoss(&t);
         defer mse_loss.deinit();
-        const cross_entropy_loss = try y.crossEntropy(t);
+        const cross_entropy_loss = try y.crossEntropy(&t);
         defer cross_entropy_loss.deinit();
 
         const mse_v = try mse_loss.dataItem();
@@ -2700,9 +2768,9 @@ test "loss func" {
         const y_c = try y.clone();
         defer y_c.deinit();
 
-        const mse_loss = try y_c.mseLoss(t);
+        const mse_loss = try y_c.mseLoss(&t);
         defer mse_loss.deinit();
-        const cross_entropy_loss = try y.crossEntropy(t);
+        const cross_entropy_loss = try y.crossEntropy(&t);
         defer cross_entropy_loss.deinit();
 
         const mse_v = try mse_loss.dataItem();
@@ -2719,7 +2787,7 @@ test "loss func" {
         const t = try fromArray(allocator, [3]f64{ 0.0, 0.0, 1.0 });
         defer t.deinit();
 
-        const cross_entropy_t = try y.crossEntropy(t);
+        const cross_entropy_t = try y.crossEntropy(&t);
         defer cross_entropy_t.deinit();
 
         const cross_entropy = try cross_entropy_t.dataItem();

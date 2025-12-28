@@ -25,11 +25,11 @@ const Logger = struct {
         };
     }
 
-    fn print(self: *const Self, comptime src: std.builtin.SourceLocation, comptime format: []const u8, args: anytype) !void {
+    fn print(_: *const Self, comptime src: std.builtin.SourceLocation, comptime format: []const u8, args: anytype) !void {
         const utc = try zeit.instant(.{});
-        const local = utc.in(&self.tz);
+        // const local = utc.in(&self.tz);
 
-        const time_t = local.time();
+        const time_t = utc.time();
 
         var buf: [64]u8 = undefined;
         const written = try time_t.bufPrint(&buf, .rfc3339Nano);

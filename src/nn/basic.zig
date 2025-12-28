@@ -4,6 +4,7 @@ const log = @import("../log.zig");
 const matmul = @import("../matmul.zig");
 const mnist = @import("../mnist.zig");
 const plot = @import("../plot.zig");
+const layer = @import("layer.zig");
 
 const DT = f64;
 const Tensor2 = tensor.Tensor(2, .{ .T = DT });
@@ -23,12 +24,12 @@ pub fn function2(
     return result;
 }
 
-const LossArgument = struct {
-    x: Tensor2,
-    t: Tensor2,
+pub const LossArgument = struct {
+    x: *const Tensor2,
+    t: *const Tensor2,
 };
 
-fn net_loss(
+pub fn net_loss(
     _: *Tensor2,
     net: anytype,
     ctx: LossArgument,
@@ -133,18 +134,32 @@ pub fn gradientDescent(
     }
 }
 
+const Affine = layer.Affine(2, DT);
+const Relu = layer.Relu(2, DT);
+const SoftmaxWithLoss = layer.SoftmaxWithLoss(2, DT);
+
 pub const TwoLayerNet = struct {
-    params: std.StringHashMap(Tensor2),
+    // params: std.StringHashMap(Tensor2),
     allocator: std.mem.Allocator,
+
+    affine1: Affine,
+    relu1: Relu,
+    affine2: Affine,
+    last_layer: SoftmaxWithLoss,
 
     const Self = @This();
 
     fn deinit(self: *Self) void {
-        var map_iter = self.params.iterator();
-        while (map_iter.next()) |v| {
-            v.value_ptr.deinit();
-        }
-        self.params.deinit();
+        // var map_iter = self.params.iterator();
+        // while (map_iter.next()) |v| {
+        //     v.value_ptr.deinit();
+        // }
+        // self.params.deinit();
+
+        self.affine1.deinit();
+        self.relu1.deinit();
+        self.affine2.deinit();
+        self.last_layer.deinit();
     }
 
     fn init(
@@ -154,7 +169,7 @@ pub const TwoLayerNet = struct {
         output_size: usize,
         weight_init_std: DT,
     ) !Self {
-        var params_i = std.StringHashMap(Tensor2).init(allocator);
+        // var params_i = std.StringHashMap(Tensor2).init(allocator);
 
         var w1 = try tensor.randNorm(
             allocator,
@@ -176,48 +191,55 @@ pub const TwoLayerNet = struct {
 
         const b2 = try tensor.zeros(allocator, DT, [2]usize{ 1, output_size });
 
-        try params_i.put("W1", w1);
-        try params_i.put("b1", b1);
-        try params_i.put("W2", w2);
-        try params_i.put("b2", b2);
+        // try params_i.put("W1", w1);
+        // try params_i.put("b1", b1);
+        // try params_i.put("W2", w2);
+        // try params_i.put("b2", b2);
+
+        // const w1_c = try w1.clone();
+        // const b1_c = try b1.clone();
+        // const w2_c = try w2.clone();
+        // const b2_c = try b2.clone();
+
+        // log.print(@src(), "init w1 sum: {f}", .{try w1_c.sumAll()});
+
+        const affine1 = Affine.init(w1, b1);
+        const relu1 = Relu.init();
+        const affine2 = Affine.init(w2, b2);
+        const last_layer = SoftmaxWithLoss.init();
+
         return Self{
-            .params = params_i,
+            // .params = params_i,
             .allocator = allocator,
+            .affine1 = affine1,
+            .relu1 = relu1,
+            .affine2 = affine2,
+            .last_layer = last_layer,
         };
     }
 
-    fn predict(self: *const Self, x: Tensor2) !Tensor2 {
-        const W1 = self.params.get("W1").?;
-        const b1 = self.params.get("b1").?;
-        const W2 = self.params.get("W2").?;
-        const b2 = self.params.get("b2").?;
+    fn predict(self: *Self, x: *const Tensor2) !Tensor2 {
+        var x_1 = try self.affine1.forward(x);
+        defer x_1.deinit();
 
-        var a1 = try x.matmul(W1);
-        defer a1.deinit();
+        try self.relu1.forward(&x_1);
 
-        try a1.add_(b1);
-        a1.sigmoid_();
+        const x_2 = try self.affine2.forward(&x_1);
 
-        var a2 = try a1.matmul(W2);
-        defer a2.deinit();
-        try a2.add_(b2);
-
-        const y = try a2.softmax();
-
-        return y;
+        return x_2;
     }
 
-    fn loss(self: *const Self, x: Tensor2, t: Tensor2) !DT {
+    fn loss(self: *Self, x: *const Tensor2, t: *const Tensor2) !DT {
         const y = try self.predict(x);
         defer y.deinit();
 
-        const loss_t = try y.crossEntropy(t);
+        const loss_t = try self.last_layer.forward(&y, t);
         defer loss_t.deinit();
 
-        return loss_t.dataItem();
+        return try loss_t.dataItem();
     }
 
-    fn accuracy(self: *const Self, x: Tensor2, t: Tensor2) !DT {
+    fn accuracy(self: *Self, x: *const Tensor2, t: *const Tensor2) !DT {
         const y = try self.predict(x);
         defer y.deinit();
 
@@ -239,33 +261,71 @@ pub const TwoLayerNet = struct {
         return try eql_t_d.dataItem();
     }
 
-    fn numericalGradientM(self: Self, x: Tensor2, t: Tensor2) !std.StringHashMap(Tensor2) {
-        var grads = std.StringHashMap(Tensor2).init(self.allocator);
-
+    fn numericalGradientM(self: *Self, x: *const Tensor2, t: *const Tensor2) !std.StringHashMap(Tensor2) {
         const w1 = try numericalGradient(self.allocator, self, LossArgument{
             .x = x,
             .t = t,
-        }, net_loss, self.params.getPtr("W1").?);
+        }, net_loss, &self.affine1.w);
 
         const w2 = try numericalGradient(self.allocator, self, LossArgument{
             .x = x,
             .t = t,
-        }, net_loss, self.params.getPtr("W2").?);
+        }, net_loss, &self.affine2.w);
 
         const b1 = try numericalGradient(self.allocator, self, LossArgument{
             .x = x,
             .t = t,
-        }, net_loss, self.params.getPtr("b1").?);
+        }, net_loss, &self.affine1.b);
 
         const b2 = try numericalGradient(self.allocator, self, LossArgument{
             .x = x,
             .t = t,
-        }, net_loss, self.params.getPtr("b2").?);
+        }, net_loss, &self.affine2.b);
+
+        var grads = std.StringHashMap(Tensor2).init(self.allocator);
+        errdefer {
+            var grads_iter = grads.valueIterator();
+            while (grads_iter.next()) |entry| {
+                entry.deinit();
+            }
+            grads.deinit();
+        }
 
         try grads.put("W1", w1);
         try grads.put("W2", w2);
         try grads.put("b1", b1);
         try grads.put("b2", b2);
+
+        return grads;
+    }
+
+    fn gradient(self: *Self, x: *const Tensor2, t: *const Tensor2) !std.StringHashMap(Tensor2) {
+        _ = try self.loss(x, t);
+
+        const dout = try self.last_layer.backward();
+        defer dout.deinit();
+        // log.print(@src(), "dout layout: {f}\n", .{dout.layout});
+
+        var dout1 = try self.affine2.backward(&dout);
+        defer dout1.deinit();
+        // log.print(@src(), "dout1 layout: {f}\n", .{dout1.layout});
+
+        try self.relu1.backward(&dout1);
+        // log.print(@src(), "dout2 layout: {f}\n", .{dout2.layout});
+
+        const dout3 = try self.affine1.backward(&dout1);
+        defer dout3.deinit();
+        // log.print(@src(), "dw1: {f} db1: {f}\n", .{ self.affine1.dw.?, self.affine1.db.? });
+
+        var grads = std.StringHashMap(Tensor2).init(self.allocator);
+
+        const affine1_dinfo = self.affine1.take_dinfo();
+        const affine2_dinfo = self.affine2.take_dinfo();
+
+        try grads.put("W1", affine1_dinfo.dw.?);
+        try grads.put("b1", affine1_dinfo.db.?);
+        try grads.put("W2", affine2_dinfo.dw.?);
+        try grads.put("b2", affine2_dinfo.db.?);
 
         return grads;
     }
@@ -283,6 +343,8 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, batch_si
     const test_labels = datas.test_labels;
     defer test_labels.deinit();
 
+    log.print(@src(), "train_images: {f} train_labels: {f}\n", .{ train_images.layout, train_labels.layout });
+
     // var train_loss_list = try std.ArrayList(DT).initCapacity(allocator, 100);
     // var train_accuracy_list = try std.ArrayList(DT).initCapacity(allocator, 100);
     // var test_accuracy_list = try std.ArrayList(DT).initCapacity(allocator, 100);
@@ -291,7 +353,7 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, batch_si
 
     const train_size = train_images.shape()[0];
 
-    log.print(@src(), "train_size= {} batch_size= {} iter_num= {} learning_rate= {}", .{
+    log.print(@src(), "train_size= {} batch_size= {} iter_num= {} learning_rate= {}\n", .{
         train_size,
         batch_size,
         iters_num,
@@ -312,30 +374,80 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, batch_si
         defer batch_mask.deinit();
 
         const batch_indices = batch_mask.dataSliceRaw();
+        // const batch_indices = &.{ 0, 1 };
 
         const x_batch = try train_images.indexSelect(0, batch_indices);
         defer x_batch.deinit();
         const t_batch = try train_labels.indexSelect(0, batch_indices);
         defer t_batch.deinit();
 
-        var grads = try net.numericalGradientM(x_batch, t_batch);
-        defer grads.deinit();
+        var grads1 = try net.gradient(&x_batch, &t_batch);
+        defer grads1.deinit();
+
+        // var grads = try net.numericalGradientM(&x_batch, &t_batch);
+        // defer grads.deinit();
+        // {
+        //     var map_key_iter = grads.keyIterator();
+        //     while (map_key_iter.next()) |key| {
+        //         var v = grads.get(key.*).?;
+        //         const v1 = grads1.get(key.*).?;
+
+        //         // std.debug.print("v : {f}\nv1: {f}\n", .{ v, v1 });
+
+        //         try v.sub_(&v1);
+        //         v.abs_();
+
+        //         const mean_diff = try v.meanAll();
+        //         defer mean_diff.deinit();
+
+        //         std.debug.print("key: {s} diff: {}\n", .{ key.*, try mean_diff.dataItem() });
+        //     }
+        // }
 
         {
-            var grads_iter = grads.iterator();
-            while (grads_iter.next()) |entry| {
-                const param = entry.key_ptr;
+            var grad_dw1 = grads1.fetchRemove("W1").?.value;
+            defer grad_dw1.deinit();
+            try grad_dw1.mul_(learning_rate);
+            // log.print(@src(), "grad dw1: {f} sum: {f}\n", .{ grad_dw1, try grad_dw1.sumAll() });
+            // log.print(@src(), "affine1 dw: sum= {f}\n", .{try net.affine1.dw.?.sumAll()});
+            // log.print(@src(), "grad dw1: sum= {f}\n", .{try grad_dw1.sumAll()});
+            try net.affine1.w.sub_(&grad_dw1);
 
-                var grad = entry.value_ptr;
-                defer grad.deinit();
+            // log.print(@src(), "after grad update affine1 dw: sum: {f}\n", .{try net.affine1.dw.?.sumAll()});
 
-                try grad.mul_(learning_rate);
+            var grad_db1 = grads1.fetchRemove("b1").?.value;
+            defer grad_db1.deinit();
+            try grad_db1.mul_(learning_rate);
+            try net.affine1.b.sub_(&grad_db1);
 
-                try net.params.getPtr(param.*).?.sub_(grad.*);
-            }
+            var grad_dw2 = grads1.fetchRemove("W2").?.value;
+            defer grad_dw2.deinit();
+
+            try grad_dw2.mul_(learning_rate);
+            try net.affine2.w.sub_(&grad_dw2);
+
+            var grad_db2 = grads1.fetchRemove("b2").?.value;
+            defer grad_db2.deinit();
+
+            try grad_db2.mul_(learning_rate);
+            try net.affine2.b.sub_(&grad_db2);
         }
 
-        const loss = try net.loss(x_batch, t_batch);
+        // {
+        //     var grads_iter = grads1.iterator();
+        //     while (grads_iter.next()) |entry| {
+        //         const param = entry.key_ptr;
+
+        //         const grad = entry.value_ptr;
+        //         defer grad.deinit();
+
+        //         try grad.mul_(learning_rate);
+
+        //         try net.params.getPtr(param.*).?.sub_(grad);
+        //     }
+        // }
+
+        const loss = try net.loss(&x_batch, &t_batch);
 
         try plot.appendData("idx", &.{@as(f64, @floatFromInt(idx))}, &.{loss});
         log.print(@src(), "idx: {} loss: {}\n", .{ idx, loss });
@@ -432,15 +544,16 @@ test "two_layer_net" {
         const batch_train_labels = try train_labels.indexSelect(0, batch_idx);
         defer batch_train_labels.deinit();
 
-        const compute_labels = try two_layer_net.predict(batch_train_images);
+        const compute_labels = try two_layer_net.predict(&batch_train_images);
         defer compute_labels.deinit();
         log.print(@src(), "compute labels: {f}\n", .{compute_labels.layout});
 
-        const loss = try two_layer_net.loss(batch_train_images, batch_train_labels);
-        const accuracy = try two_layer_net.accuracy(batch_train_images, batch_train_labels);
+        const loss = try two_layer_net.loss(&batch_train_images, &batch_train_labels);
+        const accuracy = try two_layer_net.accuracy(&batch_train_images, &batch_train_labels);
         log.print(@src(), "loss: {} accuracy: {}\n", .{ loss, accuracy });
 
-        var gradient = try two_layer_net.numericalGradientM(batch_train_images, batch_train_labels);
+        // var gradient = try two_layer_net.numericalGradientM(batch_train_images, batch_train_labels);
+        var gradient = try two_layer_net.gradient(&batch_train_images, &batch_train_labels);
         defer gradient.deinit();
 
         var grad_iter = gradient.iterator();

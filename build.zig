@@ -104,7 +104,7 @@ pub fn build(b: *std.Build) void {
     //
     // If neither case applies to you, feel free to delete the declaration you
     // don't need and to put everything under a single module.
-    const exe = b.addExecutable(.{ .name = "prism_forge", .root_module = exe_mod });
+    const exe = b.addExecutable(.{ .name = "prism-forge", .root_module = exe_mod });
 
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
