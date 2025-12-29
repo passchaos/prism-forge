@@ -55,19 +55,19 @@ fn matmulDemo(allocator: std.mem.Allocator) !void {
 }
 
 pub fn main() !void {
-    try layer.testNumericalAndAnalyticGrad();
-    // var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    // defer _ = gpa.deinit();
+    // try layer.testNumericalAndAnalyticGrad();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
 
-    // const allocator = gpa.allocator();
+    const allocator = gpa.allocator();
 
     // // try matmulDemo(allocator);
 
-    // const t1 = try std.Thread.spawn(.{}, basic.twoLayerNetTrain, .{ allocator, 10000, 100, 0.1 });
+    const t1 = try std.Thread.spawn(.{}, basic.twoLayerNetTrain, .{ allocator, 10000, 100, 0.1 });
 
-    // try plot.beginPlotLoop(allocator);
-    // t1.join();
-    // log.print(@src(), "finish main logic\n", .{});
+    try plot.beginPlotLoop(allocator);
+    t1.join();
+    log.print(@src(), "finish main logic\n", .{});
 }
 
 fn generateXY() !void {

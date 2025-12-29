@@ -396,10 +396,10 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, batch_si
 
         //         // std.debug.print("v : {f}\nv1: {f}\n", .{ v, v1 });
 
-        //         try v.sub_(&v1);
-        //         v.abs_();
+        //         var res = try v.sub(v1);
+        //         res.abs_();
 
-        //         const mean_diff = try v.meanAll();
+        //         const mean_diff = try res.meanAll();
         //         defer mean_diff.deinit();
 
         //         std.debug.print("key: {s} diff: {}\n", .{ key.*, try mean_diff.dataItem() });
@@ -449,7 +449,7 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, batch_si
         //     }
         // }
 
-        const loss = try net.loss(&x_batch, &t_batch);
+        const loss = try net.loss(&test_images, &test_labels);
 
         try plot.appendData("idx", &.{@as(f64, @floatFromInt(idx))}, &.{loss});
         log.print(@src(), "idx: {} loss: {}\n", .{ idx, loss });
