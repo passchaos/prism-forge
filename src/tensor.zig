@@ -257,23 +257,23 @@ pub fn reduceAllWithBoolType(
     );
 }
 
-pub fn Tensor(comptime N: usize, comptime storage_args: struct {
-    T: type = f32,
-    comptime D: Device = .Cpu,
+pub fn Tensor(comptime SI: []const usize, comptime TI: type, comptime storage_args: struct {
+    D: Device = .Cpu,
 }) type {
     return struct {
         const StorageArgs = storage_args;
-        const Storage = storage_t.Storage(storage_args.T, storage_args.D);
-        const ShapeIterator = layout_t.ShapeIterator(N);
-        const Item = ItemGenerator(N, T);
+        const Storage = storage_t.Storage(T, storage_args.D);
+        const ShapeIterator = layout_t.ShapeIterator(SI);
+        // const Item = ItemGenerator(N, T);
         const BasicOpFuncs = BasicOpFuncsGenerator(T);
 
         pub const Tag = "Tensor";
-        pub const T = storage_args.T;
+        pub const T = T;
+        // pub const T = storage_args.T;
         pub const D = storage_args.D;
-        pub const DIMS = N;
+        pub const DIMS = SI.len;
 
-        const Layout = layout_t.Layout(N);
+        const Layout = layout_t.Layout(SI);
 
         const Self = @This();
 

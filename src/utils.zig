@@ -2,6 +2,14 @@ const std = @import("std");
 const log = @import("log.zig");
 
 pub const array = struct {
+    pub fn comptimeSliceToArray(comptime S: []const usize) [S.len]usize {
+        var result: [S.len]usize = undefined;
+        for (S, 0..) |s, i| {
+            result[i] = s;
+        }
+        return result;
+    }
+
     pub fn getArrayNDimComp(comptime T: type) usize {
         switch (@typeInfo(T)) {
             .array => |arr| {
@@ -91,6 +99,34 @@ pub const array = struct {
         };
     }
 
+    pub fn removeDimComptime(comptime N: usize, comptime arr: []const usize, comptime dim: usize) [N - 1]usize {
+        if (dim >= N) @compileError("Invalid dimension");
+        if (N == 0) @compileError("don't support 0-1-d tensor removeDim op");
+        if (N == 1) return [0]usize{};
+
+        if (N == 0) {
+            @compileError("don't support 0-1-d tensor removeDim op");
+        } else if (N == 1) {
+            return [0]usize{};
+        } else {
+            if (arr[dim] != 1) @compileError("Dim not one");
+            var new_arr = [_]usize{0} ** (N - 1);
+            var i: usize = 0;
+            var j: usize = 0;
+
+            while (i < N) {
+                if (i == dim) {
+                    i += 1;
+                    continue;
+                }
+                new_arr[j] = arr[i];
+                i += 1;
+                j += 1;
+            }
+
+            return new_arr;
+        }
+    }
     pub fn removeDim(comptime N: usize, arr: [N]usize, dim: usize) ![N - 1]usize {
         if (dim >= N) {
             return error.InvalidDim;
@@ -111,6 +147,31 @@ pub const array = struct {
                     continue;
                 }
                 new_arr[j] = arr[i];
+                i += 1;
+                j += 1;
+            }
+
+            return new_arr;
+        }
+    }
+
+    pub fn insertDimComptime(comptime N: usize, comptime arr: []const usize, comptime dim: usize, comptime value: usize) [N + 1]usize {
+        if (dim > N) @compileError("Invalid dimension");
+
+        if (N == 0) {
+            return [_]usize{value};
+        } else {
+            var new_arr = [_]usize{0} ** (N + 1);
+            var i: usize = 0;
+            var j: usize = 0;
+
+            while (i < N + 1) {
+                if (i == dim) {
+                    new_arr[i] = value;
+                    i += 1;
+                    continue;
+                }
+                new_arr[i] = arr[j];
                 i += 1;
                 j += 1;
             }
