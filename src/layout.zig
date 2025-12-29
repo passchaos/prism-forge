@@ -223,10 +223,10 @@ pub fn Layout(comptime N: usize) type {
             self: @This(),
             writer: *std.Io.Writer,
         ) std.Io.Writer.Error!void {
-            try writer.print("Layout {{\n", .{});
-            try writer.print("  shapes: {any},\n", .{self._shape});
-            try writer.print("  strides: {any},\n", .{self._stride});
-            try writer.print("  contiguous: {}\n", .{self._is_contiguous});
+            try writer.print("Layout {{", .{});
+            try writer.print("  shapes: {any},", .{self._shape});
+            try writer.print("  strides: {any},", .{self._stride});
+            try writer.print("  contiguous: {}  ", .{self._is_contiguous});
             try writer.print("}}", .{});
         }
     };

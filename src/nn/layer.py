@@ -1,118 +1,101 @@
 import numpy as np
 
-class Relu:
-    def __init__(self):
-        self.mask = None
-
-    def forward(self, x):
-        self.mask = x <= 0
-        out = x.copy()
-        out[self.mask] = 0
-        return out
-
-    def backward(self, dout):
-        dout[self.mask] = 0
-        return dout
-
-class Affine:
-    def __init__(self, W, b):
-        self.W = W
-        self.b = b
-        self.x = None
-        self.dW = None
-        self.db = None
-
-    def forward(self, x):
-        self.x = x
-        out = np.dot(x, self.W) + self.b
-        return out
-
-    def backward(self, dout):
-        print(f"dout: {dout}")
-        print(f"w_t: {self.W.T}")
-        dx = np.dot(dout, self.W.T)
-        self.dW = np.dot(self.x.T, dout)
-        self.db = np.sum(dout, axis=0)
-        return dx
-
-class SoftmaxWithLoss:
-    def __init__(self):
-        self.loss = None
-        self.y = None
-        self.t = None
-
-    def forward(self, x, t):
-        self.t = t
-        self.y = softmax(x)
-        self.loss = cross_entropy_error(self.y, self.t)
-        return self.loss
-
-    def backward(self, dout=1):
-        batch_size = self.t.shape[0]
-        print(f"y: {self.y}")
-        print(f"t: {self.t}")
-        dx = (self.y - self.t) / batch_size
-        return dx
-
 def softmax(x):
     if x.ndim == 2:
-        x = x.T
-        x = x - np.max(x, axis=0)
-        y = np.exp(x) / np.sum(np.exp(x), axis=0)
-        return y.T
+        x_max = np.max(x, axis=1, keepdims=True)
+        exp_x = np.exp(x - x_max)
+        return exp_x / np.sum(exp_x, axis = 1, keepdims=True)
     x = x - np.max(x)
     return np.exp(x) / np.sum(np.exp(x))
 
-def cross_entropy_error(y, t):
-    if y.ndim == 1:
-        t = t.reshape(1, t.size)
-        y = y.reshape(1, y.size)
+def cross_entropy_loss(logits, y_true):
+    batch_size = logits.shape[0]
+    # 直接用logits计算，避免先算softmax再取log（防止数值下溢）
 
-    if t.size == y.size:
-        t = t.argmax(axis=1)
+    logits_max = np.max(logits, axis=1, keepdims=True)
+    log_probs = logits - logits_max - np.log(np.sum(np.exp(logits - logits_max), axis=1, keepdims=True))
+    # 只取真实标签对应的log概率
+    loss = -np.sum(log_probs[np.arange(batch_size), y_true]) / batch_size
+    return loss
 
-    batch_size = y.shape[0]
-    print(f"batch_size: {batch_size} t: {t}")
-    return -np.sum(np.log(y[np.arange(batch_size), t] + 1e-7)) / batch_size
+def numerical_gradient(f, x):
+    h = 1e-4
+    grad = np.zeros_like(x)
+
+    it = np.nditer(x, flags=['multi_index'], op_flags=['readwrite'])
+    while not it.finished:
+        idx = it.multi_index
+        tmp_val = x[idx]
+        x[idx] = tmp_val + h
+        fxh1 = f(x)
+
+        x[idx] = tmp_val - h
+        fxh2 = f(x)
+        grad[idx] = (fxh1 - fxh2) / (2*h)
+
+        x[idx] = tmp_val
+        it.iternext()
+    return grad
+
+class TestNet:
+    def __init__(self, w, b):
+        self.w = w
+        self.b = b
+
+    def forward(self, x):
+        print(f"x= {x} w= {self.w}")
+        self.z1 = np.dot(x, self.w) + self.b
+        self.a1 = np.maximum(0, self.z1)
+
+        return self.a1
+
+    def loss(self, x, y):
+        logits = self.forward(x)
+        return cross_entropy_loss(logits, y)
+
+    def backward(self, x, t):
+        batch_size = x.shape[0]
+        logits = self.forward(x)
+
+        # 1. softmax+cross_entropy的梯度（核心：logits的梯度 = softmax - one_hot）
+        y_one_hot = np.zeros_like(logits)
+        y_one_hot[np.arange(batch_size), t] = 1
+        dz2 = (softmax(logits) - t) / batch_size
+
+        # ReLU的梯度：z1>0时为1，否则为0
+        dz1 = dz2 * (self.z1 > 0)
+
+        # 4. W1和b1的梯度
+        dW1 = np.dot(x.T, dz1)
+        db1 = np.sum(dz1, axis=0)
+
+        return {
+            'w': dW1, 'b': db1,
+        }
+
+    def numerical_gradient(self, x, t):
+        w = numerical_gradient(lambda w: self.loss(x, t), self.w)
+        b = numerical_gradient(lambda w: self.loss(x, t), self.b)
+
+        grads = {}
+        grads['w'] = w
+        grads['b'] = b
+        return grads
 
 if __name__ == '__main__':
     w = np.arange(10).reshape(2, 5)
     b = np.arange(5).reshape(1, 5);
 
-    affine = Affine(w, b)
-    relu = Relu()
-    softmax_with_loss = SoftmaxWithLoss()
+    # affine = Affine(w, b)
+    # relu = Relu()
+    # softmax_with_loss = SoftmaxWithLoss()
 
     x = np.arange(6).reshape(3, 2)
-    t = np.array([[0, 0, 0, 0, 1], [0,0,0,1,0], [1, 0, 0, 0, 0]])
-    print(f"input: {x}")
-    f0 = affine.forward(x)
-    f1 = relu.forward(f0)
-    f2 = softmax_with_loss.forward(f1, t)
-    print(f"f1: {f1}")
-    print(f"f2: {f2}")
+    # t = np.array([[0, 0, 0, 0, 1], [0,0,0,1,0], [1, 0, 0, 0, 0]])
+    t = np.array([4, 3, 0])
 
-    b2 = softmax_with_loss.backward()
-    print(f"b2: {b2}")
-    b1 = relu.backward(b2)
-    print(f"b1: {b1}")
-    b0 = affine.backward(b1)
-
-    print(f"b0: {b0}")
-
-# class SoftmaxWithLoss:
-#     def __init__(self):
-#         self.loss = None
-#         self.y = None
-#         self.t = None
-
-#     def forward(self, x, t):
-#         self.t = t
-#         self.y = softmax(x)
-#         self.loss = cross_entropy_error(self.y, self.t)
-#         return self.loss
-
-#     def backward(self, dout=1):
-#         batch_size = self.t.shape[0]
-#         dx = (self.y - self.t) / batch_size
-#         return dx
+    net = TestNet(w, b)
+    grads1 = net.numerical_gradient(x, t)
+    grads2 = net.backward(x, t)
+    print(grads1)
+    print(grads2)

@@ -1,6 +1,7 @@
 const std = @import("std");
 const tensor = @import("../tensor.zig");
 const log = @import("../log.zig");
+const basic = @import("basic.zig");
 
 pub fn Relu(comptime N: usize, comptime T: type) type {
     const Tensor = tensor.Tensor(N, .{ .T = T });
@@ -162,12 +163,14 @@ pub fn SoftmaxWithLoss(comptime N: usize, comptime T: type) type {
                 t_r.deinit();
             }
 
+            const loss = try x.crossEntropyLogits(t);
+
             self.y = try x.softmax();
             // std.debug.print("self_y: {f}\n", .{self.y.?});
             self.t = try t.clone();
             // log.print(@src(), "self_t: {f}\n", .{self.t.?});
 
-            const loss = try self.y.?.crossEntropy(&self.t.?);
+            // const loss = try self.y.?.crossEntropy(&self.t.?);
 
             return loss;
         }
@@ -251,111 +254,237 @@ pub fn SoftmaxWithLoss(comptime N: usize, comptime T: type) type {
 //     }
 // };
 const Tensor2 = tensor.Tensor(2, .{ .T = f64 });
+const Linear = Affine(2, f64);
+const ReLu = Relu(2, f64);
+const SWL = SoftmaxWithLoss(2, f64);
 const TestNet = struct {
     const Self = @This();
 
-    w: Tensor2,
-    b: Tensor2,
+    allocator: std.mem.Allocator,
+    // w: Tensor2,
+    // b: Tensor2,
+    affine: Linear,
+    // affine2: Linear,
+    // relu: ReLu,
+    last_layer: SWL,
 
     fn deinit(self: *Self) void {
-        self.w.deinit();
-        self.b.deinit();
+        // self..deinit();
+        // self.b.deinit();
+        // self.relu.deinit();
+        self.affine.deinit();
+        // self.affine2.deinit();
+        self.last_layer.deinit();
     }
 
-    fn init(w: Tensor2, b: Tensor2) Self {
+    fn init(allocator: std.mem.Allocator, input_size: usize, _: usize, output_size: usize) !Self {
+        var w = try tensor.randNorm(allocator, [2]usize{ input_size, output_size }, 0.0, 1.0);
+        try w.mul_(0.01);
+        var b = try tensor.zeros(allocator, f64, [2]usize{ 1, output_size });
+        try b.mul_(0.01);
+
+        const linear = Linear.init(w, b);
+
+        // const w2 = try tensor.randNorm(allocator, [2]usize{ hidden_size, output_size }, 0.0, 1.0);
+        // const b2 = try tensor.zeros(allocator, f64, [2]usize{ 1, output_size });
+        // const linear2 = Linear.init(w2, b2);
+
+        // const
+
         return Self{
-            .w = w,
-            .b = b,
+            .allocator = allocator,
+            // .w = w,
+            // .b = b,
+            // .relu = ReLu.init(),
+            .affine = linear,
+            // .affine2 = linear2,
+            .last_layer = SWL.init(),
         };
     }
 
+    pub fn forward(self: *Self, x: *const Tensor2) !Tensor2 {
+        const f1 = try self.affine.forward(x);
+        // defer f1.deinit();
+        // const f2 = try self.relu.forward(&f1);
+        // defer f2.deinit();
+        // const f3 = try self.affine2.forward(&f2);
+        // var f1 = try x.matmul(&self.w);
+
+        // try f1.add_(&self.b);
+
+        // try f1.relu_();
+
+        return f1;
+    }
+
     pub fn loss(self: *Self, x: *const Tensor2, t: *const Tensor2) !f64 {
-        var f1 = try x.matmul(&self.w);
+        var f1 = try self.forward(x);
         defer f1.deinit();
 
-        try f1.add_(&self.b);
+        const res = try self.last_layer.forward(&f1, t);
+        // const res = try f1.crossEntropyLogits(t);
+        // defer res.deinit();
 
-        const f2 = try f1.softmax();
-        defer f2.deinit();
-        const f3 = try f2.crossEntropy(t);
-        defer f3.deinit();
+        return try res.dataItem();
+    }
 
-        const res = try f3.dataItem();
-        return res;
+    pub fn backward_orig(self: *Self, x: *const Tensor2, t: *const Tensor2) !struct { dw: Tensor2, db: Tensor2 } {
+        _ = try self.loss(x, t);
+        // defer logits.deinit();
+
+        const g1 = try self.last_layer.backward();
+        defer g1.deinit();
+
+        // const a2_g = try self.affine2.backward(&g1);
+        // defer a2_g.deinit();
+
+        // const r1 = try self.relu.backward(&a2_g);
+        // defer r1.deinit();
+
+        const g2 = try self.affine.backward(&g1);
+        defer g2.deinit();
+
+        // const dw = try x_t.matmul(&logits_softmax);
+        // const db = try logits_softmax.sum(0);
+
+        return .{
+            .dw = try self.affine.dw.?.clone(),
+            .db = try self.affine.db.?.clone(),
+        };
+    }
+
+    pub fn backward(self: *Self, x: *const Tensor2, t: *const Tensor2) !struct { dw: Tensor2, db: Tensor2 } {
+        const batch_size = x.shape()[0];
+
+        const logits = try self.forward(x);
+        defer logits.deinit();
+
+        var logits_softmax = try logits.softmax();
+        defer logits_softmax.deinit();
+
+        try logits_softmax.sub_(t);
+        try logits_softmax.div_(@as(f64, @floatFromInt(batch_size)));
+
+        const x_t = x.transpose();
+        defer x_t.deinit();
+
+        // const dw = try x_t.matmul(&logits_softmax);
+        // const db = try logits_softmax.sum(0);
+
+        // const w2_t = self.affine2.w.transpose();
+        // defer w2_t.deinit();
+        // var da1 = try logits_softmax.matmul(&w2_t);
+        // defer da1.deinit();
+
+        // try da1.maskFill_(self.relu.mask.?, 0.0);
+        // try da1.mul_(self.relu.mask.?);
+
+        const dw1 = try x_t.matmul(&logits_softmax);
+        const db1 = try logits_softmax.sum(0);
+
+        return .{
+            .dw = dw1,
+            .db = db1,
+        };
+    }
+
+    pub fn numericalGradient(self: *Self, x: *const Tensor2, t: *const Tensor2) !struct { dw: Tensor2, db: Tensor2 } {
+        const begin = try std.time.Instant.now();
+
+        const dw = try basic.numericalGradient(self.allocator, self, basic.LossArgument{
+            .x = x,
+            .t = t,
+        }, basic.net_loss, &self.affine.w);
+
+        const end = try std.time.Instant.now();
+        const elapsed = end.since(begin);
+        std.debug.print("dw计算时间：{d:.6}秒\n", .{elapsed});
+
+        const db = try basic.numericalGradient(self.allocator, self, basic.LossArgument{
+            .x = x,
+            .t = t,
+        }, basic.net_loss, &self.affine.b);
+
+        return .{
+            .dw = dw,
+            .db = db,
+        };
     }
 };
-test "numerical_gradient" {
-    const allocator = std.testing.allocator;
 
-    const w = try tensor.randNorm(allocator, [2]usize{ 2, 3 }, 0.0, 1.0);
-    const b = try tensor.rand(allocator, [2]usize{ 1, 3 }, 0.0, 1.0);
+pub fn testNumericalAndAnalyticGrad() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
 
-    const input = try tensor.rand(allocator, [2]usize{ 2, 2 }, 5.0, 10.0);
-    defer input.deinit();
-    const t = try tensor.fromArray(allocator, [2][3]f64{
-        .{ 0.0, 0.0, 1.0 },
-        .{ 1.0, 0.0, 0.0 },
-    });
+    const allocator = gpa.allocator();
+
+    // var arena = std.heap.ArenaAllocator.init(g_allocator);
+    // defer arena.deinit();
+    // const allocator = arena.allocator();
+    // const allocator = std.testing.allocator;
+
+    const input_dim = 800;
+    const hidden_dim = 50;
+    const output_dim = 50;
+    const batch_size = 50;
+
+    const x = try tensor.randNorm(allocator, [2]usize{ batch_size, input_dim }, 0.0, 1.0);
+    defer x.deinit();
+
+    const ta = try tensor.rand(allocator, [1]usize{batch_size}, 0, output_dim);
+    defer ta.deinit();
+    const t = try ta.oneHot(f64, null);
+    std.debug.print("t: {f}\n", .{t});
+    // const t = try tensor.fromArray(allocator, [batch_size][output_dim]f64{
+    //     .{ 0.0, 0.0, 1.0, 0.0, 0.0 },
+    //     .{ 1.0, 0.0, 0.0, 0.0, 0.0 },
+    // });
     defer t.deinit();
 
-    const layer_res = blk: {
-        const AffineT = Affine(2, f64);
-        const SoftmaxWithLossT = SoftmaxWithLoss(2, f64);
+    var net = try TestNet.init(allocator, input_dim, hidden_dim, output_dim);
+    // defer net.deinit();
 
-        var aff = AffineT.init(try w.clone(), try b.clone());
-        defer aff.deinit();
-        var swl = SoftmaxWithLossT.init();
-        defer swl.deinit();
+    const begin = std.time.milliTimestamp();
+    for (0..10000) |_| {
+        _ = try net.loss(&x, &t);
+    }
+    const end = std.time.milliTimestamp();
+    std.debug.print("Loss computation time: {d} ms\n", .{end - begin});
 
-        const f1 = try aff.forward(&input);
-        defer f1.deinit();
-        const f2 = try swl.forward(&f1, &t);
-        defer f2.deinit();
+    // var analytic_orig_grads = try net.backward_orig(&x, &t);
+    // defer {
+    //     analytic_orig_grads.dw.deinit();
+    //     analytic_orig_grads.db.deinit();
+    // }
+    // const analytic_grads = try net.backward(&x, &t);
+    // defer {
+    //     analytic_grads.dw.deinit();
+    //     analytic_grads.db.deinit();
+    // }
+    // const numerical_grads = try net.numericalGradient(&x, &t);
+    // defer {
+    //     numerical_grads.dw.deinit();
+    //     numerical_grads.db.deinit();
+    // }
 
-        const layer_loss = try f2.dataItem();
-        // std.debug.print("layer loss: {f}\n", .{f2});
+    // // try analytic_orig_grads.dw.sub_(&analytic_grads.dw);
+    // // try analytic_orig_grads.db.sub_(&analytic_grads.db);
+    // try analytic_orig_grads.dw.sub_(&numerical_grads.dw);
+    // try analytic_orig_grads.db.sub_(&numerical_grads.db);
 
-        const b2 = try swl.backward();
-        defer b2.deinit();
-        const b1 = try aff.backward(&b2);
-        defer b1.deinit();
+    // analytic_orig_grads.dw.abs_();
+    // analytic_orig_grads.db.abs_();
 
-        // std.debug.print("dw: {f}\ndb: {f}\n", .{ aff.dw.?, aff.db.? });
-        break :blk .{ layer_loss, try aff.dw.?.clone(), try aff.db.?.clone() };
-    };
-    defer layer_res.@"1".deinit();
-    defer layer_res.@"2".deinit();
+    // const diff_dw = try analytic_orig_grads.dw.meanAll();
+    // defer diff_dw.deinit();
+    // const diff_db = try analytic_orig_grads.db.meanAll();
+    // defer diff_db.deinit();
 
-    const numerical_res = blk: {
-        const basic = @import("basic.zig");
-
-        var test_net = TestNet.init(w, b);
-        defer test_net.deinit();
-
-        const loss = try test_net.loss(&input, &t);
-        // try std.testing.expectEqual(layer_loss, loss);
-
-        // std.debug.print("numerical loss: {}\n", .{loss});
-
-        const dw_o = try basic.numericalGradient(allocator, &test_net, basic.LossArgument{
-            .x = &input,
-            .t = &t,
-        }, basic.net_loss, &test_net.w);
-        // defer dw_o.deinit();
-
-        const db_o = try basic.numericalGradient(allocator, &test_net, basic.LossArgument{
-            .x = &input,
-            .t = &t,
-        }, basic.net_loss, &test_net.b);
-        // defer db_o.deinit();
-
-        break :blk .{ loss, dw_o, db_o };
-    };
-    defer numerical_res.@"1".deinit();
-    defer numerical_res.@"2".deinit();
-
-    try std.testing.expectEqual(layer_res.@"0", numerical_res.@"0");
-    std.debug.print("dw:\nlayer= {f}\nnumerical= {f}\n", .{ layer_res.@"1", numerical_res.@"1" });
+    // std.debug.print("diff: dw= {f} db= {f}\n", .{ diff_dw, diff_db });
+    // std.debug.print(
+    //     "analytic: dw_orig= {f} dw= {f} db_orig= {f} db= {f}\nnumerical: dw= {f} db= {f}\n",
+    //     .{ analytic_orig_grads.dw, analytic_grads.dw, analytic_orig_grads.db, analytic_grads.db, numerical_grads.dw, numerical_grads.db },
+    // );
 }
 
 test "affine_relu" {

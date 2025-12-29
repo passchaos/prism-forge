@@ -532,6 +532,46 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             return res;
         }
 
+        pub fn crossEntropyLogits(self: *const Self, other: *const Self) !Tensor(0, .{ .T = T }) {
+            switch (@typeInfo(T)) {
+                .float => |_| {
+                    const batch_size = switch (N) {
+                        1 => 1,
+                        2 => self.shape()[0],
+                        inline else => @compileError("unsuported dimension"),
+                    };
+
+                    var logits = try self.clone();
+                    defer logits.deinit();
+
+                    const logits_max = try self.max(N - 1);
+                    defer logits_max.deinit();
+
+                    try logits.sub_(&logits_max);
+
+                    var logits_exp = try logits.clone();
+                    defer logits_exp.deinit();
+                    logits_exp.exp_();
+
+                    var logits_sum = try logits_exp.sum(N - 1);
+                    defer logits_sum.deinit();
+
+                    logits_sum.log_();
+
+                    try logits.sub_(&logits_sum);
+
+                    try logits.mul_(other);
+
+                    var loss = try logits.sumAll();
+                    try loss.mul_(-1.0);
+                    try loss.div_(@as(T, @floatFromInt(batch_size)));
+
+                    return loss;
+                },
+                else => @compileError("unsupported type"),
+            }
+        }
+
         pub fn crossEntropy(self: *const Self, other: *const Self) !Tensor(0, .{ .T = T }) {
             switch (@typeInfo(T)) {
                 .float => |_| {
@@ -544,13 +584,8 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
                     var a = try self.clone();
                     defer a.deinit();
 
-                    const scope = struct {
-                        fn call(v: T, _: void) T {
-                            return -@log(v + 1e-7);
-                        }
-                    };
-
-                    a.map_(void{}, scope.call);
+                    a.log_();
+                    try a.mul_(-1.0);
 
                     try a.mul_(other);
 
@@ -965,6 +1000,10 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
         pub fn log_(self: *Self) void {
             const func = struct {
                 fn call(v: T, _: void) T {
+                    // const ce = 1e-7;
+                    // if (v < ce) {
+                    //     return @log(v + ce);
+                    // }
                     return @log(v);
                 }
             }.call;
@@ -1517,7 +1556,7 @@ pub fn Tensor(comptime N: usize, comptime storage_args: struct {
             self.layout = self.layout.transpose(0, 1) catch unreachable;
         }
 
-        pub fn transpose(self: *Self) Self {
+        pub fn transpose(self: *const Self) Self {
             if (N != 2) @compileError("only support 2d tensor");
             const new_layout = self.layout.transpose(0, 1) catch unreachable;
             const new_storage = self.storage.shared();
@@ -2782,17 +2821,34 @@ test "loss func" {
     }
 
     {
-        const y = try fromArray(allocator, [3]f64{ 0.36541271, 0.23927078, 0.39531651 });
+        const y = try fromArray(allocator, [3]f64{ 3.0, 4.0, 5.0 });
         defer y.deinit();
         const t = try fromArray(allocator, [3]f64{ 0.0, 0.0, 1.0 });
         defer t.deinit();
 
-        const cross_entropy_t = try y.crossEntropy(&t);
-        defer cross_entropy_t.deinit();
+        const ce_logits = blk: {
+            const ce = try y.crossEntropyLogits(&t);
+            defer ce.deinit();
+            const cross_entropy = try ce.dataItem();
+            break :blk cross_entropy;
+        };
 
-        const cross_entropy = try cross_entropy_t.dataItem();
+        const softmax_ce = blk: {
+            const y_s = try y.softmax();
+            defer y_s.deinit();
+            const cross_entropy_t = try y_s.crossEntropy(&t);
+            defer cross_entropy_t.deinit();
 
-        try std.testing.expectApproxEqAbs(0.9280682857864075, cross_entropy, 1e-7);
+            const cross_entropy = try cross_entropy_t.dataItem();
+            break :blk cross_entropy;
+        };
+
+        try std.testing.expectApproxEqAbs(0.4076059644443804, ce_logits, 1e-8);
+        try std.testing.expectApproxEqAbs(0.4076059644443804, softmax_ce, 1e-8);
+
+        // std.debug.print("ce: logits= {} softmax= {}\n", .{ ce_logits, softmax_ce });
+
+        // try std.testing.expectApproxEqAbs(0.9280682857864075, cross_entropy, 1e-7);
     }
 }
 

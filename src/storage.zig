@@ -205,10 +205,10 @@ pub fn Storage(comptime T: type, comptime D: Device) type {
             self: @This(),
             writer: *std.Io.Writer,
         ) std.Io.Writer.Error!void {
-            try writer.print("Storage {{\n", .{});
-            try writer.print("  device: {},\n", .{D});
-            try writer.print("  buf_len: {},\n", .{self.len()});
-            try writer.print("  ref_count: {d}\n", .{self._ref_count.count});
+            try writer.print("Storage {{", .{});
+            try writer.print("  device: {},", .{D});
+            try writer.print("  buf_len: {},", .{self.len()});
+            try writer.print("  ref_count: {d}  ", .{self._ref_count.count});
             try writer.print("}}", .{});
         }
     };

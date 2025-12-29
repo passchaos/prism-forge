@@ -88,7 +88,7 @@ pub fn numericalGradient(
     ) anyerror!Tensor2.T,
     tval: *Tensor2,
 ) !Tensor2 {
-    const h = 1e-4;
+    const h = 1e-5;
 
     var grad = try tensor.zerosLike(allocator, tval.*);
 
