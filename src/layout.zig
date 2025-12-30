@@ -137,7 +137,7 @@ pub fn Layout(comptime SI: []const usize) type {
         }
 
         pub fn equal(self: Self, other: Self) bool {
-            return (self.shape() == other.shape()) and (self.stride() == other.stride());
+            return std.mem.eql(usize, &self.shape(), &other.shape()) and std.mem.eql(usize, &self.stride(), &other.stride());
         }
 
         pub fn size(_: *const Self) usize {
@@ -419,16 +419,6 @@ test "cat or stack" {
 
     const ls = stack(.{ l1, l3 }, 2);
     try std.testing.expectEqualDeep([4]usize{ 2, 3, 2, 4 }, ls.shape());
-}
-
-pub fn initShapeIterator(arr: anytype) ShapeIterator(utils.array.getArrayShapeComp(@TypeOf(arr))[0]) {
-    const NDIM = comptime utils.array.getArrayNDimComp(@TypeOf(arr));
-    if (NDIM != 1) @compileError("only support 1-d array");
-
-    const N = comptime utils.array.getArrayShapeComp(@TypeOf(arr))[0];
-    const a = @as([N]usize, arr);
-
-    return ShapeIterator(N).init(a);
 }
 
 pub fn ShapeIterator(comptime SI: []const usize) type {
