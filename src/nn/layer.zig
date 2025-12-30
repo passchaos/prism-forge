@@ -24,7 +24,7 @@ pub fn Relu(comptime shape: []const usize, comptime T: type) type {
             if (self.mask) |m_i| {
                 m_i.deinit();
             }
-            self.mask = try x.le(@as(T, 0));
+            self.mask = try x.leScalar(0);
 
             var nr = try x.clone();
             // log.print(@src(), "mask layout: {f}\n", .{self.mask.?.layout});
@@ -47,6 +47,7 @@ pub fn Affine(comptime batch_size: usize, comptime input_size: usize, comptime o
     const Tensor = tensor.Tensor(&.{ batch_size, input_size }, T, .{});
     const TensorW = tensor.Tensor(&.{ input_size, output_size }, T, .{});
     const TensorB = tensor.Tensor(&.{ 1, output_size }, T, .{});
+    const TensorG = tensor.Tensor(&.{ batch_size, output_size }, T, .{});
 
     return struct {
         w: TensorW,
@@ -95,7 +96,7 @@ pub fn Affine(comptime batch_size: usize, comptime input_size: usize, comptime o
             };
         }
 
-        pub fn forward(self: *Self, x: *const Tensor) !Tensor {
+        pub fn forward(self: *Self, x: *const Tensor) !TensorG {
             const x_c = try x.clone();
 
             if (self.x) |x_r| {
@@ -104,23 +105,27 @@ pub fn Affine(comptime batch_size: usize, comptime input_size: usize, comptime o
             self.x = x_c;
 
             var out = try x.matmul(output_size, &self.w);
-            try out.add_(&self.b);
+
+            const b_b = self.b.broadcastTo(&.{ batch_size, output_size });
+            defer b_b.deinit();
+
+            out.add_(&b_b);
 
             return out;
         }
 
-        pub fn backward(self: *Self, dout: *const Tensor) !Tensor {
+        pub fn backward(self: *Self, dout: *const TensorG) !Tensor {
             const w_t = self.w.transpose();
             defer w_t.deinit();
 
             // std.debug.print("dout: {f} w_t: {f}\n", .{ dout, w_t });
-            const dx = try dout.matmul(&w_t);
+            const dx = try dout.matmul(input_size, &w_t);
             // std.debug.print("dx: {f}\n", .{dx});
 
             const x_t = self.x.?.transpose();
             defer x_t.deinit();
 
-            const n_dw = try x_t.matmul(dout);
+            const n_dw = try x_t.matmul(output_size, dout);
             const n_db = try dout.sum(0);
 
             if (self.dw) |dwr| {
@@ -187,7 +192,7 @@ pub fn SoftmaxWithLoss(comptime shape: []const usize, comptime T: type) type {
 
             // std.debug.print("y: {f} t: {f}\n", .{ self.y.?, self.t.? });
             var dx = try self.y.?.sub(self.t.?);
-            try dx.div_(@as(T, @floatFromInt(batch_size)));
+            dx.divScalar_(@as(T, @floatFromInt(batch_size)));
 
             return dx;
         }

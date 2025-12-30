@@ -554,7 +554,11 @@ pub fn Tensor(comptime SA: []const usize, comptime TA: type, comptime storage_ar
             return res;
         }
 
-        pub fn crossEntropyLogits(self: *const Self, other: *const Self) !Tensor(0, .{ .T = T }) {
+        pub fn crossEntropyLogits(self: *const Self, other: *const Self) !Tensor(
+            &[_]usize{1} ** N,
+            T,
+            .{},
+        ) {
             switch (@typeInfo(T)) {
                 .float => |_| {
                     const batch_size = switch (N) {
@@ -569,7 +573,10 @@ pub fn Tensor(comptime SA: []const usize, comptime TA: type, comptime storage_ar
                     const logits_max = try self.max(N - 1);
                     defer logits_max.deinit();
 
-                    try logits.sub_(&logits_max);
+                    const logits_max_b = logits_max.broadcastTo(SA);
+                    defer logits_max_b.deinit();
+
+                    logits.sub_(&logits_max_b);
 
                     var logits_exp = try logits.clone();
                     defer logits_exp.deinit();
@@ -580,13 +587,15 @@ pub fn Tensor(comptime SA: []const usize, comptime TA: type, comptime storage_ar
 
                     logits_sum.log_();
 
-                    try logits.sub_(&logits_sum);
+                    const logits_sum_b = logits_sum.broadcastTo(SA);
+                    defer logits_sum_b.deinit();
 
-                    try logits.mul_(other);
+                    logits.sub_(&logits_sum_b);
+
+                    logits.mul_(other);
 
                     var loss = try logits.sumAll();
-                    try loss.mul_(-1.0);
-                    try loss.div_(@as(T, @floatFromInt(batch_size)));
+                    loss.divScalar_(-1.0 * @as(T, @floatFromInt(batch_size)));
 
                     return loss;
                 },
@@ -728,21 +737,20 @@ pub fn Tensor(comptime SA: []const usize, comptime TA: type, comptime storage_ar
             }
         }
 
-        pub fn le(self: *const Self, value: anytype) !Tensor(
-            N,
-            .{ .T = bool },
+        pub fn leScalar(self: *const Self, value: T) !Tensor(
+            SA,
+            bool,
+            .{},
         ) {
-            const TV = @TypeOf(value);
+            return try self.map(value, bool, BasicOpFuncs.le);
+        }
 
-            switch (TV) {
-                @This() => {
-                    return try self.binaryOp(value, bool, BasicOpFuncs.le);
-                },
-                T => {
-                    return try self.map(value, bool, BasicOpFuncs.le);
-                },
-                else => @compileError("unsupported le argument type" ++ " self: " ++ @typeName(@This()) ++ " input: " ++ @typeName(TV)),
-            }
+        pub fn le(self: *const Self, value: *const Self) !Tensor(
+            SA,
+            bool,
+            .{},
+        ) {
+            return try self.binaryOp(value, bool, BasicOpFuncs.le);
         }
 
         pub fn gtScalar(self: *const Self, value: T) !Tensor(SA, bool, .{}) {
@@ -761,10 +769,8 @@ pub fn Tensor(comptime SA: []const usize, comptime TA: type, comptime storage_ar
             return try self.binaryOp(value, bool, BasicOpFuncs.ge);
         }
 
-        pub fn maskFill_(self: *Self, mask: Tensor(N, .{ .T = bool }), value: T) !void {
-            var mask_i = mask;
-
-            try mask_i.broadcastTo_(self.shape());
+        pub fn maskFill_(self: *Self, mask: Tensor(SA, bool, .{}), value: T) !void {
+            const mask_i = mask;
 
             var iter = self.shapeIter();
 
@@ -775,61 +781,50 @@ pub fn Tensor(comptime SA: []const usize, comptime TA: type, comptime storage_ar
             }
         }
 
-        pub fn binaryOp_(self: *Self, b: *const Self, op_func: fn (x: T, y: T) T) !void {
+        pub fn binaryOp_(self: *Self, b: *const Self, op_func: fn (x: T, y: T) T) void {
             // inplace method: need broadcast to self shape
-            var b_i = try b.broadcastTo(self.shape());
+            var b_i = b.broadcastTo(SA);
             defer b_i.deinit();
 
             var iter = self.shapeIter();
 
             while (iter.next()) |idx| {
-                const x = try self.getData(idx);
-                const y = try b_i.getData(idx);
+                const x = self.getData(idx) catch unreachable;
+                const y = b_i.getData(idx) catch unreachable;
 
-                try self.setData(idx, op_func(x, y));
+                self.setData(idx, op_func(x, y)) catch unreachable;
             }
         }
 
         pub fn binaryOp(
             self: Self,
-            b: Self,
+            other: Self,
             comptime RT: type,
             op_func: fn (x: T, y: T) RT,
-        ) !Tensor(N, .{ .T = RT }) {
-            const target_shape = try utils.compatibleBroacastShapes(
-                N,
-                self.shape(),
-                b.shape(),
-            );
+        ) !Tensor(SA, RT, .{}) {
+            var new_buf = try self.s_allocator().alloc(RT, utils.product(&self.shape()));
 
-            const a = try self.broadcastTo(target_shape);
-            defer a.deinit();
-            const c = try b.broadcastTo(target_shape);
-            defer c.deinit();
-
-            var new_buf = try self.s_allocator().alloc(RT, utils.product(&target_shape));
-
-            var iter_a = a.shapeIter();
+            var iter_a = self.shapeIter();
 
             var i: usize = 0;
 
             while (iter_a.next()) |idx| {
-                const x = try a.getData(idx);
-                const y = try c.getData(idx);
+                const x = try self.getData(idx);
+                const y = try other.getData(idx);
 
-                const flat_idx = try utils.indexShapeToFlat(N, target_shape, idx);
+                const flat_idx = try utils.indexShapeToFlat(SA, idx);
 
                 new_buf[flat_idx] = op_func(x, y);
                 i += 1;
             }
 
-            const layout = Layout.init(target_shape);
+            const layout = Layout.init();
             const storage = try storage_t.Storage(RT, .Cpu).initImpl(
                 self.s_allocator(),
                 new_buf,
             );
 
-            return try Tensor(N, .{ .T = RT }).fromDataImpl(layout, storage, 0);
+            return Tensor(SA, T, .{}).fromDataImpl(layout, storage, 0);
         }
 
         pub fn clamp_(self: *Self, min_a: T, max_a: T) void {
@@ -852,8 +847,8 @@ pub fn Tensor(comptime SA: []const usize, comptime TA: type, comptime storage_ar
             return self.map_(vv, BasicOpFuncs.add);
         }
 
-        pub fn add_(self: *Self, value: *const Self) !void {
-            return try self.binaryOp_(value, BasicOpFuncs.add);
+        pub fn add_(self: *Self, value: *const Self) void {
+            return self.binaryOp_(value, BasicOpFuncs.add);
         }
 
         pub fn add(self: *const Self, value: anytype) !Tensor(N, .{ .T = if (T == bool) isize else T }) {
@@ -880,21 +875,12 @@ pub fn Tensor(comptime SA: []const usize, comptime TA: type, comptime storage_ar
                 else => @compileError("unsupported add argument type" ++ " self: " ++ @typeName(@This()) ++ " input: " ++ @typeName(TV)),
             }
         }
+        pub fn subScalar_(self: *Self, value: T) void {
+            return self.map_(value, BasicOpFuncs.sub);
+        }
 
-        pub fn sub_(self: *Self, value: anytype) !void {
-            const TV = @TypeOf(value);
-
-            if (TV == *const @This() or TV == *@This()) {
-                return try self.binaryOp_(value, BasicOpFuncs.sub);
-            }
-
-            if (TV == T or (TV == comptime_float and @typeInfo(T) == .float) or (TV == comptime_int and @typeInfo(T) == .int)) {
-                const vv = @as(T, value);
-
-                return self.map_(vv, BasicOpFuncs.sub);
-            }
-
-            @compileError("unsupported sub_ argument type " ++ @typeName(TV) ++ " for tensor of type " ++ @typeName(Self));
+        pub fn sub_(self: *Self, value: *const Self) void {
+            return self.binaryOp_(value, BasicOpFuncs.sub);
         }
 
         pub fn sub(self: *const Self, value: anytype) !Self {
@@ -912,20 +898,12 @@ pub fn Tensor(comptime SA: []const usize, comptime TA: type, comptime storage_ar
             }
         }
 
-        pub fn mul_(self: *Self, value: anytype) !void {
-            const TV = @TypeOf(value);
+        pub fn mulScalar_(self: *Self, value: T) void {
+            return self.map_(value, BasicOpFuncs.mul);
+        }
 
-            if (TV == *const @This()) {
-                return try self.binaryOp_(value, BasicOpFuncs.mul);
-            }
-
-            if (TV == T or (TV == comptime_float and @typeInfo(T) == .float) or (TV == comptime_int and @typeInfo(T) == .int)) {
-                const vv = @as(T, value);
-
-                return self.map_(vv, BasicOpFuncs.mul);
-            }
-
-            @compileError("unsupported mul_ argument type " ++ @typeName(TV) ++ " for tensor of type " ++ @typeName(T));
+        pub fn mul_(self: *Self, value: *const Self) void {
+            return self.binaryOp_(value, BasicOpFuncs.mul);
         }
 
         pub fn mul(self: *const Self, value: anytype) !Self {
@@ -943,18 +921,12 @@ pub fn Tensor(comptime SA: []const usize, comptime TA: type, comptime storage_ar
             }
         }
 
-        pub fn div_(self: *Self, value: anytype) !void {
-            const TV = @TypeOf(value);
+        pub fn divScalar_(self: *Self, value: T) void {
+            return self.map_(value, BasicOpFuncs.div);
+        }
 
-            switch (TV) {
-                *const @This() => return try self.binaryOp_(value, BasicOpFuncs.div),
-                T => {
-                    const vv = @as(T, value);
-
-                    return self.map_(vv, BasicOpFuncs.div);
-                },
-                else => @compileError("unsupported div_ argument type " ++ @typeName(TV) ++ " for tensor of type " ++ @typeName(T)),
-            }
+        pub fn div_(self: *Self, value: *const Self) !void {
+            return self.binaryOp_(value, BasicOpFuncs.div);
         }
 
         pub fn div(self: *const Self, value: anytype) !Tensor(N, .{ .T = utils.tensor.tensorArithmeticTypeCast(T, @TypeOf(value)) }) {
@@ -1151,13 +1123,19 @@ pub fn Tensor(comptime SA: []const usize, comptime TA: type, comptime storage_ar
             const a = try self.max(N - 1);
             defer a.deinit();
 
-            var v = try self.sub(a);
+            const a_b = a.broadcastTo(SA);
+            defer a_b.deinit();
+
+            var v = try self.sub(a_b);
             v.exp_();
 
             const vs = try v.sum(N - 1);
             defer vs.deinit();
 
-            try v.div_(&vs);
+            const vs_b = vs.broadcastTo(SA);
+            defer vs_b.deinit();
+
+            try v.div_(&vs_b);
 
             return v;
         }
@@ -1188,7 +1166,6 @@ pub fn Tensor(comptime SA: []const usize, comptime TA: type, comptime storage_ar
 
             var shape_i_iter = layout_t.ShapeIterator(&shape_i).init();
 
-            @compileLog("shape_i_iter: " ++ @typeName(@TypeOf(shape_i_iter)) ++ " " ++ @typeName(@TypeOf(shape_i)));
             while (shape_i_iter.next()) |idx| {
                 const acc = blk: {
                     if (self.shape()[dm] == 1) {
@@ -1445,18 +1422,16 @@ pub fn Tensor(comptime SA: []const usize, comptime TA: type, comptime storage_ar
         }
 
         // attributes
-        pub fn broadcastTo(self: *const Self, target_shape: anytype) !Self {
-            const new_layout = try self.layout.broadcastTo(N, target_shape);
+        pub fn broadcastTo(self: *const Self, comptime target_shape: []const usize) Tensor(
+            target_shape,
+            T,
+            .{},
+        ) {
+            const new_layout = self.layout.broadcastTo(target_shape);
 
             const storage = self.storage.shared();
 
-            return try Self.fromDataImpl(new_layout, storage, self._storage_offset);
-        }
-
-        pub fn broadcastTo_(self: *Self, target_shape: anytype) !void {
-            const new_layout = try self.layout.broadcastTo(N, target_shape);
-
-            self.layout = new_layout;
+            return Tensor(target_shape, T, .{}).fromDataImpl(new_layout, storage, self._storage_offset);
         }
 
         pub fn getData(self: *const Self, indices: [N]usize) !T {

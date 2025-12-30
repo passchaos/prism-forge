@@ -14,13 +14,13 @@ pub fn Layout(comptime SI: []const usize) type {
 
         const Self = @This();
 
-        pub fn broadcastTo(self: Self, comptime BN: usize, target_shape: [BN]usize) !Layout(BN) {
-            if (std.mem.eql(usize, &self.shape(), &target_shape)) {
+        pub fn broadcastTo(self: Self, comptime target_shape: []const usize) Layout(target_shape) {
+            if (comptime std.mem.eql(usize, SI, target_shape)) {
                 return self;
             }
 
-            const new_stride = try utils.generateBroadcastStride(N, BN, self.shape(), self.stride(), target_shape);
-            return Layout(BN).initRaw(target_shape, new_stride);
+            const new_stride = utils.generateBroadcastStride(SI, self.stride(), target_shape);
+            return Layout(target_shape).initRaw(new_stride);
         }
 
         fn checkContiguous(strides_a: []const usize) bool {

@@ -200,7 +200,7 @@ pub fn TwoLayerNet(
                 0.0,
                 1.0,
             );
-            try w1.mul_(weight_init_std);
+            w1.mulScalar_(weight_init_std);
 
             const b1 = try tensor.zeros(allocator, DT, &.{ 1, hidden_size });
 
@@ -210,7 +210,7 @@ pub fn TwoLayerNet(
                 0.0,
                 1.0,
             );
-            try w2.mul_(weight_init_std);
+            w2.mulScalar_(weight_init_std);
 
             const b2 = try tensor.zeros(allocator, DT, &.{ 1, output_size });
 
@@ -258,9 +258,8 @@ pub fn TwoLayerNet(
             defer y.deinit();
 
             const loss_t = try self.last_layer.forward(&y, t);
-            defer loss_t.deinit();
 
-            return try loss_t.dataItem();
+            return loss_t;
         }
 
         fn accuracy(self: *Self, x: *const TensorII, t: *const TensorTI) !DT {
@@ -334,10 +333,10 @@ pub fn TwoLayerNet(
             // log.print(@src(), "dw1: {f} db1: {f}\n", .{ self.affine1.dw.?, self.affine1.db.? });
 
             return Grad{
-                .dw1 = dout3.dw,
-                .db1 = dout3.db,
-                .dw2 = dout2.dw,
-                .db2 = dout2.db,
+                .dw1 = self.affine1.dw.?,
+                .db1 = self.affine1.db.?,
+                .dw2 = self.affine2.dw.?,
+                .db2 = self.affine2.db.?,
             };
         }
     };
@@ -390,8 +389,7 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, comptime
         const t_batch = try train_labels.indexSelect(0, batch_size, batch_indices);
         defer t_batch.deinit();
 
-        var grads1 = try net.gradient(&x_batch, &t_batch);
-        defer grads1.deinit();
+        const grads1 = try net.gradient(&x_batch, &t_batch);
 
         // var grads = try net.numericalGradientM(&x_batch, &t_batch);
         // defer grads.deinit();
@@ -414,32 +412,30 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, comptime
         // }
 
         {
-            var grad_dw1 = grads1.fetchRemove("W1").?.value;
-            defer grad_dw1.deinit();
-            try grad_dw1.mul_(learning_rate);
+            var grad_dw1 = grads1.dw1;
+            // defer grad_dw1.deinit();
+            grad_dw1.mulScalar_(learning_rate);
             // log.print(@src(), "grad dw1: {f} sum: {f}\n", .{ grad_dw1, try grad_dw1.sumAll() });
             // log.print(@src(), "affine1 dw: sum= {f}\n", .{try net.affine1.dw.?.sumAll()});
             // log.print(@src(), "grad dw1: sum= {f}\n", .{try grad_dw1.sumAll()});
-            try net.affine1.w.sub_(&grad_dw1);
+            net.affine1.w.sub_(&grad_dw1);
 
             // log.print(@src(), "after grad update affine1 dw: sum: {f}\n", .{try net.affine1.dw.?.sumAll()});
 
-            var grad_db1 = grads1.fetchRemove("b1").?.value;
-            defer grad_db1.deinit();
-            try grad_db1.mul_(learning_rate);
-            try net.affine1.b.sub_(&grad_db1);
+            var grad_db1 = grads1.db1;
+            // defer grad_db1.deinit();
+            grad_db1.mulScalar_(learning_rate);
+            net.affine1.b.sub_(&grad_db1);
 
-            var grad_dw2 = grads1.fetchRemove("W2").?.value;
-            defer grad_dw2.deinit();
+            var grad_dw2 = grads1.dw2;
+            // defer grad_dw2.deinit();
+            grad_dw2.mulScalar_(learning_rate);
+            net.affine2.w.sub_(&grad_dw2);
 
-            try grad_dw2.mul_(learning_rate);
-            try net.affine2.w.sub_(&grad_dw2);
-
-            var grad_db2 = grads1.fetchRemove("b2").?.value;
-            defer grad_db2.deinit();
-
-            try grad_db2.mul_(learning_rate);
-            try net.affine2.b.sub_(&grad_db2);
+            var grad_db2 = grads1.db2;
+            // defer grad_db2.deinit();
+            grad_db2.mulScalar_(learning_rate);
+            net.affine2.b.sub_(&grad_db2);
         }
 
         // {
@@ -456,7 +452,7 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, comptime
         //     }
         // }
 
-        const loss = try net.loss(&test_images, &test_labels);
+        const loss = try net.loss(&x_batch, &t_batch);
 
         try plot.appendData("idx", &.{@as(f64, @floatFromInt(idx))}, &.{loss});
         log.print(@src(), "idx: {} loss: {}\n", .{ idx, loss });

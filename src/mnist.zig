@@ -36,6 +36,7 @@ pub fn loadImages(allocator: std.mem.Allocator, path: []const u8, comptime shape
     const data = try file.readToEndAlloc(allocator, data_size);
 
     const read_shape = &.{ @as(usize, @intCast(samples)), @as(usize, @intCast(rows * columns)) };
+    log.print(@src(), "read images shape: {any}\n", .{read_shape});
 
     if (!std.mem.eql(usize, read_shape, shape)) {
         return error.ShapeMismatch;
@@ -62,6 +63,8 @@ pub fn loadLabels(allocator: std.mem.Allocator, path: []const u8, comptime count
 
     const new_buf = try file.readToEndAlloc(allocator, 100 * 1024 * 1024);
     std.debug.assert(new_buf.len == samples);
+
+    log.print(@src(), "read labels: {}\n", .{samples});
 
     if (samples != count) {
         return error.ShapeMismatch;
@@ -124,7 +127,7 @@ pub fn loadDatas(comptime T: type, allocator: std.mem.Allocator) !struct {
 test "mnist images and labels" {
     const allocator = std.testing.allocator;
 
-    const res = try loadDatas(allocator);
+    const res = try loadDatas(f32, allocator);
 
     const train_images = res.train_images;
     defer train_images.deinit();
