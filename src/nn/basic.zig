@@ -452,28 +452,20 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, comptime
         //     }
         // }
 
-        const loss = try net.loss(&x_batch, &t_batch);
+        const loss_idx = try tensor.arange(allocator, @as(usize, 100), .{});
+        defer loss_idx.deinit();
+
+        const idx_loss = loss_idx.dataSliceToArray();
+
+        const loss_x = try test_images.indexSelect(0, 100, idx_loss);
+        defer loss_x.deinit();
+        const loss_t = try test_labels.indexSelect(0, 100, idx_loss);
+        defer loss_t.deinit();
+        const loss = try net.loss(&loss_x, &loss_t);
 
         try plot.appendData("idx", &.{@as(f64, @floatFromInt(idx))}, &.{loss});
         log.print(@src(), "idx: {} loss: {}\n", .{ idx, loss });
     }
-}
-
-test "differential" {
-    const allocator = std.testing.allocator;
-
-    const arr = try tensor.fromArray(allocator, [_][2]DT{.{ 3.0, 4.0 }});
-    defer arr.deinit();
-
-    const v1 = try numericalGradient(allocator, void{}, function2, arr);
-    defer v1.deinit();
-
-    log.print(@src(), "v1: {f}\n", .{v1});
-
-    var init_x = try tensor.fromArray(allocator, [_][2]DT{.{ -3.0, 4.0 }});
-    defer init_x.deinit();
-    try gradientDescent(allocator, void{}, function2, &init_x, .{ .lr = 0.1 });
-    log.print(@src(), "init x: {f}\n", .{init_x});
 }
 
 test "simple net" {
@@ -484,7 +476,7 @@ test "simple net" {
         .{ 0.85557411, 0.03563661, 0.69422093 },
     });
 
-    var net = SimpleNet.init(weight);
+    var net = SimpleNet([2]usize{ 2, 3 }).init(weight);
     defer net.deinit();
 
     log.print(@src(), "w: {f}\n", .{net.w});
@@ -539,14 +531,14 @@ test "two_layer_net" {
     const test_labels = datas.test_labels;
     defer test_labels.deinit();
 
-    var two_layer_net = try TwoLayerNet.init(allocator, 784, 100, 10, 0.01);
+    var two_layer_net = try TwoLayerNet(3, 784, 100, 10).init(allocator, 0.01);
     defer two_layer_net.deinit();
 
     {
-        const batch_idx = &.{ 0, 1, 2 };
-        const batch_train_images = try train_images.indexSelect(0, batch_idx);
+        const batch_idx = [3]usize{ 0, 1, 2 };
+        const batch_train_images = try train_images.indexSelect(0, 3, batch_idx);
         defer batch_train_images.deinit();
-        const batch_train_labels = try train_labels.indexSelect(0, batch_idx);
+        const batch_train_labels = try train_labels.indexSelect(0, 3, batch_idx);
         defer batch_train_labels.deinit();
 
         const compute_labels = try two_layer_net.predict(&batch_train_images);

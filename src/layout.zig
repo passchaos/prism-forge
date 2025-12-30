@@ -63,9 +63,8 @@ pub fn Layout(comptime SI: []const usize) type {
         }
 
         pub fn transpose(self: *const Self, comptime dim0: usize, comptime dim1: usize) Layout(&computePermutedShape(
-            N,
             SI,
-            computeTransposedPerm(N, dim0, dim1),
+            &computeTransposedPerm(N, dim0, dim1),
         )) {
             if (dim0 >= N or dim1 >= N) @compileError("Invalid dimension");
 

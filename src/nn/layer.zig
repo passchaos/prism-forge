@@ -376,10 +376,10 @@ test "numerical and analytic gradients" {
     const output_dim = 10;
     const batch_size = 50;
 
-    const x = try tensor.randNorm(allocator, [2]usize{ batch_size, input_dim }, 0.0, 1.0);
+    const x = try tensor.randNorm(allocator, &.{ batch_size, input_dim }, 0.0, 1.0);
     defer x.deinit();
 
-    const ta = try tensor.rand(allocator, [1]usize{batch_size}, 0, output_dim);
+    const ta = try tensor.rand(allocator, &.{batch_size}, 0, output_dim);
     defer ta.deinit();
     const t = try ta.oneHot(f64, output_dim);
     std.debug.print("t: {f}\n", .{t});
