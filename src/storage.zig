@@ -55,17 +55,14 @@ pub fn Storage(comptime T: type, comptime D: Device) type {
             return try Self.initImpl(allocator, try arr_list.toOwnedSlice(allocator));
         }
 
-        pub fn linspace(allocator: std.mem.Allocator, args: struct {
+        pub fn linspace(
+            allocator: std.mem.Allocator,
             start: T,
             end: T,
-            steps: usize,
-        }) !Self {
+            num: usize,
+        ) !Self {
             switch (@typeInfo(T)) {
                 .float => {
-                    const start = args.start;
-                    const end = args.end;
-                    const num = args.steps;
-
                     var buf = try allocator.alloc(T, num);
 
                     const step = (end - start) / @as(T, @floatFromInt(num));
@@ -220,7 +217,7 @@ test "ref_count" {
     const StorageF32 = Storage(f32, .Cpu);
 
     const buf = try allocator.alloc(f32, 10);
-    log.print(@src(), "buf: {*}\n", .{buf.ptr});
+    std.debug.print("buf: {*}\n", .{buf.ptr});
 
     // allocator.free(buf);
     var storage = try StorageF32.initImpl(allocator, buf);
@@ -243,7 +240,7 @@ test "ref_count" {
         defer s4.deinit();
         try std.testing.expectEqual(s1.refCount(), 5);
 
-        log.print(@src(), "storage: {f}\ns1: {f}\ns2: {f}\ns3: {f}\ns4: {f}\n", .{ storage, s1, s2, s3, s4 });
+        std.debug.print("storage: {f}\ns1: {f}\ns2: {f}\ns3: {f}\ns4: {f}\n", .{ storage, s1, s2, s3, s4 });
     }
 
     try std.testing.expect(storage.refCount() == 1);
@@ -269,7 +266,7 @@ test "arange" {
     try std.testing.expect(s1.len() == 10);
     try std.testing.expect(s1.dataSlice()[0] == 0);
     try std.testing.expect(s1.dataSlice()[9] == 9);
-    log.print(@src(), "s1: {f}\n", .{s1});
+    std.debug.print("s1: {f}\n", .{s1});
 }
 
 test "linspace" {
@@ -277,16 +274,12 @@ test "linspace" {
 
     const StorageI32 = Storage(f32, .Cpu);
 
-    var s1 = try StorageI32.linspace(allocator, .{
-        .start = 1,
-        .steps = 10,
-        .end = 30,
-    });
+    var s1 = try StorageI32.linspace(allocator, 1, 10, 30);
     defer s1.deinit();
 
-    log.print(@src(), "s1: {f} data_slice: {any}\n", .{ s1, s1.dataSlice() });
+    std.debug.print("s1: {f} data_slice: {any}\n", .{ s1, s1.dataSlice() });
 
-    try std.testing.expect(s1.len() == 10);
+    try std.testing.expect(s1.len() == 30);
 }
 
 test "random" {
@@ -301,7 +294,7 @@ test "random" {
     try std.testing.expect(s1.len() == 100);
     try std.testing.expect(s2.len() == 100);
 
-    log.print(@src(), "s1: {f} s2: {f}\n", .{ s1, s2 });
+    std.debug.print(@src(), "s1: {f} s2: {f}\n", .{ s1, s2 });
 }
 
 test "cat" {

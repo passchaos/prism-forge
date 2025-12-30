@@ -133,15 +133,8 @@ pub fn Layout(comptime SI: []const usize) type {
             return ShapeIterator(SI).init();
         }
 
-        pub fn clone(self: *const Self) Self {
-            return Self{
-                ._shape = self._shape,
-                ._stride = self._stride,
-            };
-        }
-
         pub fn equal(self: Self, other: Self) bool {
-            return std.mem.eql(usize, &self._shape, &self._shape) and std.mem.eql(usize, &self._stride, &other._stride);
+            return (self.shape() == other.shape()) and (self.stride() == other.stride());
         }
 
         pub fn size(_: *const Self) usize {
@@ -149,8 +142,8 @@ pub fn Layout(comptime SI: []const usize) type {
             return comptime product(SI);
         }
 
-        pub fn ndim(self: *const Self) usize {
-            return self._shape.len;
+        pub fn ndim(_: *const Self) usize {
+            return N;
         }
 
         pub fn shape(_: *const Self) [N]usize {
@@ -178,50 +171,29 @@ pub fn Layout(comptime SI: []const usize) type {
     };
 }
 
-pub fn cat(comptime layouts: anytype, comptime dim: usize) Layout(&computeCattedShape(
-    layouts,
+pub fn cat(layouts: anytype, comptime dim: usize) Layout(&computeCattedShape(
+    @TypeOf(layouts),
     dim,
 )) {
-    const new_shape = comptime computeCattedShape(layouts, dim);
+    const new_shape = comptime computeCattedShape(@TypeOf(layouts), dim);
 
     return Layout(&new_shape).init();
 }
 
-// pub fn stack(layouts: []const Self, dim: usize) !Layout(N + 1) {
-//     if (layouts.len == 0) return error.EmptyShapes;
+pub fn stack(layouts: anytype, comptime dim: usize) Layout(&computeStackedShape(@TypeOf(layouts), dim)) {
+    const new_shape = comptime computeStackedShape(@TypeOf(layouts), dim);
 
-//     {
-//         const base_shape = layouts[0].shape();
-//         for (layouts) |shape_i| {
-//             if (!std.mem.eql(usize, &base_shape, &shape_i.shape())) {
-//                 return error.ShapeMustBeEqual;
-//             }
-//         }
-//     }
+    return Layout(&new_shape).init();
+}
 
-//     const count = layouts.len;
-//     var base_shape = [_]usize{0} ** (N + 1);
-
-//     var i: usize = 0;
-//     var j: usize = 0;
-//     while (i < N + 1) {
-//         if (i == dim) {
-//             base_shape[i] = count;
-//             i += 1;
-//         }
-//         base_shape[i] = layouts[0].shape()[j];
-
-//         i += 1;
-//         j += 1;
-//     }
-
-//     return Layout(N + 1).init(base_shape);
-// }
-
-fn computeCattedDims(comptime layouts: anytype) usize {
-    switch (@typeInfo(@TypeOf(layouts))) {
+fn computeCattedDims(comptime layouts_type: type) usize {
+    switch (@typeInfo(layouts_type)) {
         .@"struct" => |si| {
             if (si.fields.len == 0) @compileError("Empty layouts");
+
+            const s_type = si.fields[0].type;
+
+            if (!@hasDecl(s_type, "IS_LAYOUT")) @compileError("must be a layout");
 
             const dims = comptime si.fields[0].type.N;
 
@@ -237,20 +209,22 @@ fn computeCattedDims(comptime layouts: anytype) usize {
 
             return dims;
         },
-        else => @compileError("Unsupported type " ++ @typeName(@TypeOf(layouts))),
+        else => @compileError("Unsupported type " ++ @typeName(layouts_type)),
     }
 }
 
-fn computeCattedShape(comptime layouts: anytype, comptime dim: usize) [computeCattedDims(layouts)]usize {
-    switch (@typeInfo(@TypeOf(layouts))) {
-        .@"struct" => {
+fn computeCattedShape(comptime layouts_type: type, comptime dim: usize) [computeCattedDims(layouts_type)]usize {
+    switch (@typeInfo(layouts_type)) {
+        .@"struct" => |si| {
             // const N = comptime computeCattedDims(layouts);
-            comptime var base_shape = layouts[0].shape();
+            comptime var base_shape = utils.array.comptimeSliceToArray(si.fields[0].type.S);
+            // comptime var base_shape = layouts[0].shape();
 
             comptime {
-                for (layouts, 0..) |layout, l_idx| {
-                    if (l_idx == 0) continue;
-                    const l_shape = layout.shape();
+                for (si.fields, 0..) |field, f_idx| {
+                    if (f_idx == 0) continue;
+
+                    const l_shape = field.type.S;
 
                     for (l_shape, 0..) |l_dim, idx| {
                         if (idx == dim) {
@@ -258,7 +232,7 @@ fn computeCattedShape(comptime layouts: anytype, comptime dim: usize) [computeCa
                         } else if (l_dim != base_shape[idx]) {
                             @compileError("Layouts must have the same shape except at dimension " ++ std.fmt.comptimePrint(
                                 "{} l_idx: {} l_dim: {} base_shape[idx]: {}",
-                                .{ dim, l_idx, l_dim, base_shape[idx] },
+                                .{ dim, f_idx, l_dim, base_shape[idx] },
                             ));
                         }
                     }
@@ -266,6 +240,61 @@ fn computeCattedShape(comptime layouts: anytype, comptime dim: usize) [computeCa
             }
 
             return base_shape;
+        },
+        else => @compileError("Unsupported type"),
+    }
+}
+
+fn computeStackedDims(comptime layouts_type: type) usize {
+    switch (@typeInfo(layouts_type)) {
+        .@"struct" => |si| {
+            if (si.fields.len == 0) @compileError("Empty layouts");
+
+            const s_type = si.fields[0].type;
+
+            if (!@hasDecl(s_type, "IS_LAYOUT")) @compileError("must be a layout");
+
+            comptime {
+                for (si.fields) |field| {
+                    if (field.type != s_type) @compileError("Layouts must have the same type");
+                }
+            }
+
+            return s_type.N + 1;
+        },
+        else => @compileError("Unsupported type"),
+    }
+}
+
+fn computeStackedShape(comptime layouts_type: type, comptime dim: usize) [computeStackedDims(layouts_type)]usize {
+    switch (@typeInfo(layouts_type)) {
+        .@"struct" => |si| {
+            if (si.fields.len == 0) {
+                @compileError("layouts must not be empty");
+            }
+
+            const base_shape = utils.array.comptimeSliceToArray(si.fields[0].type.S);
+            const N = base_shape.len;
+
+            comptime var shape_i = [_]usize{0} ** (N + 1);
+
+            comptime {
+                var i: usize = 0;
+                var j: usize = 0;
+
+                while (i < N + 1) {
+                    if (i == dim) {
+                        shape_i[i] = si.fields.len;
+                        i += 1;
+                    }
+
+                    shape_i[i] = base_shape[j];
+                    i += 1;
+                    j += 1;
+                }
+            }
+
+            return shape_i;
         },
         else => @compileError("Unsupported type"),
     }
@@ -377,30 +406,17 @@ test "unsqueeze" {
 test "cat or stack" {
     const Layout_2x3x4 = Layout(&.{ 2, 3, 4 });
     const Layout_1x3x4 = Layout(&.{ 1, 3, 4 });
-    // const Layout_2x3x4 = Layout(&.{ 2, 3, 4 });
 
-    const lc = cat(.{ Layout_2x3x4.init(), Layout_1x3x4.init(), Layout_2x3x4.init() }, 0);
+    const l1 = Layout_2x3x4.init();
+    const l2 = Layout_1x3x4.init();
+    const l3 = Layout_2x3x4.init();
+
+    const lc = cat(.{ l1, l2, l3 }, 0);
 
     try std.testing.expectEqual([3]usize{ 5, 3, 4 }, lc.shape());
 
-    // const lc = try Layout3.cat(&.{ l1, l2, l3 }, 0);
-
-    // try std.testing.expectError(error.IncompatibleShapes, Layout3.cat(&.{ l1, l2, l3 }, 2));
-
-    // try std.testing.expectError(error.ShapeMustBeEqual, Layout3.stack(&.{ l1, l2, l3 }, 2));
-
-    // const ls = try Layout3.stack(&.{ l1, l3 }, 2);
-    // try std.testing.expectEqualDeep(ls.shape(), [4]usize{ 2, 3, 2, 4 });
-    // log.print(@src(), "lc: {f} ls: {f}\n", .{ lc, ls });
-
-    // log.print(@src(), "layout: {f}\n", .{layout});
-    // const stacked = try layout.stack(1, layout);
-    // try std.testing.expectEqual(stacked._shape, [_]usize{ 2, 2, 3, 4 });
-    // try std.testing.expectEqual(stacked._stride, [_]usize{ 12, 12, 4, 1 });
-
-    // const cat = try layout.cat(1, layout);
-    // try std.testing.expectEqual(cat._shape, [_]usize{ 2, 6, 4 });
-    // try std.testing.expectEqual(cat._stride, [_]usize{ 12, 4, 1 });
+    const ls = stack(.{ l1, l3 }, 2);
+    try std.testing.expectEqualDeep([4]usize{ 2, 3, 2, 4 }, ls.shape());
 }
 
 pub fn initShapeIterator(arr: anytype) ShapeIterator(utils.array.getArrayShapeComp(@TypeOf(arr))[0]) {

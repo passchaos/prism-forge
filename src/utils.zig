@@ -1,5 +1,12 @@
 const std = @import("std");
 const log = @import("log.zig");
+const storage = @import("storage.zig");
+
+pub const stt = struct {
+    pub fn getFieldsLenComptime(comptime T: type) usize {
+        return @typeInfo(T).@"struct".fields.len;
+    }
+};
 
 pub const array = struct {
     pub fn comptimeSliceToArray(comptime S: []const usize) [S.len]usize {
@@ -209,6 +216,166 @@ pub const array = struct {
 };
 
 pub const tensor = struct {
+    pub fn computeTensorsElementType(comptime tensors_type: type) type {
+        switch (@typeInfo(tensors_type)) {
+            .@"struct" => |si| {
+                const base_type = comptime si.fields[0].type.T;
+
+                comptime {
+                    for (si.fields) |field| {
+                        if (field.type.T != base_type) {
+                            @compileError("Layouts must have the same element type");
+                        }
+                    }
+                }
+
+                return base_type;
+            },
+            else => @compileError("Unsupported type " ++ @typeName(tensors_type)),
+        }
+    }
+    pub fn computeCattedTensorShapeLen(comptime tensors_type: type) usize {
+        switch (@typeInfo(tensors_type)) {
+            .@"struct" => |si| {
+                if (si.fields.len == 0) @compileError("Empty layouts");
+
+                const dims = comptime si.fields[0].type.N;
+
+                comptime {
+                    for (si.fields) |field| {
+                        if (field.type.N != dims) {
+                            @compileError("Layouts must have the same number of dimensions");
+                        }
+                    }
+                }
+
+                return dims;
+            },
+            else => @compileError("Unsupported type"),
+        }
+    }
+    pub fn computeCattedTensorShape(comptime tensors_type: type, comptime dim: usize) [computeCattedTensorShapeLen(tensors_type)]usize {
+        switch (@typeInfo(tensors_type)) {
+            .@"struct" => |si| {
+                comptime var base_shape = array.comptimeSliceToArray(si.fields[0].type.S);
+
+                comptime {
+                    for (si.fields, 0..) |tensor_i, l_idx| {
+                        if (l_idx == 0) continue;
+                        const l_shape = array.comptimeSliceToArray(tensor_i.type.S);
+
+                        for (l_shape, 0..) |l_dim, idx| {
+                            if (idx == dim) {
+                                base_shape[idx] += l_dim;
+                            } else if (l_dim != base_shape[idx]) {
+                                @compileError("Layouts must have the same shape except at dimension " ++ std.fmt.comptimePrint(
+                                    "{} l_idx: {} l_dim: {} base_shape[idx]: {}",
+                                    .{ dim, l_idx, l_dim, base_shape[idx] },
+                                ));
+                            }
+                        }
+                    }
+                }
+
+                return base_shape;
+            },
+            else => @compileError("Unsupported type"),
+        }
+    }
+
+    pub fn computeStackedTensorShapeLen(comptime tensors_type: type) usize {
+        switch (@typeInfo(tensors_type)) {
+            .@"struct" => |si| {
+                if (si.fields.len == 0) @compileError("Empty layouts");
+
+                const dims = comptime si.fields[0].type.N;
+
+                comptime {
+                    for (si.fields) |field| {
+                        if (field.type.N != dims) {
+                            @compileError("Layouts must have the same number of dimensions");
+                        }
+                    }
+                }
+
+                return dims + 1;
+            },
+            else => @compileError("Unsupported type"),
+        }
+    }
+    pub fn computeStackedTensorShape(comptime tensors_type: type, comptime dim: usize) [computeStackedTensorShapeLen(tensors_type)]usize {
+        switch (@typeInfo(tensors_type)) {
+            .@"struct" => |si| {
+                const base_shape = array.comptimeSliceToArray(si.fields[0].type.S);
+
+                comptime {
+                    for (si.fields, 0..) |field, idx| {
+                        const f_shape = array.comptimeSliceToArray(field.type.S);
+                        if (!std.mem.eql(usize, &f_shape, &base_shape)) {
+                            @compileError("Layouts must have the same number of dimensions: " ++ std.fmt.comptimePrint("base shape: {any} meet invalid shape: {any} invalid idx: {}\n", .{
+                                base_shape,
+                                f_shape,
+                                idx,
+                            }));
+                        }
+                    }
+                }
+
+                const N = base_shape.len;
+
+                comptime var shape_i = [_]usize{0} ** (N + 1);
+
+                comptime {
+                    var i: usize = 0;
+                    var j: usize = 0;
+
+                    while (i < N + 1) {
+                        if (i == dim) {
+                            shape_i[i] = si.fields.len;
+                            i += 1;
+                        }
+
+                        shape_i[i] = base_shape[j];
+                        i += 1;
+                        j += 1;
+                    }
+                }
+
+                return shape_i;
+            },
+            else => @compileError("Unsupported type"),
+        }
+    }
+    pub fn computeTensorsStorages(tensors: anytype) [stt.getFieldsLenComptime(@TypeOf(tensors))]storage.Storage(
+        computeTensorsElementType(@TypeOf(tensors)),
+        .Cpu,
+    ) {
+        var storages = [_]storage.Storage(
+            computeTensorsElementType(@TypeOf(tensors)),
+            .Cpu,
+        ){undefined} ** stt.getFieldsLenComptime(@TypeOf(tensors));
+
+        switch (@typeInfo(@TypeOf(tensors))) {
+            .@"struct" => |si| {
+                inline for (0..si.fields.len) |idx| {
+                    // switch (@typeInfo(field.type)) {
+                    //     .@"struct" => |sii| {
+                    //         inline for (sii.fields) |ff| {
+                    //             @compileLog("inner has field: {s} " ++ ff.name);
+                    //         }
+                    //     },
+                    //     else => @compileError("Unsupported type"),
+                    // }
+                    // @compileLog("field type: " ++ @typeName(field.type));
+                    storages[idx] = @field(tensors[idx], "storage");
+                }
+            },
+            else => @compileError("Unsupported type"),
+        }
+
+        return storages;
+    }
+
     pub fn matmulResultNDimComp(comptime T1: type, comptime T2: type) usize {
         const DIM1 = T1.DIMS;
         const DIM2 = T2.DIMS;
