@@ -312,11 +312,7 @@ pub const tensor = struct {
                     for (si.fields, 0..) |field, idx| {
                         const f_shape = array.comptimeSliceToArray(field.type.S);
                         if (!std.mem.eql(usize, &f_shape, &base_shape)) {
-                            @compileError("Layouts must have the same number of dimensions: " ++ std.fmt.comptimePrint("base shape: {any} meet invalid shape: {any} invalid idx: {}\n", .{
-                                base_shape,
-                                f_shape,
-                                idx,
-                            }));
+                            @compileError("Layouts must have the same number of dimensions: " ++ std.fmt.comptimePrint("base shape: {any} meet invalid shape: {any} invalid idx: {}\n", .{ base_shape, f_shape, idx }));
                         }
                     }
                 }
@@ -688,9 +684,9 @@ pub fn computeArrayShapeStrides(comptime N: usize, shapes: [N]usize) [N]usize {
     return strides;
 }
 
-pub fn computeStrides(comptime N: usize, shape: [N]usize) [N]usize {
-    var new_stride = [_]usize{0} ** N;
+pub fn computeStrides(comptime shape: []const usize) [shape.len]usize {
     const rank = shape.len;
+    var new_stride = [_]usize{0} ** rank;
 
     // handle zero-dimensional tensor
     if (rank == 0) {
@@ -708,10 +704,10 @@ pub fn computeStrides(comptime N: usize, shape: [N]usize) [N]usize {
     return new_stride;
 }
 
-pub fn indexShapeToFlat(comptime N: usize, shape: [N]usize, index: [N]usize) !usize {
-    const stride = computeStrides(N, shape);
+pub fn indexShapeToFlat(comptime shape_a: []const usize, index: [shape_a.len]usize) !usize {
+    const stride = computeStrides(shape_a);
 
-    return try indexToFlat(&index, &shape, &stride);
+    return try indexToFlat(&index, shape_a, &stride);
 }
 
 pub fn indexToFlat(indices: []const usize, shape: []const usize, stride_a: []const usize) anyerror!usize {

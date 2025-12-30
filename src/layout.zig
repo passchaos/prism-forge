@@ -28,13 +28,17 @@ pub fn Layout(comptime SI: []const usize) type {
             var i: usize = SI.len;
 
             while (i > 0) : (i -= 1) {
-                const dim = SI[i - 1];
-                const stride_val = strides_a[i - 1];
-
-                if (stride_val != expected_stride) {
-                    return false;
+                if (SI.len == 0) {
+                    return true;
                 } else {
-                    expected_stride *= dim;
+                    const dim = SI[i - 1];
+                    const stride_val = strides_a[i - 1];
+
+                    if (stride_val != expected_stride) {
+                        return false;
+                    } else {
+                        expected_stride *= dim;
+                    }
                 }
             }
 
@@ -72,12 +76,11 @@ pub fn Layout(comptime SI: []const usize) type {
 
         pub fn permute(self: *const Self, comptime perm: [N]usize) Layout(
             &computePermutedShape(
-                N,
                 SI,
-                perm,
+                &perm,
             ),
         ) {
-            const new_shape = comptime computePermutedShape(N, SI, perm);
+            const new_shape = comptime computePermutedShape(SI, &perm);
 
             var new_strides = self._stride;
 
@@ -184,6 +187,20 @@ pub fn stack(layouts: anytype, comptime dim: usize) Layout(&computeStackedShape(
     const new_shape = comptime computeStackedShape(@TypeOf(layouts), dim);
 
     return Layout(&new_shape).init();
+}
+
+pub fn computePermutedShape(comptime shape_a: []const usize, comptime perm: []const usize) [shape_a.len]usize {
+    var new_shape = [_]usize{0} ** shape_a.len;
+    for (perm, 0..) |p, idx| {
+        for (0..idx) |idx_i| {
+            if (perm[idx_i] == perm[idx]) {
+                @compileError("perm can't have duplicate idx" ++ std.fmt.comptimePrint("{any}", perm));
+            }
+        }
+
+        new_shape[idx] = shape_a[p];
+    }
+    return new_shape;
 }
 
 fn computeCattedDims(comptime layouts_type: type) usize {
@@ -325,27 +342,12 @@ fn computeShapeSize(comptime shape: []const usize) usize {
     return size;
 }
 
-fn computePermutedShape(comptime N: usize, comptime shape: []const usize, comptime perm: [N]usize) [N]usize {
-    var new_shape = [_]usize{0} ** N;
-
-    for (perm, 0..) |i, idx| {
-        for (0..idx) |idx_i| {
-            if (perm[idx_i] == perm[idx]) {
-                @compileError("perm can't have duplicate idx" ++ std.fmt.comptimePrint("{any}", perm));
-            }
-        }
-
-        new_shape[idx] = shape[i];
-    }
-    return new_shape;
-}
-
 fn computeSliceShapeStrides(comptime N: usize, shape: []const usize) [N]usize {
     var new_stride = [_]usize{0} ** N;
     const rank = shape.len;
 
     // handle zero-dimensional tensor
-    if (rank == 0) {
+    if (N == 0) {
         return new_stride;
     }
 

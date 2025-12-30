@@ -285,43 +285,55 @@ pub fn Tensor(comptime SA: []const usize, comptime TA: type, comptime storage_ar
 
         // scope method
         // divide
-        pub fn split(self: *const Self, allocator: std.mem.Allocator, chunk_size: usize, dim: usize) ![]const Self {
-            if (dim >= self.ndim()) return error.InvalidDim;
+        // fn computeSplitShape(comptime chunk_size: usize, comptime dim: usize) [N]usize {
+        //     if (chunk_size == 0) @compileError("chunk_size must be greater than 0");
+        //     if (dim >= N) @compileError("dim must be less than N");
+        //     if (S[dim] % chunk_size != 0) @compileError("chunk_size must divide dim_len");
 
-            const dim_len = self.shape()[dim];
-            if (chunk_size == 0 or chunk_size > dim_len) return error.InvalidSplit;
+        //     var new_shape = utils.array.comptimeSliceToArray(S);
+        //     new_shape[dim] = chunk_size;
 
-            const num_splits = (dim_len + chunk_size - 1) / chunk_size;
-            var result = try allocator.alloc(Self, num_splits);
+        //     return new_shape;
+        // }
+        // pub fn split(self: *const Self, allocator: std.mem.Allocator, comptime chunk_size: usize, comptime dim: usize) ![chunk_size]Tensor(
+        //     &computeSplitShape(chunk_size, dim),
+        //     T,
+        //     .{},
+        // ) {
+        //     const new_shape = computeSplitShape(chunk_size, dim);
+        //     const new_tensor_t = Tensor(&new_shape, T, .{});
 
-            var offset: usize = 0;
-            for (0..num_splits) |i| {
-                const chunk_size_i = if ((offset + chunk_size) <= dim_len) chunk_size else (dim_len - offset);
+        //     const num_splits = S[dim] / chunk_size;
+        //     var result = try allocator.alloc(Self, num_splits);
 
-                var new_shape = self.shape();
-                new_shape[dim] = chunk_size_i;
+        //     var offset: usize = 0;
+        //     for (0..num_splits) |i| {
+        //         const chunk_size_i = if ((offset + chunk_size) <= dim_len) chunk_size else (dim_len - offset);
 
-                // must use old strides
-                const new_strides = self.stride();
+        //         var new_shape = self.shape();
+        //         new_shape[dim] = chunk_size_i;
 
-                const layout = Layout.initRaw(new_shape, new_strides);
-                result[i] = try Self.fromDataImpl(layout, self.storage.shared(), self._storage_offset + offset * self.stride()[dim]);
+        //         // must use old strides
+        //         const new_strides = self.stride();
 
-                offset += chunk_size_i;
-            }
+        //         const layout = Layout.initRaw(new_shape, new_strides);
+        //         result[i] = try Self.fromDataImpl(layout, self.storage.shared(), self._storage_offset + offset * self.stride()[dim]);
 
-            return result;
-        }
+        //         offset += chunk_size_i;
+        //     }
 
-        pub fn chunk(self: *const Self, allocator: std.mem.Allocator, chunk_count: usize, dim: usize) ![]const Self {
-            if (dim >= self.ndim()) return error.InvalidDim;
+        //     return result;
+        // }
 
-            const dim_len = self.shape()[dim];
-            if (chunk_count == 0 or chunk_count > dim_len) return error.InvalidSplit;
+        // pub fn chunk(self: *const Self, allocator: std.mem.Allocator, chunk_count: usize, dim: usize) ![]const Self {
+        //     if (dim >= self.ndim()) return error.InvalidDim;
 
-            const chunk_size_i = (dim_len + chunk_count - 1) / chunk_count;
-            return try self.split(allocator, chunk_size_i, dim);
-        }
+        //     const dim_len = self.shape()[dim];
+        //     if (chunk_count == 0 or chunk_count > dim_len) return error.InvalidSplit;
+
+        //     const chunk_size_i = (dim_len + chunk_count - 1) / chunk_count;
+        //     return try self.split(allocator, chunk_size_i, dim);
+        // }
 
         pub fn dataItem(self: *const Self) !T {
             var data_iter = self.shapeIter();
@@ -334,45 +346,45 @@ pub fn Tensor(comptime SA: []const usize, comptime TA: type, comptime storage_ar
             }
         }
 
-        pub fn unbind(self: *const Self, allocator: std.mem.Allocator, dim: usize) ![]const Tensor(N - 1, storage_args) {
-            if (dim >= self.ndim()) return error.InvalidDim;
+        // pub fn unbind(self: *const Self, allocator: std.mem.Allocator, dim: usize) ![]const Tensor(N - 1, storage_args) {
+        //     if (dim >= self.ndim()) return error.InvalidDim;
 
-            const dim_len = self.shape()[dim];
+        //     const dim_len = self.shape()[dim];
 
-            const NT = Tensor(N - 1, storage_args);
+        //     const NT = Tensor(N - 1, storage_args);
 
-            var result = try allocator.alloc(NT, dim_len);
+        //     var result = try allocator.alloc(NT, dim_len);
 
-            var offset: usize = 0;
-            for (0..dim_len) |idx| {
-                var new_shape = [_]usize{0} ** (N - 1);
-                var new_stride = [_]usize{0} ** (N - 1);
+        //     var offset: usize = 0;
+        //     for (0..dim_len) |idx| {
+        //         var new_shape = [_]usize{0} ** (N - 1);
+        //         var new_stride = [_]usize{0} ** (N - 1);
 
-                {
-                    var i: usize = 0;
-                    var j: usize = 0;
+        //         {
+        //             var i: usize = 0;
+        //             var j: usize = 0;
 
-                    while (j < N) {
-                        if (j == dim) {
-                            j += 1;
-                        } else {
-                            new_shape[i] = self.shape()[j];
-                            new_stride[i] = self.stride()[j];
+        //             while (j < N) {
+        //                 if (j == dim) {
+        //                     j += 1;
+        //                 } else {
+        //                     new_shape[i] = self.shape()[j];
+        //                     new_stride[i] = self.stride()[j];
 
-                            i += 1;
-                            j += 1;
-                        }
-                    }
-                }
+        //                     i += 1;
+        //                     j += 1;
+        //                 }
+        //             }
+        //         }
 
-                const layout = layout_t.Layout(N - 1).initRaw(new_shape, new_stride);
-                result[idx] = try NT.fromDataImpl(layout, self.storage.shared(), self._storage_offset + offset * self.stride()[dim]);
+        //         const layout = layout_t.Layout(N - 1).initRaw(new_shape, new_stride);
+        //         result[idx] = try NT.fromDataImpl(layout, self.storage.shared(), self._storage_offset + offset * self.stride()[dim]);
 
-                offset += 1;
-            }
+        //         offset += 1;
+        //     }
 
-            return result;
-        }
+        //     return result;
+        // }
 
         pub fn oneHot(self: *const Self, comptime TT: type, num_classes: ?usize) !Tensor(N + 1, .{ .T = TT }) {
             switch (@typeInfo(T)) {
@@ -1404,7 +1416,7 @@ pub fn Tensor(comptime SA: []const usize, comptime TA: type, comptime storage_ar
 
         pub fn contiguous(self: Self) !Self {
             if (self.layout.isContiguous()) {
-                return self;
+                return self.sharedView(.{});
             }
 
             // std.debug.print("run contiguous action\n", .{});
@@ -1413,7 +1425,7 @@ pub fn Tensor(comptime SA: []const usize, comptime TA: type, comptime storage_ar
 
             var data_iter = self.shapeIter();
 
-            const layout = Layout.init(self.shape());
+            const layout = Layout.init();
 
             while (data_iter.next()) |idx| {
                 const flat_idx = try utils.indexToFlat(&idx, &layout.shape(), &layout.stride());
@@ -1447,7 +1459,7 @@ pub fn Tensor(comptime SA: []const usize, comptime TA: type, comptime storage_ar
             return self.storage.dataSlice()[idx];
         }
 
-        pub fn setData(self: *Self, indices: anytype, value: T) !void {
+        pub fn setData(self: *Self, indices: [N]usize, value: T) !void {
             var idx = try utils.indexToFlat(&indices, &self.shape(), &self.stride());
             idx += self._storage_offset;
 
@@ -1455,123 +1467,148 @@ pub fn Tensor(comptime SA: []const usize, comptime TA: type, comptime storage_ar
         }
 
         // layout view method
-        pub fn sharedView(self: *const Self, slice_views: anytype) !Tensor(
-            N - View.resultSqueezeDim(@TypeOf(slice_views)),
-            .{ .T = T },
-        ) {
+        fn computeSharedViewShapeErasedPrefixSize(comptime slice_views: anytype) usize {
             switch (@typeInfo(@TypeOf(slice_views))) {
-                .array => |sva| {
-                    const SVN = sva.len;
+                .@"struct" => |si| {
+                    comptime var erased_size: usize = 0;
 
-                    switch (@typeInfo(sva.child)) {
-                        .@"struct" => {
-                            var base_idx = [_]usize{0} ** N;
-                            var new_shape = [_]usize{0} ** N;
-
-                            for (0..N) |i| {
-                                if (i >= SVN) {
-                                    new_shape[i] = self.shape()[i];
-                                } else {
-                                    const sv = slice_views[i];
-                                    const dim_start = sv.start;
-
-                                    const dim_end = @min(sv.end, self.shape()[i]);
-                                    std.debug.print("dim start: {} end: {}\n", .{ dim_start, dim_end });
-
-                                    if (dim_start >= dim_end) return error.InvalidSliceRange;
-
-                                    base_idx[i] = dim_start;
-                                    new_shape[i] = dim_end - dim_start;
-                                }
-                            }
-
-                            var base_offset = try utils.indexToFlat(&base_idx, &self.shape(), &self.stride());
-                            base_offset += self._storage_offset;
-
-                            const new_layout = Layout.initRaw(new_shape, self.stride());
-
-                            const new_storage = self.storage.shared();
-
-                            return Self{
-                                ._base = self,
-                                .storage = new_storage,
-                                .layout = new_layout,
-                                ._storage_offset = base_offset,
-                            };
-                        },
-                        .int, .comptime_int => {
-                            var new_slice_views = [_]View.Range{.{ .start = 0, .end = 0 }} ** SVN;
-
-                            for (slice_views, 0..) |svo, i| {
-                                if (svo >= self.shape()[i]) return error.OutOfBounds;
-
-                                new_slice_views[i].start = @intCast(svo);
-                                new_slice_views[i].end = @intCast(svo + 1);
-                            }
-
-                            const RN = N - SVN;
-                            var base_idx = [_]usize{0} ** N;
-                            var new_shape = [_]usize{0} ** RN;
-
-                            for (0..N) |i| {
-                                if (i >= SVN) {
-                                    if (RN > 0) {
-                                        new_shape[i - SVN] = self.shape()[i];
-                                    }
-                                } else {
-                                    base_idx[i] = slice_views[i];
-                                }
-                            }
-
-                            var base_offset = try utils.indexToFlat(&base_idx, &self.shape(), &self.stride());
-                            base_offset += self._storage_offset;
-
-                            const new_layout = layout_t.Layout(RN).init(new_shape);
-                            const new_storage = self.storage.shared();
-
-                            return Tensor(RN, .{ .T = T }){
-                                ._base = self,
-                                .storage = new_storage,
-                                .layout = new_layout,
-                                ._storage_offset = base_offset,
-                            };
-                        },
-                        else => @compileError("unsupported slice view item type"),
+                    inline for (si.fields) |field| {
+                        switch (@typeInfo(field.type)) {
+                            .int, .comptime_int => erased_size += 1,
+                            else => break,
+                        }
                     }
-                },
-                else => {
-                    const new_storage = self.storage.shared();
 
-                    return Self{
-                        ._base = self,
-                        .storage = new_storage,
-                        .layout = self.layout.clone(),
-                        ._storage_offset = self._storage_offset,
-                    };
+                    return erased_size;
                 },
+                else => @compileError("Unsupported type for computeSharedViewShapeLen"),
             }
         }
 
-        pub fn transpose_(self: *Self) void {
-            if (N != 2) @compileError("only support 2d tensor");
-            self.layout = self.layout.transpose(0, 1) catch unreachable;
+        const ComputeRangeOffset = struct {
+            shape: [N]usize,
+            offset: usize,
+        };
+
+        const Range = struct {
+            start: usize,
+            end: usize,
+        };
+
+        fn computeSliceViewRanges(comptime slice_views: anytype) [utils.stt.getFieldsLenComptime(@TypeOf(slice_views))]Range {
+            switch (@typeInfo(@TypeOf(slice_views))) {
+                .@"struct" => |si| {
+                    const FN = si.fields.len;
+
+                    comptime var ranges = [_]Range{undefined} ** FN;
+
+                    inline for (0..FN) |i| {
+                        const range = switch (@typeInfo(si.fields[i].type)) {
+                            .int, .comptime_int => blk: {
+                                const v = slice_views[i];
+
+                                if (v >= SA[i]) {
+                                    @compileLog("Invalid slice view: " ++ std.fmt.comptimePrint("SA[{d}] = {d}, slice_views[{d}] = {d}\n", .{ i, SA[i], i, v }));
+                                    @compileError("Slice view out of bounds");
+                                }
+
+                                break :blk Range{ .start = v, .end = v + 1 };
+                            },
+                            .@"struct" => blk: {
+                                const ran = @as(struct { usize, usize }, slice_views[i]);
+                                const start = ran.@"0";
+                                const end = ran.@"1";
+
+                                if (start > end) {
+                                    @compileError("Invalid slice view: " ++ std.fmt.comptimePrint("SA[{d}] = {d}, slice_views[{d}] = {any}\n", .{ i, SA[i], i, ran }));
+                                }
+
+                                if ((start >= SA[i]) or (end > SA[i])) {
+                                    @compileError("Invalid slice view: " ++ std.fmt.comptimePrint("SA[{d}] = {d}, slice_views[{d}] = {any}\n", .{ i, SA[i], i, ran }));
+                                }
+
+                                break :blk Range{ .start = start, .end = end };
+                            },
+                            else => @compileError("Unsupported type for slice_views"),
+                        };
+
+                        ranges[i] = range;
+                    }
+                    return ranges;
+                },
+                else => @compileError("Unsupported type for slice_views"),
+            }
         }
 
-        pub fn transpose(self: *const Self) Self {
-            if (N != 2) @compileError("only support 2d tensor");
-            const new_layout = self.layout.transpose(0, 1) catch unreachable;
+        fn computeSharedViewBaseOffset(comptime slice_views: anytype) usize {
+            const ranges = computeSliceViewRanges(slice_views);
+
+            comptime var base_idx = [_]usize{0} ** N;
+            inline for (ranges, 0..) |range, i| {
+                base_idx[i] = range.start;
+            }
+
+            const base_offset = comptime utils.indexShapeToFlat(SA, base_idx) catch unreachable;
+            return base_offset;
+        }
+
+        fn computeSharedViewShape(comptime slice_views: anytype) [N - computeSharedViewShapeErasedPrefixSize(slice_views)]usize {
+            const ranges = computeSliceViewRanges(slice_views);
+            comptime var base_shape = utils.array.comptimeSliceToArray(SA);
+
+            inline for (ranges, 0..) |range, i| {
+                base_shape[i] = range.end - range.start;
+            }
+
+            const erased_prefix = comptime computeSharedViewShapeErasedPrefixSize(slice_views);
+
+            comptime var shape_i = [_]usize{0} ** (N - erased_prefix);
+
+            inline for (erased_prefix..N) |i| {
+                shape_i[i - erased_prefix] = base_shape[i];
+            }
+
+            return shape_i;
+        }
+
+        pub fn sharedView(self: *const Self, comptime slice_views: anytype) Tensor(
+            &computeSharedViewShape(slice_views),
+            T,
+            .{},
+        ) {
+            const new_shape = comptime computeSharedViewShape(slice_views);
+            const base_offset = comptime computeSharedViewBaseOffset(slice_views);
+
+            const erased_prefix = comptime computeSharedViewShapeErasedPrefixSize(slice_views);
+
+            var new_stride = [_]usize{0} ** new_shape.len;
+
+            inline for (erased_prefix..N) |i| {
+                new_stride[i - erased_prefix] = self.stride()[i];
+            }
+
+            return Tensor(&new_shape, T, .{}){
+                ._base = self,
+                .storage = self.storage.shared(),
+                .layout = layout_t.Layout(&new_shape).initRaw(new_stride),
+                ._storage_offset = self._storage_offset + base_offset,
+            };
+        }
+
+        pub fn transpose(self: *const Self) Tensor(&layout_t.computePermutedShape(SA, &.{ 1, 0 }), T, .{}) {
+            return self.permute([_]usize{ 1, 0 });
+        }
+
+        pub fn permute(self: *const Self, comptime perm: [N]usize) Tensor(&layout_t.computePermutedShape(SA, &perm), T, .{}) {
+            const new_layout = self.layout.permute(perm);
             const new_storage = self.storage.shared();
 
-            return Self{
+            return Tensor(&layout_t.computePermutedShape(SA, &perm), T, .{}){
                 ._base = self,
                 .storage = new_storage,
                 .layout = new_layout,
                 ._storage_offset = self._storage_offset,
             };
-        }
-
-        pub fn permute_(self: *Self, perm: [N]usize) !void {
-            self.layout = try self.layout.permute(perm);
         }
 
         pub fn reshape(self: *const Self, new_shapes: anytype) !Tensor(
@@ -1607,8 +1644,8 @@ pub fn Tensor(comptime SA: []const usize, comptime TA: type, comptime storage_ar
         }
 
         // core method
-        pub fn shapeIter(self: *const Self) ShapeIterator {
-            return ShapeIterator.init(self.shape());
+        pub fn shapeIter(_: *const Self) ShapeIterator {
+            return ShapeIterator.init();
         }
 
         pub fn dataSliceRaw(self: *const Self) []T {
@@ -2228,58 +2265,60 @@ test "tensor create" {
     }
 }
 
-test "split" {
-    const allocator = std.testing.allocator;
+// test "split" {
+//     const allocator = std.testing.allocator;
 
-    const t1 = try rand(allocator, [3]usize{ 5, 2, 3 }, 0.0, 1.0);
-    defer t1.deinit();
+//     const t1 = try rand(allocator, &.{ 5, 2, 3 }, 0.0, 1.0);
+//     defer t1.deinit();
 
-    std.debug.print("t1: {f}\n", .{t1});
+//     std.debug.print("t1: {f}\n", .{t1});
 
-    {
-        const result = try t1.split(allocator, 3, 0);
-        defer allocator.free(result);
-        for (result) |t| {
-            defer t.deinit();
-            std.debug.print("split t: {f}\n", .{t});
-        }
-    }
+//     {
+//         const result = try t1.split(allocator, 3, 0);
+//         defer allocator.free(result);
+//         for (result) |t| {
+//             defer t.deinit();
+//             std.debug.print("split t: {f}\n", .{t});
+//         }
+//     }
 
-    {
-        const result = try t1.chunk(allocator, 3, 0);
-        defer allocator.free(result);
-        for (result) |t| {
-            defer t.deinit();
-            std.debug.print("chunk t: {f}\n", .{t});
-        }
-    }
+//     {
+//         const result = try t1.chunk(allocator, 3, 0);
+//         defer allocator.free(result);
+//         for (result) |t| {
+//             defer t.deinit();
+//             std.debug.print("chunk t: {f}\n", .{t});
+//         }
+//     }
 
-    {
-        const result = try t1.unbind(allocator, 0);
-        defer allocator.free(result);
+//     {
+//         const result = try t1.unbind(allocator, 0);
+//         defer allocator.free(result);
 
-        for (result, 0..) |t, i| {
-            defer t.deinit();
-            try std.testing.expectEqual(t.storage.refCount(), 6 - i);
-        }
+//         for (result, 0..) |t, i| {
+//             defer t.deinit();
+//             try std.testing.expectEqual(t.storage.refCount(), 6 - i);
+//         }
 
-        for (result) |t| {
-            std.debug.print("unbind t: {f} storage refcount: {*}\n", .{ t, &t.storage._ref_count });
-        }
-    }
-}
+//         for (result) |t| {
+//             std.debug.print("unbind t: {f} storage refcount: {*}\n", .{ t, &t.storage._ref_count });
+//         }
+//     }
+// }
 
 test "contiguous test" {
     const allocator = std.testing.allocator;
 
-    var t1 = try rand(allocator, [2]usize{ 3, 5 }, 0.0, 5.0);
+    var t1 = try rand(allocator, &.{ 3, 5 }, 0.0, 5.0);
     defer t1.deinit();
 
     try std.testing.expect(t1.isContiguous());
     std.debug.print("t1: {f}\n", .{t1});
 
-    t1.transpose_();
-    try std.testing.expect(!t1.isContiguous());
+    var t2 = t1.transpose();
+    defer t2.deinit();
+
+    try std.testing.expect(!t2.isContiguous());
     std.debug.print("t1 transpose_: {f}\n", .{t1});
 
     const t1tc = try t1.contiguous();
@@ -2288,7 +2327,7 @@ test "contiguous test" {
     std.debug.print("t1tc: {f}\n", .{t1tc});
     try std.testing.expect(t1tc.layout.isContiguous());
 
-    try std.testing.expectEqual(try t1.getData([_]usize{ 3, 2 }), try t1tc.getData([_]usize{ 3, 2 }));
+    try std.testing.expectEqual(try t2.getData([_]usize{ 3, 2 }), try t1.getData([_]usize{ 2, 3 }));
 }
 
 test "map basic" {
@@ -2984,27 +3023,29 @@ test "gather_scatter_indexed" {
 test "shared_view" {
     const allocator = std.testing.allocator;
 
-    var input = try rand(allocator, [2]usize{ 3, 5 }, 2.0, 5.0);
+    var input = try rand(allocator, &.{ 3, 5 }, 2.0, 5.0);
     defer input.deinit();
 
-    var iv1 = try input.sharedView(null);
+    var iv1 = input.sharedView(.{});
     defer iv1.deinit();
     try std.testing.expectEqual(iv1.shape(), [2]usize{ 3, 5 });
 
-    var iv2 = try input.sharedView([1]usize{1});
+    var iv2 = input.sharedView(.{1});
     defer iv2.deinit();
     try std.testing.expectEqual(iv2.shape(), [1]usize{5});
 
-    var iv3 = try input.sharedView([2]usize{ 2, 4 });
+    var iv3 = input.sharedView(.{ 2, 4 });
     defer iv3.deinit();
     try std.testing.expectEqual(iv3.shape(), [0]usize{});
 
-    var iv4 = try input.sharedView([2]View.Range{ .{ .start = 1, .end = 3 }, .{ .start = 1, .end = 3 } });
+    var iv4 = input.sharedView(.{ .{ 1, 3 }, .{ 1, 3 } });
     defer iv4.deinit();
     try std.testing.expectEqual(iv4.shape(), [2]usize{ 2, 2 });
+    try iv4.setData([2]usize{ 0, 1 }, @as(f32, 3.0));
+    try iv4.setData([2]usize{ 1, 0 }, @as(f32, 4.0));
 
-    const iv5 = input.sharedView([2]View.Range{ .{ .start = 4, .end = 5 }, .{ .start = 1, .end = 3 } });
-    try std.testing.expectEqual(iv5, error.InvalidSliceRange);
+    try std.testing.expectEqual(@as(f32, 3.0), try input.getData([2]usize{ 1, 2 }));
+    try std.testing.expectEqual(@as(f32, 4.0), try input.getData([2]usize{ 2, 1 }));
 
     std.debug.print("input: {f} iv1= {f} iv2= {f} iv3= {f} iv4= {f}\n", .{ input, iv1, iv2, iv3, iv4 });
 }
