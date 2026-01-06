@@ -114,6 +114,11 @@ fn plotImpl() !void {
     const datasets_i = if (datasets) |ds| try ds.clone() else return error.NoDatasets;
     rwlock.unlockShared();
 
+    if (datasets_i.count() == 0) {
+        log.print(@src(), "No datasets to plot\n", .{});
+        return;
+    }
+
     var data_iter = datasets_i.iterator();
 
     var axis_info = if (data_iter.next()) |entry| entry.value_ptr.axisInfo() else return;
@@ -136,7 +141,7 @@ fn plotImpl() !void {
         .max = axis_info.x_max,
         .ticks = .{
             .side = .left_or_top,
-            .subticks = false,
+            .subticks = true,
         },
         .gridline_color = gridline_color,
         .subtick_gridline_color = subtick_gridline_color,
@@ -145,7 +150,7 @@ fn plotImpl() !void {
         .name = "Y Axis",
         .min = axis_info.y_min,
         .max = axis_info.y_max,
-        .ticks = .{ .side = .both, .subticks = false },
+        .ticks = .{ .side = .both, .subticks = true },
         .gridline_color = gridline_color,
         .subtick_gridline_color = subtick_gridline_color,
     };
