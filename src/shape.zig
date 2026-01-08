@@ -6,6 +6,37 @@ const utils = @import("utils.zig");
 //     named: []const u8,
 // };
 
+/// 通用ID生成器：同时支持编译时（comptime）和运行时（runtime）
+pub const IDGenerator = struct {
+    // 编译时计数器（仅编译时可见，无原子操作）
+    comptime_counter: u64 = 0,
+    // 运行时原子计数器（仅运行时生效）
+    runtime_counter: std.atomic.Atomic(u64) = std.atomic.Atomic(u64).init(0),
+
+    /// 通用next方法：自动适配编译时/运行时
+    pub fn next(self: *@This()) u64 {
+        if (@inComptime()) {
+            // 编译时：直接自增编译时计数器（无并发，无需原子操作）
+            const id = self.comptime_counter;
+            self.comptime_counter += 1;
+            return id;
+        } else {
+            // 运行时：使用原子操作自增（线程安全）
+            const id = self.runtime_counter.fetchAdd(1, .SeqCst);
+            return id;
+        }
+    }
+
+    /// 重置计数器（编译时/运行时均生效）
+    pub fn reset(self: *@This()) void {
+        if (@inComptime()) {
+            self.comptime_counter = 0;
+        } else {
+            self.runtime_counter.store(0, .SeqCst);
+        }
+    }
+};
+
 pub const DictEntry = struct {
     name: []const u8,
     value: usize,
@@ -35,7 +66,7 @@ pub fn isString(comptime st: type) bool {
     }
 }
 
-fn getSymbol(comptime dim: anytype) []const u8 {
+fn getSpecDimSymbol(comptime dim: anytype) []const u8 {
     switch (@typeInfo(@TypeOf(dim))) {
         .pointer => |pi| {
             if (!pi.is_const or pi.size != .one)
@@ -103,8 +134,8 @@ fn evalRuntimeDim(comptime dim: anytype, comptime dict: []const DictEntry) usize
     //     };
 }
 
-pub fn evalRuntimeShape(comptime S: type, comptime dict: []const DictEntry) [@typeInfo(S).@"struct".fields.len]usize {
-    const info = @typeInfo(S).@"struct";
+pub fn evalShape(comptime spec: type, comptime dict: []const DictEntry) [@typeInfo(spec).@"struct".fields.len]usize {
+    const info = @typeInfo(spec).@"struct";
     const N = info.fields.len;
 
     var out: [N]usize = undefined;
@@ -123,16 +154,16 @@ pub fn evalRuntimeShape(comptime S: type, comptime dict: []const DictEntry) [@ty
     return out;
 }
 
-pub fn dimsLen(comptime dims: anytype) usize {
-    return @typeInfo(@TypeOf(dims)).@"struct".fields.len;
+pub fn dimsLen(comptime spec: type) usize {
+    return @typeInfo(spec).@"struct".fields.len;
 }
 
-pub fn allStatic(comptime dims: anytype) bool {
-    return staticDimLen(dims) == @typeInfo(@TypeOf(dims)).@"struct".fields.len;
+pub fn allStatic(comptime spec: type) bool {
+    return staticDimLen(spec) == dimsLen(spec);
 }
 
-pub fn staticDimLen(comptime dims: anytype) usize {
-    const info = @typeInfo(@TypeOf(dims)).@"struct";
+pub fn staticDimLen(comptime spec: type) usize {
+    const info = @typeInfo(spec).@"struct";
 
     var count: usize = 0;
     inline for (info.fields) |f| {
@@ -142,10 +173,10 @@ pub fn staticDimLen(comptime dims: anytype) usize {
     return count;
 }
 
-pub fn staticDims(comptime dims: anytype) [staticDimLen(dims)]usize {
-    const info = @typeInfo(@TypeOf(dims)).@"struct";
+pub fn staticDims(comptime spec: type) [staticDimLen(spec)]usize {
+    const info = @typeInfo(spec).@"struct";
 
-    var out: [staticDimLen(dims)]usize = undefined;
+    var out: [staticDimLen(spec)]usize = undefined;
 
     var d: usize = 0;
     inline for (info.fields, 0..) |f, i| {
@@ -158,30 +189,67 @@ pub fn staticDims(comptime dims: anytype) [staticDimLen(dims)]usize {
     return out;
 }
 
-pub fn isBroadcastableComp(
+pub fn generateBroadcastStride(
+    comptime l_spec: anytype,
+    comptime r_spec: anytype,
+    l_shape: [staticDimLen(l_spec)]usize,
+    l_stride: [staticDimLen(l_spec)]usize,
+    r_shape: [staticDimLen(r_spec)]usize,
+    r_stride: [staticDimLen(r_spec)]usize,
+) [staticDimLen(r_spec)]usize {
+    const info = @typeInfo(@TypeOf(lts)).@"struct";
+
+    var out: [staticDimLen(lts)]usize = undefined;
+
+    var d: usize = 0;
+    inline for (info.fields, 0..) |f, i| {
+        if (f.type == usize or f.type == comptime_int) {
+            out[d] = if (lrs[i] == 1) rrs[i] else lrs[i];
+            d += 1;
+        }
+    }
+
+    return out;
+}
+
+pub fn isBroadcastUnableComp(
     comptime spec1: anytype,
     comptime spec2: anytype,
 ) bool {
-    const N1 = dimsLen(spec1);
-    const N2 = dimsLen(spec2);
+    const N1 = comptime dimsLen(spec1);
+    const N2 = comptime dimsLen(spec2);
 
-    if (N1 > N2) @compileError("can't broadcast to narrower shape");
+    if (N1 > N2) @compileError("can't broadcast to narrower shape " ++ std.fmt.comptimePrint("{} > {}\n", .{ N1, N2 }));
 
-    for (0..N2) |i| {
-        const d1 = getDimCompWithIdx(spec1, N1 - 1 - i);
-        const d2 = getDimCompWithIdx(spec2, N2 - 1 - i);
-        
+    inline for (0..N2) |i| {
+        const d1 = comptime getSpecDimWithIdx(spec1, N1 - 1 - i);
+        const d2 = comptime getSpecDimWithIdx(spec2, N2 - 1 - i);
+
         if (d1) |dl| {
-            
+            if (dl > 1) {
+                if (d2) |dr| {
+                    // 只有左右shape此维度值都大于1且不等，这种情况可以判断无法进行广播
+                    if (dl != dr) return true else continue; // 此维度大小一致时，需要继续判断
+                } else {
+                    // 不知道第二个shape当前维度大小，实际判断需运行时决定，编译期检查继续
+                    continue;
+                }
+            } else if (dl == 1) {
+                // 此时这个维度肯定可以广播
+                continue;
+            } else {
+                @compileError("invalid dimension");
+            }
+        } else {
+            continue;
         }
-
-        if (d1 == null or d2 == null) return false;
-        if (d1 != d2) return false;
     }
+
+    return false;
 }
 
-pub fn getDimCompWithName(comptime dims: anytype, comptime name: []const u8) ?usize {
-    const info = @typeInfo(@TypeOf(dims)).@"struct";
+pub fn getSpecDimWithName(comptime spec: anytype, comptime name: []const u8) ?usize {
+    const info = @typeInfo(@TypeOf(spec)).@"struct";
 
     inline for (info.fields) |f| {
         if (comptime !std.mem.eql(u8, f.name, name)) continue;
@@ -198,8 +266,8 @@ pub fn getDimCompWithName(comptime dims: anytype, comptime name: []const u8) ?us
     return null;
 }
 
-pub fn getDimCompWithIdx(comptime dims: anytype, comptime idx: usize) ?usize {
-    const info = @typeInfo(@TypeOf(dims)).@"struct";
+pub fn getSpecDimWithIdx(comptime spec: anytype, comptime idx: usize) ?usize {
+    const info = @typeInfo(@TypeOf(spec)).@"struct";
 
     inline for (info.fields, 0..) |f, i| {
         if (idx != i) continue;
@@ -271,7 +339,7 @@ pub fn TypeShape(comptime dims: anytype) type {
     });
 }
 
-pub fn isTypeShapeSpec(comptime spec: anytype) bool {
+pub fn isShapeSpec(comptime spec: anytype) bool {
     const ti = @typeInfo(@TypeOf(spec));
     switch (ti) {
         .@"struct" => |si| {
@@ -285,6 +353,26 @@ pub fn isTypeShapeSpec(comptime spec: anytype) bool {
         },
         else => return false,
     }
+}
+
+test "broadcast_comp" {
+    const a =
+        .{
+            1,
+            3,
+            "H",
+            "W",
+        };
+
+    const b = .{
+        .N = 1,
+        .C = 3,
+        .H = "Height",
+        .W = "Width",
+    };
+
+    const res = isBroadcastUnableComp(a, b);
+    std.debug.print("res: {}\n", .{res});
 }
 
 test "shape creation" {
@@ -326,7 +414,7 @@ test "shape creation" {
         DictEntry{ .name = "W", .value = 227 },
     };
 
-    const arr = evalRuntimeShape(@TypeOf(a), dict);
+    const arr = evalShape(@TypeOf(a), dict);
     std.debug.print("arr: {any}\n", .{arr});
     // const arr1 = evalRuntimeShape(TS1, &.{
     //     .{ .name = "H", .value = 22 },
@@ -335,5 +423,5 @@ test "shape creation" {
 
     // std.debug.print("{any} {any} {any}\n", .{ arr, arr1, TS1 });
 
-    std.debug.print("idx: {?} name: {?}\n", .{ getDimCompWithIdx(a, 1), getDimCompWithName(a, "2") });
+    std.debug.print("idx: {?} name: {?}\n", .{ getSpecDimWithIdx(a, 1), getSpecDimWithName(a, "2") });
 }
