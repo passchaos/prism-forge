@@ -11,7 +11,7 @@ pub const IDGenerator = struct {
     // 编译时计数器（仅编译时可见，无原子操作）
     comptime_counter: u64 = 0,
     // 运行时原子计数器（仅运行时生效）
-    runtime_counter: std.atomic.Atomic(u64) = std.atomic.Atomic(u64).init(0),
+    runtime_counter: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
 
     /// 通用next方法：自动适配编译时/运行时
     pub fn next(self: *@This()) u64 {
@@ -193,18 +193,18 @@ pub fn generateBroadcastStride(
     comptime l_spec: anytype,
     comptime r_spec: anytype,
     l_shape: [staticDimLen(l_spec)]usize,
-    l_stride: [staticDimLen(l_spec)]usize,
+    _: [staticDimLen(l_spec)]usize,
     r_shape: [staticDimLen(r_spec)]usize,
-    r_stride: [staticDimLen(r_spec)]usize,
+    _: [staticDimLen(r_spec)]usize,
 ) [staticDimLen(r_spec)]usize {
-    const info = @typeInfo(@TypeOf(lts)).@"struct";
+    const info = @typeInfo(@TypeOf(l_spec)).@"struct";
 
-    var out: [staticDimLen(lts)]usize = undefined;
+    var out: [staticDimLen(l_spec)]usize = undefined;
 
     var d: usize = 0;
     inline for (info.fields, 0..) |f, i| {
         if (f.type == usize or f.type == comptime_int) {
-            out[d] = if (lrs[i] == 1) rrs[i] else lrs[i];
+            out[d] = if (l_shape[i] == 1) r_shape[i] else l_shape[i];
             d += 1;
         }
     }
@@ -355,6 +355,21 @@ pub fn isShapeSpec(comptime spec: anytype) bool {
     }
 }
 
+test "id_generator" {
+    const res: usize = 0;
+    comptime {
+        var ig = IDGenerator{};
+
+        const id1 = ig.next();
+        const id2 = ig.next();
+
+        @compileLog(std.fmt.comptimePrint("id1: {} id2: {}", .{ id1, id2 }));
+        // res = id1 + id2;
+    }
+
+    std.debug.print("res: {}\n", .{res});
+}
+
 test "broadcast_comp" {
     const a =
         .{
@@ -378,7 +393,7 @@ test "broadcast_comp" {
 test "shape creation" {
     const s1 = "ddddd";
     // var s2 = "dddddd";
-    const res = isString(s1);
+    const res = isString(@TypeOf(s1));
     std.debug.print("res: {}\n", .{res});
 
     const a =
