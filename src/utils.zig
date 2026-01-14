@@ -2,6 +2,32 @@ const std = @import("std");
 const log = @import("log.zig");
 const storage = @import("storage.zig");
 
+pub const str = struct {
+    pub fn isString(comptime st: type) bool {
+        const ti = @typeInfo(st);
+
+        switch (ti) {
+            .pointer => |pi| if (pi.is_const and pi.size == .one) {
+                switch (@typeInfo(pi.child)) {
+                    .array => |ai| {
+                        if (ai.sentinel()) |stl| {
+                            if (stl == 0 and ai.child == u8) {
+                                return true;
+                            } else {
+                                return false;
+                            }
+                        } else {
+                            return false;
+                        }
+                    },
+                    else => return false,
+                }
+            },
+            else => return false,
+        }
+    }
+};
+
 pub const stt = struct {
     pub fn getFieldsLenComptime(comptime T: type) usize {
         return @typeInfo(T).@"struct".fields.len;

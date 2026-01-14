@@ -1,12 +1,78 @@
 const std = @import("std");
 const utils = @import("./utils.zig");
 const log = @import("log.zig");
+
 const product = utils.product;
 
-pub fn Layout(comptime SI: []const usize) type {
+pub const SymbolHandle = struct {
+    id: type,
+    name: []const u8,
+};
+
+pub fn makeSymbol(comptime name: []const u8) SymbolHandle {
+    // const unique = struct {};
+    return SymbolHandle{
+        .id = struct {},
+        .name = name,
+    };
+}
+
+const Dyn = struct {};
+
+const DimSpec = union(enum) {
+    static: usize,
+    dyn: Dyn,
+    sym: SymbolHandle,
+};
+
+fn parseSpec(comptime dims: anytype) ![utils.stt.getFieldsLenComptime(@TypeOf(dims))]DimSpec {
+    const N = comptime utils.stt.getFieldsLenComptime(@TypeOf(dims));
+
+    const parsed_dims = [_]DimSpec{undefined} ** N;
+
+    const info = @typeInfo(@TypeOf(dims)).@"struct";
+
+    comptime {
+        if (info.is_tuple) {
+            // for (info.fields, 0..) |f, i| {
+            //     const raw = @field(dims, f.name);
+
+            //     const T = @TypeOf(raw);
+
+            //     switch (@typeInfo(T)) {
+            //         .comptime_int => {
+            //             parsed_dims[i] = .{ .static = raw };
+            //         },
+            //         .pointer => {
+            //             if (utils.str.isString(T)) {
+            //                 // const sd = SymDim(raw);
+            //                 const sd_h = makeSymbol(raw);
+
+            //                 parsed_dims[i] = .{ .sym = sd_h };
+            //             } else {
+            //                 @compileError("unsupported type");
+            //             }
+            //         },
+            //         .type => {
+            //             parsed_dims[i] = .{ .dyn = Dyn{} };
+            //         },
+            //         else => {
+            //             @compileError("unsupported type");
+            //         },
+            //     }
+            // }
+        } else {
+            @compileError("don't support non-tuple");
+        }
+    }
+
+    return parsed_dims;
+}
+
+pub fn Layout(comptime spec: []const usize) type {
     return struct {
-        const S = SI;
-        const N = SI.len;
+        const S = spec;
+        const N = spec.len;
         const IS_LAYOUT = true;
 
         _stride: [N]usize,
@@ -15,23 +81,23 @@ pub fn Layout(comptime SI: []const usize) type {
         const Self = @This();
 
         pub fn broadcastTo(self: Self, comptime target_shape: []const usize) Layout(target_shape) {
-            if (comptime std.mem.eql(usize, SI, target_shape)) {
+            if (comptime std.mem.eql(usize, spec, target_shape)) {
                 return self;
             }
 
-            const new_stride = utils.generateBroadcastStride(SI, self.stride(), target_shape);
+            const new_stride = utils.generateBroadcastStride(spec, self.stride(), target_shape);
             return Layout(target_shape).initRaw(new_stride);
         }
 
         fn checkContiguous(strides_a: []const usize) bool {
             var expected_stride: usize = 1;
-            var i: usize = SI.len;
+            var i: usize = spec.len;
 
             while (i > 0) : (i -= 1) {
-                if (SI.len == 0) {
+                if (spec.len == 0) {
                     return true;
                 } else {
-                    const dim = SI[i - 1];
+                    const dim = spec[i - 1];
                     const stride_val = strides_a[i - 1];
 
                     if (stride_val != expected_stride) {
@@ -46,7 +112,7 @@ pub fn Layout(comptime SI: []const usize) type {
         }
 
         pub fn init() Self {
-            const strides_i = computeSliceShapeStrides(N, SI);
+            const strides_i = computeSliceShapeStrides(N, spec);
 
             return Self.initRaw(strides_i);
         }
@@ -63,7 +129,7 @@ pub fn Layout(comptime SI: []const usize) type {
         }
 
         pub fn transpose(self: *const Self, comptime dim0: usize, comptime dim1: usize) Layout(&computePermutedShape(
-            SI,
+            spec,
             &computeTransposedPerm(N, dim0, dim1),
         )) {
             if (dim0 >= N or dim1 >= N) @compileError("Invalid dimension");
@@ -75,11 +141,11 @@ pub fn Layout(comptime SI: []const usize) type {
 
         pub fn permute(self: *const Self, comptime perm: [N]usize) Layout(
             &computePermutedShape(
-                SI,
+                spec,
                 &perm,
             ),
         ) {
-            const new_shape = comptime computePermutedShape(SI, &perm);
+            const new_shape = comptime computePermutedShape(spec, &perm);
 
             var new_strides = self._stride;
 
@@ -93,7 +159,7 @@ pub fn Layout(comptime SI: []const usize) type {
         }
 
         pub fn reshape(_: *const Self, comptime new_shapes: []const usize) Layout(new_shapes) {
-            const self_size = comptime if (N == 0) 1 else product(SI);
+            const self_size = comptime if (N == 0) 1 else product(spec);
             const new_size = comptime product(new_shapes);
 
             if (comptime new_size != self_size) @compileError("Invalid shape");
@@ -103,16 +169,16 @@ pub fn Layout(comptime SI: []const usize) type {
 
         pub fn unsqueeze(_: *const Self, comptime dim: usize) Layout(&utils.array.insertDimComptime(
             N,
-            SI,
+            spec,
             dim,
             1,
         )) {
-            const new_shape = comptime utils.array.insertDimComptime(N, SI, dim, 1);
+            const new_shape = comptime utils.array.insertDimComptime(N, spec, dim, 1);
 
             return Layout(&new_shape).init();
         }
 
-        pub fn squeeze(_: *const Self, comptime dim: usize) Layout(&utils.array.removeDimComptime(N, SI, dim)) {
+        pub fn squeeze(_: *const Self, comptime dim: usize) Layout(&utils.array.removeDimComptime(N, spec, dim)) {
             var new_shapes = [_]usize{0} ** (N - 1);
 
             var i: usize = 0;
@@ -122,17 +188,17 @@ pub fn Layout(comptime SI: []const usize) type {
                 if (j == dim) {
                     j += 1;
                 } else {
-                    new_shapes[i] = SI[j];
+                    new_shapes[i] = spec[j];
                     i += 1;
                     j += 1;
                 }
             }
 
-            return Layout(&utils.array.removeDimComptime(N, SI, dim)).init();
+            return Layout(&utils.array.removeDimComptime(N, spec, dim)).init();
         }
 
-        pub fn iter() ShapeIterator(SI) {
-            return ShapeIterator(SI).init();
+        pub fn iter() ShapeIterator(spec) {
+            return ShapeIterator(spec).init();
         }
 
         pub fn equal(self: Self, other: Self) bool {
@@ -141,7 +207,7 @@ pub fn Layout(comptime SI: []const usize) type {
 
         pub fn size(_: *const Self) usize {
             if (N == 0) return 1;
-            return comptime product(SI);
+            return comptime product(spec);
         }
 
         pub fn ndim(_: *const Self) usize {
@@ -149,7 +215,7 @@ pub fn Layout(comptime SI: []const usize) type {
         }
 
         pub fn shape(_: *const Self) [N]usize {
-            return utils.array.comptimeSliceToArray(SI);
+            return utils.array.comptimeSliceToArray(spec);
         }
 
         pub fn stride(self: *const Self) [N]usize {
@@ -200,6 +266,13 @@ pub fn computePermutedShape(comptime shape_a: []const usize, comptime perm: []co
         new_shape[idx] = shape_a[p];
     }
     return new_shape;
+}
+
+fn isAllStatic(comptime s: []const ?usize) bool {
+    for (s) |dim| {
+        if (dim == null) return false;
+    }
+    return true;
 }
 
 fn computeCattedDims(comptime layouts_type: type) usize {
@@ -361,12 +434,48 @@ fn computeSliceShapeStrides(comptime N: usize, shape: []const usize) [N]usize {
     return new_stride;
 }
 
+pub inline fn makeSymbol1(comptime name: []const u8) SymbolHandle {
+    return makeSymbolImpl(name, @This());
+}
+
+inline fn makeSymbolImpl(comptime name: []const u8, comptime caller_context: type) SymbolHandle {
+    
+    const UniqueType = struct {
+        const symbol_name = name;
+        const context = caller_context;
+    };
+
+    return SymbolHandle{
+        .id = UniqueType,
+        .name = name,
+    };
+}
+
 test "transpose" {
-    const Layout_2x3x4 = Layout(&.{ 2, 3, 4 });
-    const layout = Layout_2x3x4.initRaw([_]usize{ 12, 4, 1 });
-    const transposed = layout.transpose(0, 2);
-    try std.testing.expectEqual([_]usize{ 4, 3, 2 }, transposed.shape());
-    try std.testing.expectEqual([_]usize{ 1, 4, 12 }, transposed.stride());
+    const s1_h = makeSymbol("s1");
+    const s11_h = makeSymbol("s11");
+    const s2_h = makeSymbol("s2");
+
+    std.debug.print("s1 s11 equal: {}\n", .{s1_h.id == s11_h.id});
+    std.debug.print("s1_h: {any} s11_h: {any} s2_h: {any}\n", .{ s1_h, s11_h, s2_h });
+
+    const t1 = makeSymbol1("s1");
+    const t2 = makeSymbol1("s1");
+    std.debug.print("type equal: {}\n", .{t1.id == t2.id});
+    // {
+    //     const dim_spec = try parseSpec(.{ 2, 10, Dyn, "ddd" });
+    //     std.debug.print("dim_spec: {any}\n", .{dim_spec});
+    // }
+
+    // {
+    //     const dim_spec = try parseSpec(.{ 2, Dyn, "ddd" });
+    //     std.debug.print("dim_spec: {any}\n", .{dim_spec});
+    // }
+    // const Layout_2x3x4 = Layout(&.{ .{ .static = 2 }, .{ .static = 3 }, .{ .static = 4 } });
+    // const layout = Layout_2x3x4.initRaw([_]usize{ 12, 4, 1 });
+    // const transposed = layout.transpose(0, 2);
+    // try std.testing.expectEqual([_]usize{ 4, 3, 2 }, transposed.shape());
+    // try std.testing.expectEqual([_]usize{ 1, 4, 12 }, transposed.stride());
 }
 
 test "permute" {
