@@ -117,14 +117,14 @@ pub const DimExpr = union(enum) {
     }
 
     pub fn eval(self: *const Self, env: *const ShapeEnv) !usize {
-        switch (self.*) {
+        return switch (self.*) {
             .Static => |v| v,
-            .Sym => |id| env.lookup(id),
+            .Sym => |s| env.lookup(s.id),
             .Add => |add_s| try add_s.lhs.eval(env) + try add_s.rhs.eval(env),
             .Mul => |mul_s| try mul_s.lhs.eval(env) * try mul_s.rhs.eval(env),
             .Max => |max_s| @max(try max_s.lhs.eval(env), try max_s.rhs.eval(env)),
             .Min => |min_s| @min(try min_s.lhs.eval(env), try min_s.rhs.eval(env)),
-        }
+        };
     }
 };
 
@@ -152,6 +152,14 @@ pub const ShapeEnv = struct {
 
         return error.UnboundSymbol;
     }
+
+    pub fn lookupShape(self: *const Self, comptime shape_expr: []const DimExpr) ![shape_expr.len]usize {
+        var result: [shape_expr.len]usize = undefined;
+        for (shape_expr, 0..) |dim_expr, i| {
+            result[i] = try dim_expr.eval(self);
+        }
+        return result;
+    }
 };
 
 pub fn product(dim_exprs: []const DimExpr) DimExpr {
@@ -160,6 +168,69 @@ pub fn product(dim_exprs: []const DimExpr) DimExpr {
         result = DimExpr.mul(result, dim);
     }
     return result;
+}
+
+pub fn insertDimComptime(
+    comptime arr: []const DimExpr,
+    comptime dim: usize,
+    comptime value: usize,
+) [arr.len + 1]DimExpr {
+    const N = arr.len;
+
+    if (dim > N) @compileError("Invalid dimension");
+
+    if (N == 0) {
+        return [_]usize{DimExpr.static(value)};
+    } else {
+        var new_arr = [_]DimExpr{undefined} ** (N + 1);
+
+        var i: usize = 0;
+        var j: usize = 0;
+
+        while (i < N + 1) {
+            if (i == dim) {
+                new_arr[i] = DimExpr.static(value);
+                i += 1;
+                continue;
+            }
+            new_arr[i] = arr[j];
+            i += 1;
+            j += 1;
+        }
+
+        return new_arr;
+    }
+}
+
+pub fn removeDimComptime(comptime arr: []const usize, comptime dim: usize) [arr.len - 1]usize {
+    const N = arr.len;
+
+    if (dim >= N) @compileError("Invalid dimension");
+    if (N == 0) @compileError("don't support 0-1-d tensor removeDim op");
+    if (N == 1) return [0]usize{};
+
+    if (N == 0) {
+        @compileError("don't support 0-1-d tensor removeDim op");
+    } else if (N == 1) {
+        return [0]usize{};
+    } else {
+        if (arr[dim] != 1) @compileError("Dim not one");
+        var new_arr = [_]usize{undefined} ** (N - 1);
+        var i: usize = 0;
+        var j: usize = 0;
+
+        while (i < N) {
+            if (i == dim) {
+                i += 1;
+                continue;
+            }
+            new_arr[j] = arr[i];
+            i += 1;
+            j += 1;
+        }
+
+        return new_arr;
+    }
 }
 
 pub inline fn parseSpec(comptime dims: anytype) [utils.stt.getFieldsLenComptime(@TypeOf(dims))]DimExpr {
@@ -206,6 +277,17 @@ pub inline fn parseSpec(comptime dims: anytype) [utils.stt.getFieldsLenComptime(
     }
 
     return parsed_dims;
+}
+
+pub fn shapeExprEqual(
+    comptime lhs: []const DimExpr,
+    comptime rhs: []const DimExpr,
+) bool {
+    if (lhs.len != rhs.len) return false;
+    inline for (lhs, rhs) |l, r| {
+        if (!l.equal(r)) return false;
+    }
+    return true;
 }
 
 pub fn canBroadcast(

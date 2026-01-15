@@ -1,38 +1,46 @@
 const std = @import("std");
 const utils = @import("./utils.zig");
 const log = @import("log.zig");
+const shape_expr = @import("shape_expr.zig");
 
-const product = utils.product;
+const DimExpr = shape_expr.DimExpr;
+const ShapeEnv = shape_expr.ShapeEnv;
 
-pub fn Layout(comptime spec: []const usize) type {
+const product = shape_expr.product;
+
+pub fn Layout(comptime shape_spec: []const DimExpr) type {
     return struct {
-        const S = spec;
-        const N = spec.len;
+        const SE = shape_spec;
+        // const S = spec;
+        const N = SE.len;
         const IS_LAYOUT = true;
 
+        _shape: [N]usize,
         _stride: [N]usize,
+        _shape_env: ShapeEnv,
         _is_contiguous: bool = true,
 
         const Self = @This();
 
-        pub fn broadcastTo(self: Self, comptime target_shape: []const usize) Layout(target_shape) {
-            if (comptime std.mem.eql(usize, spec, target_shape)) {
+        pub fn broadcastTo(self: Self, comptime target_shape_spec: []const DimExpr) Layout(target_shape_spec) {
+            if (comptime shape_expr.shapeExprEqual(SE, target_shape_spec)) {
                 return self;
             }
 
-            const new_stride = utils.generateBroadcastStride(spec, self.stride(), target_shape);
-            return Layout(target_shape).initRaw(new_stride);
+            const new_stride = shape_expr.generateBroadcastStride(SE, self.stride(), target_shape_spec);
+
+            return Layout(target_shape_spec).initRaw(new_stride);
         }
 
-        fn checkContiguous(strides_a: []const usize) bool {
+        fn checkContiguous(shape_a: []const usize, strides_a: []const usize) bool {
             var expected_stride: usize = 1;
-            var i: usize = spec.len;
+            var i: usize = N;
 
             while (i > 0) : (i -= 1) {
-                if (spec.len == 0) {
+                if (N == 0) {
                     return true;
                 } else {
-                    const dim = spec[i - 1];
+                    const dim = shape_a[i - 1];
                     const stride_val = strides_a[i - 1];
 
                     if (stride_val != expected_stride) {
@@ -46,25 +54,34 @@ pub fn Layout(comptime spec: []const usize) type {
             return true;
         }
 
-        pub fn init() Self {
-            const strides_i = computeSliceShapeStrides(N, spec);
+        pub fn init(shape_env: ShapeEnv) !Self {
+            const shape_i = try shape_env.lookupShape(SE);
+            const strides_i = computeSliceShapeStrides(N, shape_i);
 
-            return Self.initRaw(strides_i);
+            return Self.initRaw(shape_env, strides_i);
         }
 
-        pub fn initRaw(strides_a: [N]usize) Self {
-            const is_contiguous = checkContiguous(&strides_a);
+        pub fn initRaw(shape_env: ShapeEnv, stride_a: [N]usize) !Self {
+            const shape_i = try shape_env.lookupShape(SE);
+
+            return Self.initInner(shape_env, shape_i, stride_a);
+        }
+
+        fn initInner(shape_env: ShapeEnv, shape_a: [N]usize, stride_a: [N]usize) Self {
+            const is_contiguous = checkContiguous(&shape_a, &stride_a);
 
             const layout = Self{
-                ._stride = strides_a,
+                ._shape = shape_a,
+                ._stride = stride_a,
+                ._shape_env = shape_env,
                 ._is_contiguous = is_contiguous,
             };
 
             return layout;
         }
 
-        pub fn transpose(self: *const Self, comptime dim0: usize, comptime dim1: usize) Layout(&computePermutedShape(
-            spec,
+        pub fn transpose(self: *const Self, comptime dim0: usize, comptime dim1: usize) Layout(&computePermutedShapeExpr(
+            SE,
             &computeTransposedPerm(N, dim0, dim1),
         )) {
             if (dim0 >= N or dim1 >= N) @compileError("Invalid dimension");
@@ -75,12 +92,12 @@ pub fn Layout(comptime spec: []const usize) type {
         }
 
         pub fn permute(self: *const Self, comptime perm: [N]usize) Layout(
-            &computePermutedShape(
-                spec,
+            &computePermutedShapeExpr(
+                SE,
                 &perm,
             ),
         ) {
-            const new_shape = comptime computePermutedShape(spec, &perm);
+            const new_shape_expr = comptime computePermutedShapeExpr(SE, &perm);
 
             var new_strides = self._stride;
 
@@ -90,67 +107,51 @@ pub fn Layout(comptime spec: []const usize) type {
                 new_strides[i] = self._stride[p];
             }
 
-            return Layout(&new_shape).initRaw(new_strides);
+            return Layout(&new_shape_expr).initRaw(self._shape_env, new_strides) catch unreachable;
         }
 
-        pub fn reshape(_: *const Self, comptime new_shapes: []const usize) Layout(new_shapes) {
-            const self_size = comptime if (N == 0) 1 else product(spec);
-            const new_size = comptime product(new_shapes);
+        pub fn reshape(self: *const Self, comptime new_shape_expr: []const usize) Layout(new_shape_expr) {
+            const self_size = comptime if (N == 0) 1 else product(SE);
+            const new_size = comptime product(new_shape_expr);
 
-            if (comptime new_size != self_size) @compileError("Invalid shape");
+            if (comptime self_size.equal(new_size)) @compileError("Invalid shape");
 
-            return Layout(new_shapes).init();
+            return Layout(new_shape_expr).init(self._shape_env) catch unreachable;
         }
 
-        pub fn unsqueeze(_: *const Self, comptime dim: usize) Layout(&utils.array.insertDimComptime(
-            N,
-            spec,
+        pub fn unsqueeze(self: *const Self, comptime dim: usize) Layout(&shape_expr.insertDimComptime(
+            SE,
             dim,
             1,
         )) {
-            const new_shape = comptime utils.array.insertDimComptime(N, spec, dim, 1);
+            const new_shape_expr = comptime shape_expr.insertDimComptime(SE, dim, 1);
 
-            return Layout(&new_shape).init();
+            return Layout(&new_shape_expr).init(self._shape_env) catch unreachable;
         }
 
-        pub fn squeeze(_: *const Self, comptime dim: usize) Layout(&utils.array.removeDimComptime(N, spec, dim)) {
-            var new_shapes = [_]usize{0} ** (N - 1);
-
-            var i: usize = 0;
-            var j: usize = 0;
-
-            while (i < N - 1) {
-                if (j == dim) {
-                    j += 1;
-                } else {
-                    new_shapes[i] = spec[j];
-                    i += 1;
-                    j += 1;
-                }
-            }
-
-            return Layout(&utils.array.removeDimComptime(N, spec, dim)).init();
+        pub fn squeeze(self: *const Self, comptime dim: usize) Layout(&shape_expr.removeDimComptime(SE, dim)) {
+            return Layout(&shape_expr.removeDimComptime(SE, dim)).init(self._shape_env) catch unreachable;
         }
 
-        pub fn iter() ShapeIterator(spec) {
-            return ShapeIterator(spec).init();
+        pub fn iter(self: *const Self) ShapeIterator(N) {
+            return ShapeIterator(N).init(self.shape());
         }
 
         pub fn equal(self: Self, other: Self) bool {
             return std.mem.eql(usize, &self.shape(), &other.shape()) and std.mem.eql(usize, &self.stride(), &other.stride());
         }
 
-        pub fn size(_: *const Self) usize {
+        pub fn size(self: *const Self) usize {
             if (N == 0) return 1;
-            return comptime product(spec);
+            return comptime utils.product(&self.shape());
         }
 
         pub fn ndim(_: *const Self) usize {
             return N;
         }
 
-        pub fn shape(_: *const Self) [N]usize {
-            return utils.array.comptimeSliceToArray(spec);
+        pub fn shape(self: *const Self) [N]usize {
+            return self._shape;
         }
 
         pub fn stride(self: *const Self) [N]usize {
@@ -189,8 +190,8 @@ pub fn stack(layouts: anytype, comptime dim: usize) Layout(&computeStackedShape(
     return Layout(&new_shape).init();
 }
 
-pub fn computePermutedShape(comptime shape_a: []const usize, comptime perm: []const usize) [shape_a.len]usize {
-    var new_shape = [_]usize{0} ** shape_a.len;
+pub fn computePermutedShapeExpr(comptime shape_expr_a: []const DimExpr, comptime perm: []const usize) [shape_expr_a.len]DimExpr {
+    var new_shape_expr = [_]DimExpr{undefined} ** shape_expr_a.len;
     for (perm, 0..) |p, idx| {
         for (0..idx) |idx_i| {
             if (perm[idx_i] == perm[idx]) {
@@ -198,9 +199,9 @@ pub fn computePermutedShape(comptime shape_a: []const usize, comptime perm: []co
             }
         }
 
-        new_shape[idx] = shape_a[p];
+        new_shape_expr[idx] = shape_expr_a[p];
     }
-    return new_shape;
+    return new_shape_expr;
 }
 
 fn isAllStatic(comptime s: []const ?usize) bool {
@@ -370,11 +371,15 @@ fn computeSliceShapeStrides(comptime N: usize, shape: []const usize) [N]usize {
 }
 
 test "transpose" {
-    // const Layout_2x3x4 = Layout(&.{ .{ .static = 2 }, .{ .static = 3 }, .{ .static = 4 } });
-    // const layout = Layout_2x3x4.initRaw([_]usize{ 12, 4, 1 });
-    // const transposed = layout.transpose(0, 2);
-    // try std.testing.expectEqual([_]usize{ 4, 3, 2 }, transposed.shape());
-    // try std.testing.expectEqual([_]usize{ 1, 4, 12 }, transposed.stride());
+    const allocator = std.testing.allocator;
+
+    const Layout_2x3x4 = Layout(&shape_expr.parseSpec(.{ 2, 3, 4 }));
+
+    const shape_env = ShapeEnv.init(allocator);
+    const layout = try Layout_2x3x4.initRaw(shape_env, [_]usize{ 12, 4, 1 });
+    const transposed = layout.transpose(0, 2);
+    try std.testing.expectEqual([_]usize{ 4, 3, 2 }, transposed.shape());
+    try std.testing.expectEqual([_]usize{ 1, 4, 12 }, transposed.stride());
 }
 
 test "permute" {
@@ -428,17 +433,17 @@ test "cat or stack" {
     try std.testing.expectEqualDeep([4]usize{ 2, 3, 2, 4 }, ls.shape());
 }
 
-pub fn ShapeIterator(comptime SI: []const usize) type {
+pub fn ShapeIterator(comptime N: usize) type {
     return struct {
-        const N = SI.len;
-
+        shape: [N]usize,
         idx: [N]usize,
         done: bool,
 
-        pub fn init() @This() {
+        pub fn init(shape_a: [N]usize) @This() {
             const idx = [_]usize{0} ** N;
 
             return @This(){
+                .shape = shape_a,
                 .idx = idx,
                 .done = false,
             };
@@ -458,7 +463,7 @@ pub fn ShapeIterator(comptime SI: []const usize) type {
                 while (d > 0) : (d -= 1) {
                     self.idx[d - 1] += 1;
 
-                    if (self.idx[d - 1] < SI[d - 1]) {
+                    if (self.idx[d - 1] < self.shape[d - 1]) {
                         break;
                     }
                     self.idx[d - 1] = 0;

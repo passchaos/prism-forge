@@ -1577,15 +1577,15 @@ pub fn Tensor(comptime SA: []const usize, comptime TA: type, comptime storage_ar
             };
         }
 
-        pub fn transpose(self: *const Self) Tensor(&layout_t.computePermutedShape(SA, &.{ 1, 0 }), T, .{}) {
+        pub fn transpose(self: *const Self) Tensor(&layout_t.computePermutedShapeExpr(SA, &.{ 1, 0 }), T, .{}) {
             return self.permute([_]usize{ 1, 0 });
         }
 
-        pub fn permute(self: *const Self, comptime perm: [N]usize) Tensor(&layout_t.computePermutedShape(SA, &perm), T, .{}) {
+        pub fn permute(self: *const Self, comptime perm: [N]usize) Tensor(&layout_t.computePermutedShapeExpr(SA, &perm), T, .{}) {
             const new_layout = self.layout.permute(perm);
             const new_storage = self.storage.shared();
 
-            return Tensor(&layout_t.computePermutedShape(SA, &perm), T, .{}){
+            return Tensor(&layout_t.computePermutedShapeExpr(SA, &perm), T, .{}){
                 ._base = self,
                 .storage = new_storage,
                 .layout = new_layout,
