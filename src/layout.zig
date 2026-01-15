@@ -4,95 +4,6 @@ const log = @import("log.zig");
 
 const product = utils.product;
 
-pub fn typeUniqueId(comptime T: type) u64 {
-    return std.hash.Fnv1a_64.hash(@typeName(T));
-}
-
-pub const SymbolHandle = struct {
-    id: u64,
-    name: []const u8,
-
-    pub fn format(
-        self: @This(),
-        writer: anytype,
-    ) !void {
-        try writer.print("Sym{{ id={}, name={s} }}", .{
-            self.id,
-            self.name,
-        });
-    }
-};
-
-pub fn makeSymbol(comptime sym: anytype) SymbolHandle {
-    const T = @TypeOf(sym);
-    const name = switch (@typeInfo(T)) {
-        .@"struct" => |_| blk: {
-            break :blk @field(sym, "name");
-        },
-        else => {
-            @compileError("don't support this type: " ++ @typeName(T));
-        },
-    };
-
-    return SymbolHandle{
-        .id = typeUniqueId(T),
-        .name = name,
-    };
-}
-
-const Dyn = struct {};
-
-const DimSpec = union(enum) {
-    static: usize,
-    dyn: Dyn,
-    sym: SymbolHandle,
-};
-
-inline fn parseSpec(comptime dims: anytype) ![utils.stt.getFieldsLenComptime(@TypeOf(dims))]DimSpec {
-    const N = comptime utils.stt.getFieldsLenComptime(@TypeOf(dims));
-
-    comptime var parsed_dims = [_]DimSpec{undefined} ** N;
-
-    const info = @typeInfo(@TypeOf(dims)).@"struct";
-
-    comptime {
-        if (info.is_tuple) {
-            for (info.fields, 0..) |f, i| {
-                const raw = @field(dims, f.name);
-
-                const T = @TypeOf(raw);
-
-                switch (@typeInfo(T)) {
-                    .comptime_int => {
-                        parsed_dims[i] = DimSpec{ .static = raw };
-                    },
-                    .pointer => {
-                        if (utils.str.isString(T)) {
-                            // const sd = SymDim(raw);
-
-                            const sd_h = makeSymbol(.{ .name = raw });
-
-                            parsed_dims[i] = .{ .sym = sd_h };
-                        } else {
-                            @compileError("unsupported type");
-                        }
-                    },
-                    .type => {
-                        parsed_dims[i] = .{ .dyn = Dyn{} };
-                    },
-                    else => {
-                        @compileError("unsupported type");
-                    },
-                }
-            }
-        } else {
-            @compileError("don't support non-tuple");
-        }
-    }
-
-    return parsed_dims;
-}
-
 pub fn Layout(comptime spec: []const usize) type {
     return struct {
         const S = spec;
@@ -458,53 +369,7 @@ fn computeSliceShapeStrides(comptime N: usize, shape: []const usize) [N]usize {
     return new_stride;
 }
 
-pub inline fn makeSymbol1(comptime name: []const u8) SymbolHandle {
-    return makeSymbolImpl(name, @This());
-}
-
-inline fn makeSymbolImpl(comptime name: []const u8, comptime caller_context: type) SymbolHandle {
-    // const UniqueType = struct {
-    //     const symbol_name = name;
-    //     const context = caller_context;
-    // };
-
-    return SymbolHandle{
-        .id = struct {
-            const symbol_name = name;
-            const context = caller_context;
-        },
-        .name = name,
-    };
-}
-
 test "transpose" {
-    const sl1 = .{ .name = "s1" };
-
-    const s1_h = makeSymbol(sl1);
-    const s11_h = makeSymbol(sl1);
-    const s2_h = makeSymbol(.{ .name = "s2" });
-
-    std.debug.print("s1 s11 equal: {}\n", .{s1_h.id == s11_h.id});
-    std.debug.print("s1_h: {f} s11_h: {any} s2_h: {any}\n", .{ s1_h, s11_h, s2_h });
-
-    const t1 = .{
-        .name = "dddd",
-    };
-    const t2 = .{
-        .name = "dddd",
-    };
-    std.debug.print("t1: {} t2: {}\n", .{ @TypeOf(t1), @TypeOf(t2) });
-    // std.debug.print("type equal: {s} {s}\n", .{ comptime serializeTypeInfo(@TypeOf(t1)), comptime serializeTypeInfo(@TypeOf(t2)) });
-    {
-        const dim_spec = try parseSpec(.{ 2, 10, Dyn, "ddd" });
-        const static_v = comptime dim_spec[0].static;
-        std.debug.print("dim_spec: {any} {}\n", .{ dim_spec, static_v });
-    }
-
-    {
-        const dim_spec = try parseSpec(.{ 2, Dyn, "ddd" });
-        std.debug.print("dim_spec: {any}\n", .{dim_spec});
-    }
     // const Layout_2x3x4 = Layout(&.{ .{ .static = 2 }, .{ .static = 3 }, .{ .static = 4 } });
     // const layout = Layout_2x3x4.initRaw([_]usize{ 12, 4, 1 });
     // const transposed = layout.transpose(0, 2);
