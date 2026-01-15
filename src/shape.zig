@@ -47,88 +47,95 @@ pub fn makeSymbol(comptime sym: anytype) SymbolHandle {
     };
 }
 
-const Dyn = struct {};
-
-const DimSpec = union(enum) {
-    static: usize,
-    dyn: Dyn,
-    sym: SymbolHandle,
+const BinaryDimOpExpr = struct {
+    lhs: *const DimExpr,
+    rhs: *const DimExpr,
 };
 
-const ShapeEnv = struct {
+pub const DimExpr = union(enum) {
+    const Self = @This();
+
+    Static: usize,
+    Sym: SymbolHandle,
+    Add: BinaryDimOpExpr,
+    Mul: BinaryDimOpExpr,
+    Max: BinaryDimOpExpr,
+    Min: BinaryDimOpExpr,
+
+    pub fn static(v: usize) Self {
+        return Self{ .Static = v };
+    }
+
+    pub fn sym(comptime sym_v: anytype) Self {
+        return Self{ .Sym = makeSymbol(sym_v) };
+    }
+
+    pub fn add(lhs: *const Self, rhs: *const Self) Self {
+        return Self{ .Add = .{ .lhs = lhs, .rhs = rhs } };
+    }
+
+    pub fn mul(lhs: *const Self, rhs: *const Self) Self {
+        return Self{ .Mul = .{ .lhs = lhs, .rhs = rhs } };
+    }
+
+    pub fn max(lhs: *const Self, rhs: *const Self) Self {
+        return Self{ .Max = .{ .lhs = lhs, .rhs = rhs } };
+    }
+
+    pub fn min(lhs: *const Self, rhs: *const Self) Self {
+        return Self{ .Min = .{ .lhs = lhs, .rhs = rhs } };
+    }
+
+    pub fn eval(self: *const Self, env: *const ShapeEnv) !usize {
+        switch (self.*) {
+            .Static => |v| v,
+            .Sym => |id| env.lookup(id),
+            .Add => |add_s| try add_s.lhs.eval(env) + try add_s.rhs.eval(env),
+            .Mul => |mul_s| try mul_s.lhs.eval(env) * try mul_s.rhs.eval(env),
+            .Max => |max_s| @max(try max_s.lhs.eval(env), try max_s.rhs.eval(env)),
+            .Min => |min_s| @min(try min_s.lhs.eval(env), try min_s.rhs.eval(env)),
+        }
+    }
+};
+
+pub const ShapeEnv = struct {
     const Self = @This();
 
     sym_map: std.AutoHashMap(SymId, usize),
-    dyn_map: std.AutoHashMap(usize, usize),
 
-    fn init(allocator: std.mem.Allocator) Self {
+    pub fn init(allocator: std.mem.Allocator) Self {
         return .{
             .sym_map = std.AutoHashMap(SymId, usize).init(allocator),
-            .dyn_map = std.AutoHashMap(usize, usize).init(allocator),
         };
     }
 
-    fn deinit(self: *Self) void {
+    pub fn deinit(self: *Self) void {
         self.sym_map.deinit();
-        self.dyn_map.deinit();
     }
 
-    fn bind(self: *Self, shape: []const DimSpec, runtime_shape: []const usize) !void {
-        for (shape, 0..) |dim, axis| {
-            const r_s_v = runtime_shape[axis];
-            switch (dim) {
-                .static => |v| if (v != r_s_v) return error.ShapeMismatch,
-                .dyn => |_| try self.dyn_map.put(axis, r_s_v),
-                .sym => |sym| try self.sym_map.put(sym.id, r_s_v),
-            }
-        }
+    pub fn bind(self: *Self, id: SymId, value: usize) !void {
+        try self.sym_map.put(id, value);
     }
 
-    fn lookup(self: *const Self, id: SymId) !usize {
+    pub fn lookup(self: *const Self, id: SymId) !usize {
         if (self.sym_map.get(id)) |v| return v;
 
         return error.UnboundSymbol;
     }
 };
 
-const SizeExpr = union(enum) {
-    const Self = @This();
-
-    Static: usize,
-    Sym: SymId,
-    Add: struct { lhs: *const Self, rhs: *const Self },
-    Mul: struct { lhs: *const Self, rhs: *const Self },
-
-    fn static(v: usize) Self {
-        return Self{ .Static = v };
+pub fn product(dim_exprs: []const DimExpr) DimExpr {
+    var result = DimExpr.static(1);
+    for (dim_exprs) |dim| {
+        result = DimExpr.mul(result, dim);
     }
+    return result;
+}
 
-    fn sym(id: SymId) Self {
-        return Self{ .Sym = id };
-    }
-
-    fn add(lhs: *const Self, rhs: *const Self) Self {
-        return Self{ .Add = .{ .lhs = lhs, .rhs = rhs } };
-    }
-
-    fn mul(lhs: *const Self, rhs: *const Self) Self {
-        return Self{ .Mul = .{ .lhs = lhs, .rhs = rhs } };
-    }
-
-    fn eval(self: *const Self, env: *const ShapeEnv) !usize {
-        switch (self.*) {
-            .Static => |v| v,
-            .Sym => |id| env.lookup(id),
-            .Add => |add_s| try add_s.lhs.eval(env) + try add_s.rhs.eval(env),
-            .Mul => |mul_s| try mul_s.lhs.eval(env) * try mul_s.rhs.eval(env),
-        }
-    }
-};
-
-inline fn parseSpec(comptime dims: anytype) [utils.stt.getFieldsLenComptime(@TypeOf(dims))]DimSpec {
+pub inline fn parseSpec(comptime dims: anytype) [utils.stt.getFieldsLenComptime(@TypeOf(dims))]DimExpr {
     const N = comptime utils.stt.getFieldsLenComptime(@TypeOf(dims));
 
-    comptime var parsed_dims = [_]DimSpec{undefined} ** N;
+    comptime var parsed_dims = [_]DimExpr{undefined} ** N;
 
     const info = @typeInfo(@TypeOf(dims)).@"struct";
 
@@ -139,26 +146,24 @@ inline fn parseSpec(comptime dims: anytype) [utils.stt.getFieldsLenComptime(@Typ
 
                 const T = @TypeOf(raw);
 
+                if (T == DimExpr) {
+                    parsed_dims[i] = raw;
+                    continue;
+                }
+
                 switch (@typeInfo(T)) {
                     .@"struct" => |_| {
-                        parsed_dims[i] = .{ .sym = makeSymbol(raw) };
+                        parsed_dims[i] = DimExpr.sym(raw);
                     },
                     .comptime_int => {
-                        parsed_dims[i] = DimSpec{ .static = raw };
+                        parsed_dims[i] = DimExpr.static(raw);
                     },
                     .pointer => {
                         if (utils.str.isString(T)) {
-                            // const sd = SymDim(raw);
-
-                            const sd_h = makeSymbol(.{ .name = raw });
-
-                            parsed_dims[i] = .{ .sym = sd_h };
+                            parsed_dims[i] = DimExpr.sym(.{ .name = raw });
                         } else {
                             @compileError("unsupported type");
                         }
-                    },
-                    .type => {
-                        parsed_dims[i] = .{ .dyn = Dyn{} };
                     },
                     else => {
                         @compileError("unsupported type");
@@ -209,14 +214,18 @@ test "symbol_eql" {
 }
 
 test "dim_spec" {
+    const sym1 = comptime makeSymbol(.{ .name = "abc" });
+
+    const sym12 = comptime DimExpr.add(&DimExpr{ .Sym = sym1 }, &DimExpr.sym(.{ .name = "abc" }));
+
     {
-        const dim_spec = parseSpec(.{ 2, 10, Dyn, "ddd", "ddd", .{"ddd"}, .{"ddd"}, .{ .name = "ddd" }, .{ .name = "ddd" } });
-        const static_v = comptime dim_spec[0].static;
+        const dim_spec = parseSpec(.{ sym12, 2, 10, "ddd", "ddd", .{"ddd"}, .{"ddd"}, .{ .name = "ddd" }, .{ .name = "ddd" } });
+        const static_v = comptime dim_spec[1].Static;
         std.debug.print("dim_spec: {any} {}\n", .{ dim_spec, static_v });
     }
 
     {
-        const dim_spec = parseSpec(.{ 2, Dyn, "ddd" });
+        const dim_spec = parseSpec(.{ 2, "ddd" });
         std.debug.print("dim_spec: {any}\n", .{dim_spec});
     }
 }
