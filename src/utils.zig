@@ -79,7 +79,7 @@ pub const array = struct {
 
     pub fn getArrayElementCountCompWithDepth(comptime T: type, comptime D: usize) usize {
         const shape = getArrayShapeCompWithDepth(T, D);
-        return shape_expr.product(&shape);
+        return product(&shape);
     }
 
     pub fn getArrayItemTypeComp(comptime T: type) type {

@@ -752,19 +752,19 @@ pub fn Tensor(comptime SA: []const DimExpr, comptime TA: type) type {
             return try self.binaryOp(value, bool, BasicOpFuncs.le);
         }
 
-        pub fn gtScalar(self: *const Self, value: T) !Tensor(SA, bool, .{}) {
+        pub fn gtScalar(self: *const Self, value: T) !Tensor(SA, bool) {
             return try self.map(value, bool, BasicOpFuncs.gt);
         }
 
-        pub fn gt(self: *const Self, value: Self) !Tensor(SA, bool, .{}) {
+        pub fn gt(self: *const Self, value: Self) !Tensor(SA, bool) {
             return try self.binaryOp(value, bool, BasicOpFuncs.gt);
         }
 
-        pub fn geScalar(self: *const Self, value: T) !Tensor(SA, bool, .{}) {
+        pub fn geScalar(self: *const Self, value: T) !Tensor(SA, bool) {
             return try self.map(value, bool, BasicOpFuncs.ge);
         }
 
-        pub fn ge(self: *const Self, value: Self) !Tensor(SA, bool, .{}) {
+        pub fn ge(self: *const Self, value: Self) !Tensor(SA, bool) {
             return try self.binaryOp(value, bool, BasicOpFuncs.ge);
         }
 
@@ -1173,7 +1173,7 @@ pub fn Tensor(comptime SA: []const DimExpr, comptime TA: type) type {
 
             var new_buf = try self.s_allocator().alloc(RT, data_len);
 
-            var shape_i_iter = ShapeIterator.init(self.shape());
+            var shape_i_iter = ShapeIterator.init(shape_i);
 
             while (shape_i_iter.next()) |idx| {
                 const acc = blk: {
@@ -1288,23 +1288,23 @@ pub fn Tensor(comptime SA: []const DimExpr, comptime TA: type) type {
             return try self.reduce(dim, Item.max, T, null);
         }
 
-        pub fn argMax(self: *const Self, comptime dim: usize) !Tensor(&computeReducedShapeExpr(dim), [N]usize, .{}) {
+        pub fn argMax(self: *const Self, comptime dim: usize) !Tensor(&computeReducedShapeExpr(dim), [N]usize) {
             return try self.reduce(dim, Item.max, [N]usize, Item.arg);
         }
 
-        pub fn maxAll(self: *const Self) !Tensor(&computeReducedAllShapeExpr(), T, .{}) {
+        pub fn maxAll(self: *const Self) !Tensor(&computeReducedAllShapeExpr(), T) {
             return try self.reduceAll(Item.max, T, null);
         }
 
-        pub fn argMaxAll(self: *const Self) !Tensor(&computeReducedAllShapeExpr(), [N]usize, .{}) {
+        pub fn argMaxAll(self: *const Self) !Tensor(&computeReducedAllShapeExpr(), [N]usize) {
             return try self.reduceAll(Item.max, [N]usize, Item.arg);
         }
 
-        pub fn min(self: *const Self, comptime dim: usize) !Tensor(&computeReducedShapeExpr(dim), T, .{}) {
+        pub fn min(self: *const Self, comptime dim: usize) !Tensor(&computeReducedShapeExpr(dim), T) {
             return try self.reduce(dim, Item.min, T, null);
         }
 
-        pub fn argMin(self: *const Self, comptime dim: usize) !Tensor(&computeReducedShapeExpr(dim), [N]usize, .{}) {
+        pub fn argMin(self: *const Self, comptime dim: usize) !Tensor(&computeReducedShapeExpr(dim), [N]usize) {
             return try self.reduce(dim, Item.min, [N]usize, Item.arg);
         }
 
@@ -1324,27 +1324,27 @@ pub fn Tensor(comptime SA: []const DimExpr, comptime TA: type) type {
             return try self.reduceAll(Item.prod, T, null);
         }
 
-        pub fn mean(self: *const Self, comptime dim: usize) !Tensor(&computeReducedShapeExpr(dim), f64, .{}) {
+        pub fn mean(self: *const Self, comptime dim: usize) !Tensor(&computeReducedShapeExpr(dim), f64) {
             return try self.reduce(dim, Item.sum, f64, Item.mean);
         }
 
-        pub fn meanAll(self: *const Self) !Tensor(&computeReducedAllShapeExpr(), f64, .{}) {
+        pub fn meanAll(self: *const Self) !Tensor(&computeReducedAllShapeExpr(), f64) {
             return try self.reduceAll(Item.sum, f64, Item.mean);
         }
 
-        pub fn anyTrue(self: *const Self, comptime dim: usize) !Tensor(&computeReducedShapeExpr(dim), bool, .{}) {
+        pub fn anyTrue(self: *const Self, comptime dim: usize) !Tensor(&computeReducedShapeExpr(dim), bool) {
             return try self.reduce(dim, Item.orOp, bool, null);
         }
 
-        pub fn anyTrueAll(self: *const Self) !Tensor(&computeReducedAllShapeExpr(), bool, .{}) {
+        pub fn anyTrueAll(self: *const Self) !Tensor(&computeReducedAllShapeExpr(), bool) {
             return try self.reduceAll(Item.orOp, bool, null);
         }
 
-        pub fn allTrue(self: *const Self, comptime dim: usize) !Tensor(&computeReducedShapeExpr(dim), bool, .{}) {
+        pub fn allTrue(self: *const Self, comptime dim: usize) !Tensor(&computeReducedShapeExpr(dim), bool) {
             return try self.reduce(dim, Item.andOp, bool, null);
         }
 
-        pub fn allTrueAll(self: *const Self) !Tensor(&computeReducedAllShapeExpr(), bool, .{}) {
+        pub fn allTrueAll(self: *const Self) !Tensor(&computeReducedAllShapeExpr(), bool) {
             return try self.reduceAll(Item.andOp, bool, null);
         }
 
@@ -1908,11 +1908,13 @@ pub fn fromScalar(allocator: std.mem.Allocator, value: anytype) !Tensor(
 }
 
 pub fn fromArraySpecifyDimension(allocator: std.mem.Allocator, comptime D: usize, arr: anytype) !Tensor(
-    &utils.array.getArrayShapeCompWithDepth(@TypeOf(arr), D),
+    &shape_expr.staticShapeExpr(&utils.array.getArrayShapeCompWithDepth(@TypeOf(arr), D)),
     utils.array.getArrayItemTypeCompWithDepth(@TypeOf(arr), D),
-    .{},
 ) {
     const shape = comptime utils.array.getArrayShapeCompWithDepth(@TypeOf(arr), D);
+
+    const shape_expr_i = comptime shape_expr.staticShapeExpr(&shape);
+
     const AN = comptime utils.array.getArrayNDimComp(@TypeOf(arr));
     if (D > AN) {
         @compileError("can't specify dimension larger than arr, arr dimension: " ++ D);
@@ -1927,10 +1929,10 @@ pub fn fromArraySpecifyDimension(allocator: std.mem.Allocator, comptime D: usize
     // array is in stack, must copy to heap
     @memcpy(new_buf, arr_s);
 
-    const layout = layout_t.Layout(&shape).init();
-    const storage = try storage_t.Storage(T, .Cpu).initImpl(allocator, new_buf);
+    const layout = try layout_t.Layout(&shape_expr_i).init(&ShapeEnv.init(allocator));
+    const storage = try storage_t.Storage(T).initImpl(allocator, new_buf);
 
-    return Tensor(&shape, T, .{}).fromDataImpl(layout, storage, 0);
+    return Tensor(&shape_expr_i, T).fromDataImpl(layout, storage, 0);
 }
 
 pub fn fromArray(allocator: std.mem.Allocator, arr: anytype) !Tensor(
@@ -2424,7 +2426,10 @@ test "data type conversion" {
 test "reduce" {
     const allocator = std.testing.allocator;
 
-    const t1 = try rand(allocator, &.{ 3, 5 }, 0.0, 1.0);
+    var shape_env = ShapeEnv.init(allocator);
+    defer shape_env.deinit();
+
+    const t1 = try rand(allocator, &parseSpec(.{ 3, 5 }), &shape_env, 0.0, 1.0);
     defer t1.deinit();
 
     {

@@ -38,7 +38,9 @@ var rwlock: std.Thread.RwLock = std.Thread.RwLock{};
 
 pub fn appendData(key: []const u8, xval_s: []const f64, yval_s: []const f64) !void {
     rwlock.lock();
-    defer rwlock.unlock();
+    defer {
+        rwlock.unlock();
+    }
 
     if (datasets) |*ds| {
         if (allocator) |ac| {
@@ -110,27 +112,24 @@ pub fn beginPlotLoop(allocator_a: std.mem.Allocator) !void {
 }
 
 fn plotImpl() !void {
-    rwlock.lockShared();
+    rwlock.lock();
     const datasets_i = if (datasets) |ds| try ds.clone() else return error.NoDatasets;
-    rwlock.unlockShared();
+    rwlock.unlock();
 
     if (datasets_i.count() == 0) {
-        log.print(@src(), "No datasets to plot\n", .{});
+        log.print(@src(), "No datasets to plot: {}\n", .{datasets_i.count()});
         return;
     }
 
     var data_iter = datasets_i.iterator();
 
-    var axis_info = if (data_iter.next()) |entry| entry.value_ptr.axisInfo() else return;
+    const pair_entry = if (data_iter.next()) |entry| entry.value_ptr else return;
 
-    while (data_iter.next()) |entry| {
-        const axis_info_n = entry.value_ptr.axisInfo();
-
-        if (axis_info_n.x_min < axis_info.x_min) axis_info.x_min = axis_info_n.x_min;
-        if (axis_info_n.x_max > axis_info.x_max) axis_info.x_max = axis_info_n.x_max;
-        if (axis_info_n.y_min < axis_info.y_min) axis_info.y_min = axis_info_n.y_min;
-        if (axis_info_n.y_max > axis_info.y_max) axis_info.y_max = axis_info_n.y_max;
+    if (pair_entry.x.items.len < 5) {
+        return;
     }
+
+    const axis_info = pair_entry.axisInfo();
 
     const gridline_color = dvui.Color.fromHSLuv(0, 0, 0, 100);
     const subtick_gridline_color = dvui.Color.fromHSLuv(0, 0, 0, 30);
