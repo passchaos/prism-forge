@@ -2,6 +2,11 @@ const std = @import("std");
 const log = @import("log.zig");
 const storage = @import("storage.zig");
 
+const shape_expr = @import("shape_expr.zig");
+const DimExpr = shape_expr.SizeExpr;
+const ShapeEnv = shape_expr.ShapeEnv;
+// const product = shape_expr.product;
+
 pub const str = struct {
     pub fn isString(comptime st: type) bool {
         const ti = @typeInfo(st);
@@ -35,8 +40,8 @@ pub const stt = struct {
 };
 
 pub const array = struct {
-    pub fn comptimeSliceToArray(comptime S: []const usize) [S.len]usize {
-        var result: [S.len]usize = undefined;
+    pub fn comptimeSliceToArray(comptime T: type, comptime S: []const T) [S.len]T {
+        var result: [S.len]T = undefined;
         for (S, 0..) |s, i| {
             result[i] = s;
         }
@@ -53,7 +58,7 @@ pub const array = struct {
         }
     }
 
-    pub fn getArrayShapeComp(comptime T: type) [getArrayNDimComp(T)]usize {
+    pub fn getArrayShapeComp(comptime T: type) [getArrayNDimComp(T)]DimExpr {
         switch (@typeInfo(T)) {
             .array => return dimsHelper(T),
             else => @compileError("Unsupported type" ++ @typeName(T)),
@@ -67,14 +72,14 @@ pub const array = struct {
         }
     }
 
-    pub fn getArrayElementCountComp(comptime T: type) usize {
+    pub fn getArrayElementCountComp(comptime T: type) DimExpr {
         const shape = getArrayShapeComp(T);
-        return product(&shape);
+        return shape_expr.product(&shape);
     }
 
     pub fn getArrayElementCountCompWithDepth(comptime T: type, comptime D: usize) usize {
         const shape = getArrayShapeCompWithDepth(T, D);
-        return product(&shape);
+        return shape_expr.product(&shape);
     }
 
     pub fn getArrayItemTypeComp(comptime T: type) type {
@@ -91,13 +96,13 @@ pub const array = struct {
         };
     }
 
-    fn dimsHelper(comptime T: type) [getArrayNDimComp(T)]usize {
+    fn dimsHelper(comptime T: type) [getArrayNDimComp(T)]DimExpr {
         switch (@typeInfo(T)) {
             .array => |arr| {
                 const child_dims = comptime dimsHelper(arr.child);
-                return [_]usize{arr.len} ++ child_dims;
+                return [_]DimExpr{DimExpr.static(arr.len)} ++ child_dims;
             },
-            else => return [_]usize{},
+            else => return [_]DimExpr{},
         }
     }
 
@@ -280,34 +285,34 @@ pub const tensor = struct {
             else => @compileError("Unsupported type"),
         }
     }
-    pub fn computeCattedTensorShape(comptime tensors_type: type, comptime dim: usize) [computeCattedTensorShapeLen(tensors_type)]usize {
-        switch (@typeInfo(tensors_type)) {
-            .@"struct" => |si| {
-                comptime var base_shape = array.comptimeSliceToArray(si.fields[0].type.S);
+    // pub fn computeCattedTensorShape(comptime tensors_type: type, comptime dim: usize) [computeCattedTensorShapeLen(tensors_type)]usize {
+    //     switch (@typeInfo(tensors_type)) {
+    //         .@"struct" => |si| {
+    //             comptime var base_shape = array.comptimeSliceToArray(si.fields[0].type.S);
 
-                comptime {
-                    for (si.fields, 0..) |tensor_i, l_idx| {
-                        if (l_idx == 0) continue;
-                        const l_shape = array.comptimeSliceToArray(tensor_i.type.S);
+    //             comptime {
+    //                 for (si.fields, 0..) |tensor_i, l_idx| {
+    //                     if (l_idx == 0) continue;
+    //                     const l_shape = array.comptimeSliceToArray(tensor_i.type.S);
 
-                        for (l_shape, 0..) |l_dim, idx| {
-                            if (idx == dim) {
-                                base_shape[idx] += l_dim;
-                            } else if (l_dim != base_shape[idx]) {
-                                @compileError("Layouts must have the same shape except at dimension " ++ std.fmt.comptimePrint(
-                                    "{} l_idx: {} l_dim: {} base_shape[idx]: {}",
-                                    .{ dim, l_idx, l_dim, base_shape[idx] },
-                                ));
-                            }
-                        }
-                    }
-                }
+    //                     for (l_shape, 0..) |l_dim, idx| {
+    //                         if (idx == dim) {
+    //                             base_shape[idx] += l_dim;
+    //                         } else if (l_dim != base_shape[idx]) {
+    //                             @compileError("Layouts must have the same shape except at dimension " ++ std.fmt.comptimePrint(
+    //                                 "{} l_idx: {} l_dim: {} base_shape[idx]: {}",
+    //                                 .{ dim, l_idx, l_dim, base_shape[idx] },
+    //                             ));
+    //                         }
+    //                     }
+    //                 }
+    //             }
 
-                return base_shape;
-            },
-            else => @compileError("Unsupported type"),
-        }
-    }
+    //             return base_shape;
+    //         },
+    //         else => @compileError("Unsupported type"),
+    //     }
+    // }
 
     pub fn computeStackedTensorShapeLen(comptime tensors_type: type) usize {
         switch (@typeInfo(tensors_type)) {
@@ -710,17 +715,16 @@ pub fn computeArrayShapeStrides(comptime N: usize, shapes: [N]usize) [N]usize {
     return strides;
 }
 
-pub fn computeStrides(comptime shape: []const usize) [shape.len]usize {
-    const rank = shape.len;
-    var new_stride = [_]usize{0} ** rank;
+pub fn computeStrides(comptime N: usize, shape: [N]usize) [shape.len]usize {
+    var new_stride = [_]usize{0} ** N;
 
     // handle zero-dimensional tensor
-    if (rank == 0) {
+    if (N == 0) {
         return new_stride;
     }
 
     var acc: usize = 1;
-    var i: usize = rank - 1;
+    var i: usize = N - 1;
     while (i != 0) : (i -= 1) {
         new_stride[i] = acc;
         acc *= shape[i];
@@ -730,10 +734,10 @@ pub fn computeStrides(comptime shape: []const usize) [shape.len]usize {
     return new_stride;
 }
 
-pub fn indexShapeToFlat(comptime shape_a: []const usize, index: [shape_a.len]usize) !usize {
-    const stride = computeStrides(shape_a);
+pub fn indexShapeToFlat(comptime N: usize, shape_a: [N]usize, index: [N]usize) !usize {
+    const stride = computeStrides(N, shape_a);
 
-    return try indexToFlat(&index, shape_a, &stride);
+    return try indexToFlat(&index, &shape_a, &stride);
 }
 
 pub fn indexToFlat(indices: []const usize, shape: []const usize, stride_a: []const usize) anyerror!usize {

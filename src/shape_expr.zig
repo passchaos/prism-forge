@@ -48,11 +48,21 @@ pub fn makeSymbol(comptime sym: anytype) SymbolHandle {
 }
 
 const BinaryDimOpExpr = struct {
-    lhs: *const DimExpr,
-    rhs: *const DimExpr,
+    lhs: *const SizeExpr,
+    rhs: *const SizeExpr,
 };
 
-pub const DimExpr = union(enum) {
+pub fn staticShapeExpr(comptime shape: []const usize) [shape.len]SizeExpr {
+    const N = shape.len;
+
+    var result: [N]SizeExpr = undefined;
+    for (shape, 0..) |s, i| {
+        result[i] = SizeExpr.static(s);
+    }
+    return result;
+}
+
+pub const SizeExpr = union(enum) {
     const Self = @This();
 
     Static: usize,
@@ -61,6 +71,24 @@ pub const DimExpr = union(enum) {
     Mul: BinaryDimOpExpr,
     Max: BinaryDimOpExpr,
     Min: BinaryDimOpExpr,
+
+    pub fn format(self: @This(), writer: *std.Io.Writer) !void {
+        switch (self) {
+            .Static => |v| try writer.print("{d}", .{v}),
+            .Sym => |s| try writer.print("\"{s}\"", .{s.name}),
+            .Add => |op| try writer.print("({f} + {f})", .{ op.lhs, op.rhs }),
+            .Mul => |op| try writer.print("({f} * {f})", .{ op.lhs, op.rhs }),
+            .Max => |op| try writer.print("max({f}, {f})", .{ op.lhs, op.rhs }),
+            .Min => |op| try writer.print("min({f}, {f})", .{ op.lhs, op.rhs }),
+        }
+    }
+
+    pub fn static_value(self: *const Self) usize {
+        return switch (self.*) {
+            .Static => |v| v,
+            else => @compileError("Not static"),
+        };
+    }
 
     // may use egraph to optimize
     pub fn equal(a: Self, b: Self) bool {
@@ -73,22 +101,7 @@ pub const DimExpr = union(enum) {
                 .Sym => |b_s| a_s.id == b_s.id,
                 else => |_| false,
             },
-            .Add => |a_v| switch (b) {
-                .Add => |b_v| a_v.lhs.*.equal(b_v.lhs.*) and a_v.rhs.*.equal(b_v.rhs.*),
-                else => |_| false,
-            },
-            .Mul => |a_v| switch (b) {
-                .Mul => |b_v| a_v.lhs.*.equal(b_v.lhs.*) and a_v.rhs.*.equal(b_v.rhs.*),
-                else => |_| false,
-            },
-            .Max => |a_v| switch (b) {
-                .Max => |b_v| a_v.lhs.*.equal(b_v.lhs.*) and a_v.rhs.*.equal(b_v.rhs.*),
-                else => |_| false,
-            },
-            .Min => |a_v| switch (b) {
-                .Min => |b_v| a_v.lhs.*.equal(b_v.lhs.*) and a_v.rhs.*.equal(b_v.rhs.*),
-                else => |_| false,
-            },
+            else => false,
         };
     }
 
@@ -153,7 +166,7 @@ pub const ShapeEnv = struct {
         return error.UnboundSymbol;
     }
 
-    pub fn lookupShape(self: *const Self, comptime shape_expr: []const DimExpr) ![shape_expr.len]usize {
+    pub fn lookupShape(self: *const Self, comptime shape_expr: []const SizeExpr) ![shape_expr.len]usize {
         var result: [shape_expr.len]usize = undefined;
         for (shape_expr, 0..) |dim_expr, i| {
             result[i] = try dim_expr.eval(self);
@@ -162,34 +175,40 @@ pub const ShapeEnv = struct {
     }
 };
 
-pub fn product(dim_exprs: []const DimExpr) DimExpr {
-    var result = DimExpr.static(1);
+pub fn product(dim_exprs: []const SizeExpr) SizeExpr {
+    var result = SizeExpr.static(1);
     for (dim_exprs) |dim| {
-        result = DimExpr.mul(result, dim);
+        result = switch (result) {
+            .Static => |rs| switch (dim) {
+                .Static => |ds| SizeExpr.static(rs * ds),
+                else => SizeExpr.mul(&result, &dim),
+            },
+            else => SizeExpr.mul(&result, &dim),
+        };
     }
     return result;
 }
 
 pub fn insertDimComptime(
-    comptime arr: []const DimExpr,
+    comptime arr: []const SizeExpr,
     comptime dim: usize,
     comptime value: usize,
-) [arr.len + 1]DimExpr {
+) [arr.len + 1]SizeExpr {
     const N = arr.len;
 
     if (dim > N) @compileError("Invalid dimension");
 
     if (N == 0) {
-        return [_]usize{DimExpr.static(value)};
+        return [_]usize{SizeExpr.static(value)};
     } else {
-        var new_arr = [_]DimExpr{undefined} ** (N + 1);
+        var new_arr = [_]SizeExpr{undefined} ** (N + 1);
 
         var i: usize = 0;
         var j: usize = 0;
 
         while (i < N + 1) {
             if (i == dim) {
-                new_arr[i] = DimExpr.static(value);
+                new_arr[i] = SizeExpr.static(value);
                 i += 1;
                 continue;
             }
@@ -202,7 +221,7 @@ pub fn insertDimComptime(
     }
 }
 
-pub fn removeDimComptime(comptime arr: []const usize, comptime dim: usize) [arr.len - 1]usize {
+pub fn removeDimComptime(comptime arr: []const SizeExpr, comptime dim: usize) [arr.len - 1]SizeExpr {
     const N = arr.len;
 
     if (dim >= N) @compileError("Invalid dimension");
@@ -214,8 +233,14 @@ pub fn removeDimComptime(comptime arr: []const usize, comptime dim: usize) [arr.
     } else if (N == 1) {
         return [0]usize{};
     } else {
-        if (arr[dim] != 1) @compileError("Dim not one");
-        var new_arr = [_]usize{undefined} ** (N - 1);
+        switch (arr[dim]) {
+            .Static => |sv| if (sv != 1) @compileError(
+                "Dim not one" ++ std.fmt.comptimePrint("{}", .{sv}),
+            ),
+            else => @compileError("Dim not static one"),
+        }
+
+        var new_arr = [_]SizeExpr{undefined} ** (N - 1);
         var i: usize = 0;
         var j: usize = 0;
 
@@ -233,10 +258,10 @@ pub fn removeDimComptime(comptime arr: []const usize, comptime dim: usize) [arr.
     }
 }
 
-pub inline fn parseSpec(comptime dims: anytype) [utils.stt.getFieldsLenComptime(@TypeOf(dims))]DimExpr {
+pub fn parseSpec(comptime dims: anytype) [utils.stt.getFieldsLenComptime(@TypeOf(dims))]SizeExpr {
     const N = comptime utils.stt.getFieldsLenComptime(@TypeOf(dims));
 
-    comptime var parsed_dims = [_]DimExpr{undefined} ** N;
+    comptime var parsed_dims = [_]SizeExpr{undefined} ** N;
 
     const info = @typeInfo(@TypeOf(dims)).@"struct";
 
@@ -247,21 +272,21 @@ pub inline fn parseSpec(comptime dims: anytype) [utils.stt.getFieldsLenComptime(
 
                 const T = @TypeOf(raw);
 
-                if (T == DimExpr) {
+                if (T == SizeExpr) {
                     parsed_dims[i] = raw;
                     continue;
                 }
 
                 switch (@typeInfo(T)) {
                     .@"struct" => |_| {
-                        parsed_dims[i] = DimExpr.sym(raw);
+                        parsed_dims[i] = SizeExpr.sym(raw);
                     },
                     .comptime_int => {
-                        parsed_dims[i] = DimExpr.static(raw);
+                        parsed_dims[i] = SizeExpr.static(raw);
                     },
                     .pointer => {
                         if (utils.str.isString(T)) {
-                            parsed_dims[i] = DimExpr.sym(.{ .name = raw });
+                            parsed_dims[i] = SizeExpr.sym(.{ .name = raw });
                         } else {
                             @compileError("unsupported type");
                         }
@@ -279,9 +304,19 @@ pub inline fn parseSpec(comptime dims: anytype) [utils.stt.getFieldsLenComptime(
     return parsed_dims;
 }
 
+pub fn allStatic(comptime shape_expr: []const SizeExpr) bool {
+    inline for (shape_expr) |dim| {
+        switch (dim) {
+            .Static => continue,
+            else => return false,
+        }
+    }
+    return true;
+}
+
 pub fn shapeExprEqual(
-    comptime lhs: []const DimExpr,
-    comptime rhs: []const DimExpr,
+    comptime lhs: []const SizeExpr,
+    comptime rhs: []const SizeExpr,
 ) bool {
     if (lhs.len != rhs.len) return false;
     inline for (lhs, rhs) |l, r| {
@@ -291,21 +326,21 @@ pub fn shapeExprEqual(
 }
 
 pub fn canBroadcast(
-    comptime lhs: []const DimExpr,
-    comptime rhs: []const DimExpr,
+    comptime lhs: []const SizeExpr,
+    comptime rhs: []const SizeExpr,
 ) bool {
     const max_len = @max(lhs.len, rhs.len);
 
     inline for (0..max_len) |i| {
-        const ldim = if (i < lhs.len) lhs[lhs.len - 1 - i] else DimExpr.static(1);
-        const rdim = if (i < rhs.len) rhs[rhs.len - 1 - i] else DimExpr.static(1);
+        const ldim = if (i < lhs.len) lhs[lhs.len - 1 - i] else SizeExpr.static(1);
+        const rdim = if (i < rhs.len) rhs[rhs.len - 1 - i] else SizeExpr.static(1);
 
         if (!canBroadcastDim(ldim, rdim)) return false;
     }
     return true;
 }
 
-fn canBroadcastDim(comptime a: DimExpr, comptime b: DimExpr) bool {
+fn canBroadcastDim(comptime a: SizeExpr, comptime b: SizeExpr) bool {
     return switch (a) {
         .Static => |a_v| switch (b) {
             .Static => |b_v| (a_v == b_v) or (a_v == 1),
@@ -317,9 +352,9 @@ fn canBroadcastDim(comptime a: DimExpr, comptime b: DimExpr) bool {
 }
 
 pub fn generateBroadcastStride(
-    comptime orig_shape_expr: []const DimExpr,
+    comptime orig_shape_expr: []const SizeExpr,
     orig_stride: [orig_shape_expr.len]usize,
-    comptime target_shape_expr: []const DimExpr,
+    comptime target_shape_expr: []const SizeExpr,
 ) [target_shape_expr.len]usize {
     const N = orig_shape_expr.len;
     const BN = target_shape_expr.len;
@@ -421,12 +456,19 @@ test "symbol_eql" {
 }
 
 test "dim_spec" {
+    {
+        const ss1 = comptime SizeExpr.static(10);
+        const ss_v = comptime ss1.static_value();
+        try std.testing.expect(ss_v == 10);
+        // @compileLog(std.fmt.comptimePrint("ss_v: {}\n", .{ss_v}));
+    }
+
     const sym1 = comptime makeSymbol(.{ .name = "abc" });
 
-    const sym12 = comptime DimExpr.add(&DimExpr{ .Sym = sym1 }, &DimExpr.sym(.{ .name = "abc" }));
+    const sym12 = comptime SizeExpr.add(&SizeExpr{ .Sym = sym1 }, &SizeExpr.sym(.{ .name = "abc" }));
 
     {
-        const dim_spec = parseSpec(.{ sym12, 2, 10, "ddd", "ddd", .{"ddd"}, .{"ddd"}, .{ .name = "ddd" }, .{ .name = "ddd" } });
+        const dim_spec = comptime parseSpec(.{ sym12, 2, 10, "ddd", "ddd", .{"ddd"}, .{"ddd"}, .{ .name = "ddd" }, .{ .name = "ddd" } });
         const static_v = comptime dim_spec[1].Static;
         std.debug.print("dim_spec: {any} {}\n", .{ dim_spec, static_v });
     }
@@ -438,10 +480,10 @@ test "dim_spec" {
 }
 
 test "broadcast_comp" {
-    const lhs = comptime DimExpr.static(1);
+    const lhs = comptime SizeExpr.static(1);
 
-    const lhs_1 = comptime DimExpr.static(2);
-    const rhs = comptime DimExpr.static(3);
+    const lhs_1 = comptime SizeExpr.static(2);
+    const rhs = comptime SizeExpr.static(3);
 
     try std.testing.expect(canBroadcastDim(lhs, rhs));
     try std.testing.expect(!canBroadcastDim(lhs_1, rhs));

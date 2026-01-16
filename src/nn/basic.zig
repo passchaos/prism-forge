@@ -5,10 +5,14 @@ const matmul = @import("../matmul.zig");
 const mnist = @import("../mnist.zig");
 const plot = @import("../plot.zig");
 const layer = @import("layer.zig");
+const shape_expr = @import("../shape_expr.zig");
+
+const SizeExpr = shape_expr.SizeExpr;
+const ShapeEnv = shape_expr.ShapeEnv;
 
 const DT = f64;
-fn Tensor2(comptime shape: [2]usize) type {
-    return tensor.Tensor(&shape, DT, .{});
+fn Tensor2(comptime shape: [2]SizeExpr) type {
+    return tensor.Tensor(&shape, DT);
 }
 
 pub fn function2(
@@ -145,24 +149,24 @@ pub fn gradientDescent(
 }
 
 pub fn TwoLayerNet(
-    comptime batch_size: usize,
-    comptime input_size: usize,
-    comptime hidden_size: usize,
-    comptime output_size: usize,
+    comptime batch_size: SizeExpr,
+    comptime input_size: SizeExpr,
+    comptime hidden_size: SizeExpr,
+    comptime output_size: SizeExpr,
 ) type {
     return struct {
-        const TensorII = Tensor2([2]usize{ batch_size, input_size });
-        const TensorTI = Tensor2([2]usize{ batch_size, output_size });
+        const TensorII = Tensor2([2]SizeExpr{ batch_size, input_size });
+        const TensorTI = Tensor2([2]SizeExpr{ batch_size, output_size });
 
         const Affine1I = layer.Affine(batch_size, input_size, hidden_size, DT);
         const ReluI = layer.Relu(&.{ batch_size, hidden_size }, DT);
         const Affine2I = layer.Affine(batch_size, hidden_size, output_size, DT);
         const SoftmaxWithLossI = layer.SoftmaxWithLoss(&.{ batch_size, output_size }, DT);
         const Grad = struct {
-            dw1: Tensor2([2]usize{ input_size, hidden_size }),
-            db1: Tensor2([2]usize{ 1, hidden_size }),
-            dw2: Tensor2([2]usize{ hidden_size, output_size }),
-            db2: Tensor2([2]usize{ 1, output_size }),
+            dw1: Tensor2([2]SizeExpr{ input_size, hidden_size }),
+            db1: Tensor2([2]SizeExpr{ SizeExpr.static(1), hidden_size }),
+            dw2: Tensor2([2]SizeExpr{ hidden_size, output_size }),
+            db2: Tensor2([2]SizeExpr{ SizeExpr.static(1), output_size }),
         };
 
         // params: std.StringHashMap(Tensor2),
@@ -191,28 +195,31 @@ pub fn TwoLayerNet(
         fn init(
             allocator: std.mem.Allocator,
             weight_init_std: DT,
+            shape_env: *const ShapeEnv,
         ) !Self {
             // var params_i = std.StringHashMap(Tensor2).init(allocator);
 
             var w1 = try tensor.randNorm(
                 allocator,
                 &.{ input_size, hidden_size },
+                shape_env,
                 0.0,
                 1.0,
             );
             w1.mulScalar_(weight_init_std);
 
-            const b1 = try tensor.zeros(allocator, DT, &.{ 1, hidden_size });
+            const b1 = try tensor.zeros(allocator, DT, &.{ SizeExpr.static(1), hidden_size }, shape_env);
 
             var w2 = try tensor.randNorm(
                 allocator,
                 &.{ hidden_size, output_size },
+                shape_env,
                 0.0,
                 1.0,
             );
             w2.mulScalar_(weight_init_std);
 
-            const b2 = try tensor.zeros(allocator, DT, &.{ 1, output_size });
+            const b2 = try tensor.zeros(allocator, DT, &.{ SizeExpr.static(1), output_size }, shape_env);
 
             // try params_i.put("W1", w1);
             // try params_i.put("b1", b1);
@@ -342,7 +349,7 @@ pub fn TwoLayerNet(
     };
 }
 
-pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, comptime batch_size: usize, learning_rate: f64) !void {
+pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, batch_size: usize, learning_rate: f64) !void {
     const datas = try mnist.loadDatas(DT, allocator);
 
     const train_images = datas.train_images;
@@ -371,22 +378,29 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, comptime
         learning_rate,
     });
 
-    var net = try TwoLayerNet(batch_size, 784, 50, 10).init(
-        allocator,
-        0.01,
-    );
+    const batch_size_expr = comptime SizeExpr.sym(.{ .name = "batch_size" });
+
+    var shape_env = ShapeEnv.init(allocator);
+    try shape_env.bind(batch_size_expr.Sym.id, batch_size);
+
+    var net = try TwoLayerNet(
+        batch_size_expr,
+        SizeExpr.static(784),
+        SizeExpr.static(50),
+        SizeExpr.static(10),
+    ).init(allocator, 0.01, &shape_env);
     defer net.deinit();
 
     for (0..iters_num) |idx| {
-        const batch_mask = try tensor.rand(allocator, &.{batch_size}, @as(usize, 0), train_size);
+        const batch_mask = try tensor.rand(allocator, &.{batch_size_expr}, &shape_env, @as(usize, 0), train_size);
         defer batch_mask.deinit();
 
-        const batch_indices = batch_mask.dataSliceToArray();
+        const batch_indices = batch_mask.dataSliceRaw();
         // const batch_indices = &.{ 0, 1 };
 
-        const x_batch = try train_images.indexSelect(0, batch_size, batch_indices);
+        const x_batch = try train_images.indexSelect(0, batch_size_expr, &shape_env, batch_indices);
         defer x_batch.deinit();
-        const t_batch = try train_labels.indexSelect(0, batch_size, batch_indices);
+        const t_batch = try train_labels.indexSelect(0, batch_size_expr, &shape_env, batch_indices);
         defer t_batch.deinit();
 
         const grads1 = try net.gradient(&x_batch, &t_batch);
@@ -455,11 +469,11 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, comptime
         const loss_idx = try tensor.arange(allocator, @as(usize, 100), .{});
         defer loss_idx.deinit();
 
-        const idx_loss = loss_idx.dataSliceToArray();
+        const idx_loss = loss_idx.dataSliceRaw();
 
-        const loss_x = try test_images.indexSelect(0, 100, idx_loss);
+        const loss_x = try test_images.indexSelect(0, batch_size_expr, &shape_env, idx_loss);
         defer loss_x.deinit();
-        const loss_t = try test_labels.indexSelect(0, 100, idx_loss);
+        const loss_t = try test_labels.indexSelect(0, batch_size_expr, &shape_env, idx_loss);
         defer loss_t.deinit();
         const loss = try net.loss(&loss_x, &loss_t);
 

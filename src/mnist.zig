@@ -3,11 +3,12 @@ const tensor = @import("tensor.zig");
 const layout = @import("layout.zig");
 const storage = @import("storage.zig");
 const log = @import("log.zig");
+const shape_expr = @import("shape_expr.zig");
 
 const Tensor_2 = tensor.Tensor(2, .{});
 const Tensor_1 = tensor.Tensor(1, .{});
 
-pub fn loadImages(allocator: std.mem.Allocator, path: []const u8, comptime shape: []const usize) !tensor.Tensor(shape, u8, .{}) {
+pub fn loadImages(allocator: std.mem.Allocator, path: []const u8, comptime shape: []const usize) !tensor.Tensor(&shape_expr.staticShapeExpr(shape), u8) {
     var buf = [_]u8{0} ** 4;
 
     const file = try std.fs.openFileAbsolute(path, .{ .mode = .read_only });
@@ -45,7 +46,7 @@ pub fn loadImages(allocator: std.mem.Allocator, path: []const u8, comptime shape
     return try tensor.fromData(u8, allocator, data, shape);
 }
 
-pub fn loadLabels(allocator: std.mem.Allocator, path: []const u8, comptime count: usize) !tensor.Tensor(&.{count}, u8, .{}) {
+pub fn loadLabels(allocator: std.mem.Allocator, path: []const u8, comptime count: usize) !tensor.Tensor(&.{shape_expr.SizeExpr.static(count)}, u8) {
     var buf = [_]u8{0} ** 4;
 
     const file = try std.fs.openFileAbsolute(path, .{ .mode = .read_only });
@@ -74,10 +75,10 @@ pub fn loadLabels(allocator: std.mem.Allocator, path: []const u8, comptime count
 }
 
 pub fn loadDatas(comptime T: type, allocator: std.mem.Allocator) !struct {
-    train_images: tensor.Tensor(&.{ 60000, 784 }, T, .{}),
-    train_labels: tensor.Tensor(&.{ 60000, 10 }, T, .{}),
-    test_images: tensor.Tensor(&.{ 10000, 784 }, T, .{}),
-    test_labels: tensor.Tensor(&.{ 10000, 10 }, T, .{}),
+    train_images: tensor.Tensor(&shape_expr.parseSpec(.{ 60000, 784 }), T),
+    train_labels: tensor.Tensor(&shape_expr.parseSpec(.{ 60000, 10 }), T),
+    test_images: tensor.Tensor(&shape_expr.parseSpec(.{ 10000, 784 }), T),
+    test_labels: tensor.Tensor(&shape_expr.parseSpec(.{ 10000, 10 }), T),
 } {
     const env_home = std.posix.getenv("HOME").?;
 

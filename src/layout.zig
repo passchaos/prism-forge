@@ -3,7 +3,7 @@ const utils = @import("./utils.zig");
 const log = @import("log.zig");
 const shape_expr = @import("shape_expr.zig");
 
-const DimExpr = shape_expr.DimExpr;
+const DimExpr = shape_expr.SizeExpr;
 const ShapeEnv = shape_expr.ShapeEnv;
 
 const product = shape_expr.product;
@@ -17,7 +17,7 @@ pub fn Layout(comptime shape_spec: []const DimExpr) type {
 
         _shape: [N]usize,
         _stride: [N]usize,
-        _shape_env: ShapeEnv,
+        _shape_env: *const ShapeEnv,
         _is_contiguous: bool = true,
 
         const Self = @This();
@@ -29,7 +29,7 @@ pub fn Layout(comptime shape_spec: []const DimExpr) type {
 
             const new_stride = shape_expr.generateBroadcastStride(SE, self.stride(), target_shape_spec);
 
-            return Layout(target_shape_spec).initRaw(new_stride);
+            return Layout(target_shape_spec).initRaw(self.shape_env(), new_stride) catch unreachable;
         }
 
         fn checkContiguous(shape_a: []const usize, strides_a: []const usize) bool {
@@ -54,26 +54,26 @@ pub fn Layout(comptime shape_spec: []const DimExpr) type {
             return true;
         }
 
-        pub fn init(shape_env: ShapeEnv) !Self {
-            const shape_i = try shape_env.lookupShape(SE);
-            const strides_i = computeSliceShapeStrides(N, shape_i);
+        pub fn init(shape_env_a: *const ShapeEnv) !Self {
+            const shape_i = try shape_env_a.lookupShape(SE);
+            const strides_i = computeSliceShapeStrides(N, &shape_i);
 
-            return Self.initRaw(shape_env, strides_i);
+            return Self.initRaw(shape_env_a, strides_i);
         }
 
-        pub fn initRaw(shape_env: ShapeEnv, stride_a: [N]usize) !Self {
-            const shape_i = try shape_env.lookupShape(SE);
+        pub fn initRaw(shape_env_a: *const ShapeEnv, stride_a: [N]usize) !Self {
+            const shape_i = try shape_env_a.lookupShape(SE);
 
-            return Self.initInner(shape_env, shape_i, stride_a);
+            return Self.initInner(shape_env_a, shape_i, stride_a);
         }
 
-        fn initInner(shape_env: ShapeEnv, shape_a: [N]usize, stride_a: [N]usize) Self {
+        fn initInner(shape_env_a: *const ShapeEnv, shape_a: [N]usize, stride_a: [N]usize) Self {
             const is_contiguous = checkContiguous(&shape_a, &stride_a);
 
             const layout = Self{
                 ._shape = shape_a,
                 ._stride = stride_a,
-                ._shape_env = shape_env,
+                ._shape_env = shape_env_a,
                 ._is_contiguous = is_contiguous,
             };
 
@@ -110,7 +110,7 @@ pub fn Layout(comptime shape_spec: []const DimExpr) type {
             return Layout(&new_shape_expr).initRaw(self._shape_env, new_strides) catch unreachable;
         }
 
-        pub fn reshape(self: *const Self, comptime new_shape_expr: []const usize) Layout(new_shape_expr) {
+        pub fn reshape(self: *const Self, comptime new_shape_expr: []const DimExpr) Layout(new_shape_expr) {
             const self_size = comptime if (N == 0) 1 else product(SE);
             const new_size = comptime product(new_shape_expr);
 
@@ -143,7 +143,7 @@ pub fn Layout(comptime shape_spec: []const DimExpr) type {
 
         pub fn size(self: *const Self) usize {
             if (N == 0) return 1;
-            return comptime utils.product(&self.shape());
+            return utils.product(&self.shape());
         }
 
         pub fn ndim(_: *const Self) usize {
@@ -152,6 +152,10 @@ pub fn Layout(comptime shape_spec: []const DimExpr) type {
 
         pub fn shape(self: *const Self) [N]usize {
             return self._shape;
+        }
+
+        pub fn shape_env(self: *const Self) *const ShapeEnv {
+            return self._shape_env;
         }
 
         pub fn stride(self: *const Self) [N]usize {
@@ -167,6 +171,15 @@ pub fn Layout(comptime shape_spec: []const DimExpr) type {
             writer: *std.Io.Writer,
         ) std.Io.Writer.Error!void {
             try writer.print("Layout {{", .{});
+            try writer.print("  shape_expr: {{ ", .{});
+            for (SE, 0..) |dim_expr, i| {
+                if (i > 0) {
+                    try writer.print(", ", .{});
+                }
+                try writer.print("{f}", .{dim_expr});
+            }
+            try writer.print(" }}", .{});
+
             try writer.print("  shapes: {any},", .{self.shape()});
             try writer.print("  strides: {any},", .{self.stride()});
             try writer.print("  contiguous: {}  ", .{self._is_contiguous});
@@ -175,20 +188,20 @@ pub fn Layout(comptime shape_spec: []const DimExpr) type {
     };
 }
 
-pub fn cat(layouts: anytype, comptime dim: usize) Layout(&computeCattedShape(
-    @TypeOf(layouts),
-    dim,
-)) {
-    const new_shape = comptime computeCattedShape(@TypeOf(layouts), dim);
+// pub fn cat(layouts: anytype, comptime dim: usize) Layout(&computeCattedShapeExpr(
+//     @TypeOf(layouts),
+//     dim,
+// )) {
+//     const new_shape_expr = comptime computeCattedShapeExpr(@TypeOf(layouts), dim);
 
-    return Layout(&new_shape).init();
-}
+//     return Layout(&new_shape_expr).init();
+// }
 
-pub fn stack(layouts: anytype, comptime dim: usize) Layout(&computeStackedShape(@TypeOf(layouts), dim)) {
-    const new_shape = comptime computeStackedShape(@TypeOf(layouts), dim);
+// pub fn stack(layouts: anytype, comptime dim: usize) Layout(&computeStackedShape(@TypeOf(layouts), dim)) {
+//     const new_shape = comptime computeStackedShape(@TypeOf(layouts), dim);
 
-    return Layout(&new_shape).init();
-}
+//     return Layout(&new_shape).init();
+// }
 
 pub fn computePermutedShapeExpr(comptime shape_expr_a: []const DimExpr, comptime perm: []const usize) [shape_expr_a.len]DimExpr {
     var new_shape_expr = [_]DimExpr{undefined} ** shape_expr_a.len;
@@ -238,33 +251,34 @@ fn computeCattedDims(comptime layouts_type: type) usize {
     }
 }
 
-fn computeCattedShape(comptime layouts_type: type, comptime dim: usize) [computeCattedDims(layouts_type)]usize {
+fn computeCattedShapeExpr(comptime layouts_type: type, comptime dim: usize) [computeCattedDims(layouts_type)]DimExpr {
     switch (@typeInfo(layouts_type)) {
         .@"struct" => |si| {
             // const N = comptime computeCattedDims(layouts);
-            comptime var base_shape = utils.array.comptimeSliceToArray(si.fields[0].type.S);
+            _ = dim;
+            const base_shape_expr: [computeCattedDims(layouts_type)]DimExpr = utils.array.comptimeSliceToArray(DimExpr, si.fields[0].type.SE);
             // comptime var base_shape = layouts[0].shape();
 
-            comptime {
-                for (si.fields, 0..) |field, f_idx| {
-                    if (f_idx == 0) continue;
+            // comptime {
+            //     for (si.fields, 0..) |field, f_idx| {
+            //         if (f_idx == 0) continue;
 
-                    const l_shape = field.type.S;
+            //         const l_shape = field.type.SE;
 
-                    for (l_shape, 0..) |l_dim, idx| {
-                        if (idx == dim) {
-                            base_shape[idx] += l_dim;
-                        } else if (l_dim != base_shape[idx]) {
-                            @compileError("Layouts must have the same shape except at dimension " ++ std.fmt.comptimePrint(
-                                "{} l_idx: {} l_dim: {} base_shape[idx]: {}",
-                                .{ dim, f_idx, l_dim, base_shape[idx] },
-                            ));
-                        }
-                    }
-                }
-            }
+            //         for (l_shape, 0..) |l_dim, idx| {
+            //             if (idx == dim) {
+            //                 base_shape_expr[idx] = DimExpr.add(&base_shape_expr[idx], &l_dim);
+            //             } else if (!l_dim.equal(base_shape_expr[idx])) {
+            //                 @compileError("Layouts must have the same shape except at dimension " ++ std.fmt.comptimePrint(
+            //                     "{} l_idx: {} l_dim: {} base_shape[idx]: {}",
+            //                     .{ dim, f_idx, l_dim, base_shape_expr[idx] },
+            //                 ));
+            //             }
+            //         }
+            //     }
+            // }
 
-            return base_shape;
+            return base_shape_expr;
         },
         else => @compileError("Unsupported type"),
     }
@@ -373,18 +387,33 @@ fn computeSliceShapeStrides(comptime N: usize, shape: []const usize) [N]usize {
 test "transpose" {
     const allocator = std.testing.allocator;
 
-    const Layout_2x3x4 = Layout(&shape_expr.parseSpec(.{ 2, 3, 4 }));
+    const ddd_dim = comptime shape_expr.SizeExpr.sym(.{ .name = "dddd" });
 
-    const shape_env = ShapeEnv.init(allocator);
-    const layout = try Layout_2x3x4.initRaw(shape_env, [_]usize{ 12, 4, 1 });
+    const Layout_2x3x4 = Layout(&shape_expr.parseSpec(.{ 2, 3, 4, ddd_dim }));
+
+    var shape_env = ShapeEnv.init(allocator);
+    defer shape_env.deinit();
+    try shape_env.bind(ddd_dim.Sym.id, 5);
+
+    const layout = try Layout_2x3x4.init(&shape_env);
+
+    std.debug.print("Layout: {f}\n", .{layout});
+
     const transposed = layout.transpose(0, 2);
-    try std.testing.expectEqual([_]usize{ 4, 3, 2 }, transposed.shape());
-    try std.testing.expectEqual([_]usize{ 1, 4, 12 }, transposed.stride());
+    try std.testing.expectEqual([_]usize{ 4, 3, 2, 5 }, transposed.shape());
+    try std.testing.expectEqual([_]usize{ 5, 20, 60, 1 }, transposed.stride());
 }
 
 test "permute" {
-    const Layout3 = Layout(&.{ 2, 3, 4 });
-    const layout = Layout3.initRaw([_]usize{ 12, 4, 1 });
+    const allocator = std.testing.allocator;
+
+    const Layout3 = Layout(&shape_expr.parseSpec(.{ 2, 3, "hello" }));
+
+    var shape_env = ShapeEnv.init(allocator);
+    defer shape_env.deinit();
+    try shape_env.bind(Layout3.SE[2].Sym.id, 4);
+
+    const layout = try Layout3.init(&shape_env);
     const permuted = layout.permute([_]usize{ 2, 0, 1 });
     try std.testing.expectEqual(
         [_]usize{ 4, 2, 3 },
@@ -394,17 +423,21 @@ test "permute" {
 }
 
 test "reshape" {
-    const Layout3 = Layout(&.{ 2, 3, 4 });
-    const layout = Layout3.initRaw([_]usize{ 12, 4, 1 });
+    const allocator = std.testing.allocator;
 
-    const reshaped = layout.reshape(&.{ 6, 4 });
+    const Layout3 = Layout(&shape_expr.parseSpec(.{ 2, 3, 4 }));
+    const layout = try Layout3.init(&ShapeEnv.init(allocator));
+
+    const reshaped = layout.reshape(&shape_expr.parseSpec(.{ 6, 4 }));
     try std.testing.expectEqual([_]usize{ 6, 4 }, reshaped.shape());
     try std.testing.expectEqual([_]usize{ 4, 1 }, reshaped.stride());
 }
 
 test "unsqueeze" {
-    const Layout3 = Layout(&.{ 2, 3, 4 });
-    const layout = Layout3.initRaw([_]usize{ 12, 4, 1 });
+    const allocator = std.testing.allocator;
+
+    const Layout3 = Layout(&shape_expr.parseSpec(.{ 2, 3, 4 }));
+    const layout = try Layout3.init(&ShapeEnv.init(allocator));
 
     std.debug.print("layout: {f}\n", .{layout});
     const unsqueezed = layout.unsqueeze(1);
@@ -417,21 +450,25 @@ test "unsqueeze" {
     std.debug.print("squeezed: {f}\n", .{squeezed});
 }
 
-test "cat or stack" {
-    const Layout_2x3x4 = Layout(&.{ 2, 3, 4 });
-    const Layout_1x3x4 = Layout(&.{ 1, 3, 4 });
+// test "cat or stack" {
+//     const allocator = std.testing.allocator;
 
-    const l1 = Layout_2x3x4.init();
-    const l2 = Layout_1x3x4.init();
-    const l3 = Layout_2x3x4.init();
+//     const Layout_2x3x4 = Layout(&shape_expr.parseSpec(.{ 2, 3, 4 }));
+//     const Layout_1x3x4 = Layout(&shape_expr.parseSpec(.{ 1, 3, 4 }));
 
-    const lc = cat(.{ l1, l2, l3 }, 0);
+//     const shape_env = ShapeEnv.init(allocator);
 
-    try std.testing.expectEqual([3]usize{ 5, 3, 4 }, lc.shape());
+//     const l1 = try Layout_2x3x4.init(&shape_env);
+//     const l2 = try Layout_1x3x4.init(&shape_env);
+//     const l3 = try Layout_2x3x4.init(&shape_env);
 
-    const ls = stack(.{ l1, l3 }, 2);
-    try std.testing.expectEqualDeep([4]usize{ 2, 3, 2, 4 }, ls.shape());
-}
+//     const lc = cat(.{ l1, l2, l3 }, 0);
+
+//     try std.testing.expectEqual([3]usize{ 5, 3, 4 }, lc.shape());
+
+//     const ls = stack(.{ l1, l3 }, 2);
+//     try std.testing.expectEqualDeep([4]usize{ 2, 3, 2, 4 }, ls.shape());
+// }
 
 pub fn ShapeIterator(comptime N: usize) type {
     return struct {
@@ -478,12 +515,14 @@ pub fn ShapeIterator(comptime N: usize) type {
 }
 
 test "shape iter" {
-    const Layout_2x3x4 = Layout(&.{ 2, 3, 4 });
-    // const layout = Layout_2x3x4.init();
+    const allocator = std.testing.allocator;
 
-    var iter = Layout_2x3x4.iter();
+    const Layout_2x3x4 = Layout(&shape_expr.parseSpec(.{ 2, 3, 4 }));
+    const layout = try Layout_2x3x4.init(&ShapeEnv.init(allocator));
+
+    var iter = layout.iter();
 
     while (iter.next()) |idx| {
-        log.print(@src(), "idx: {any}\n", .{idx});
+        std.debug.print("idx: {any}\n", .{idx});
     }
 }
