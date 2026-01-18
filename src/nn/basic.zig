@@ -354,7 +354,26 @@ pub fn TwoLayerNet(
 }
 
 pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, batch_size: usize, learning_rate: f64) !void {
-    const datas = try mnist.loadDatas(DT, allocator);
+    const train_data_count_expr = comptime shape_expr.SizeExpr.sym(.{ .name = "train_data_count" });
+    const test_data_count_expr = comptime shape_expr.SizeExpr.sym(.{ .name = "test_data_count" });
+    const image_data_len_expr = comptime shape_expr.SizeExpr.sym(.{ .name = "image_data_len" });
+    const num_classes_expr = comptime shape_expr.SizeExpr.sym(.{ .name = "num_classes" });
+
+    const batch_size_expr = comptime SizeExpr.sym(.{ .name = "batch_size" });
+
+    var shape_env = ShapeEnv.init(allocator);
+    try shape_env.bind(batch_size_expr.Sym.id, batch_size);
+    try shape_env.bind(num_classes_expr.Sym.id, 10);
+
+    const datas = try mnist.loadDatas(
+        DT,
+        allocator,
+        train_data_count_expr,
+        test_data_count_expr,
+        image_data_len_expr,
+        num_classes_expr,
+        &shape_env,
+    );
 
     const train_images = datas.train_images;
     defer train_images.deinit();
@@ -382,16 +401,11 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, batch_si
         learning_rate,
     });
 
-    const batch_size_expr = comptime SizeExpr.sym(.{ .name = "batch_size" });
-
-    var shape_env = ShapeEnv.init(allocator);
-    try shape_env.bind(batch_size_expr.Sym.id, batch_size);
-
     var net = try TwoLayerNet(
         batch_size_expr,
-        SizeExpr.static(784),
+        image_data_len_expr,
         SizeExpr.static(50),
-        SizeExpr.static(10),
+        num_classes_expr,
     ).init(allocator, 0.01, &shape_env);
     defer net.deinit();
 

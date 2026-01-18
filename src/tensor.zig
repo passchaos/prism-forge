@@ -384,8 +384,8 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
 
         //     return result;
         // }
-        fn computeOneHotShape(comptime num_classes: usize) [N + 1]SizeExpr {
-            var shape_i = [_]SizeExpr{SizeExpr.static(num_classes)} ** (N + 1);
+        fn computeOneHotShape(comptime num_classes_expr: SizeExpr) [N + 1]SizeExpr {
+            var shape_i = [_]SizeExpr{num_classes_expr} ** (N + 1);
             for (0..N) |i| {
                 shape_i[i] = SA[i];
             }
@@ -393,10 +393,10 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
             return shape_i;
         }
 
-        pub fn oneHot(self: *const Self, comptime TT: type, comptime num_classes: usize) !Tensor(&computeOneHotShape(num_classes), TT) {
+        pub fn oneHot(self: *const Self, comptime TT: type, comptime num_classes_expr: SizeExpr) !Tensor(&computeOneHotShape(num_classes_expr), TT) {
             switch (@typeInfo(T)) {
                 .int => {
-                    const new_shape_expr = comptime computeOneHotShape(num_classes);
+                    const new_shape_expr = comptime computeOneHotShape(num_classes_expr);
                     var result_tensor = try full(self.s_allocator(), &new_shape_expr, self.layout.shape_env(), @as(TT, 0));
 
                     var self_iter = self.shapeIter();
@@ -1842,14 +1842,19 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
 }
 
 // create factory method
-pub fn fromData(comptime T: type, allocator: std.mem.Allocator, arr: []T, comptime shape: []const usize) !Tensor(&shape_expr.staticShapeExpr(shape), T) {
-    const shape_expr_i = comptime shape_expr.staticShapeExpr(shape);
-    const layout = try layout_t.Layout(&shape_expr_i).init(&ShapeEnv.init(allocator));
+pub fn fromData(
+    comptime T: type,
+    allocator: std.mem.Allocator,
+    arr: []T,
+    comptime shape_expr_a: []const SizeExpr,
+    shape_env: *const ShapeEnv,
+) !Tensor(shape_expr_a, T) {
+    const layout = try layout_t.Layout(shape_expr_a).init(shape_env);
     const Storage = storage_t.Storage(T);
 
     const storage = try Storage.initImpl(allocator, arr);
 
-    return Tensor(&shape_expr_i, T)
+    return Tensor(shape_expr_a, T)
         .fromDataImpl(
         layout,
         storage,
