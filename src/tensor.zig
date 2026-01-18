@@ -12,7 +12,7 @@ const Device = storage_t.Device;
 const layout_t = @import("./layout.zig");
 
 const shape_expr = @import("shape_expr.zig");
-const DimExpr = shape_expr.SizeExpr;
+const SizeExpr = shape_expr.SizeExpr;
 const ShapeEnv = shape_expr.ShapeEnv;
 const parseSpec = shape_expr.parseSpec;
 
@@ -260,7 +260,7 @@ pub fn reduceAllWithBoolType(
     );
 }
 
-pub fn Tensor(comptime SA: []const DimExpr, comptime TA: type) type {
+pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
     return struct {
         const Storage = storage_t.Storage(T);
         const ShapeIterator = layout_t.ShapeIterator(N);
@@ -384,8 +384,8 @@ pub fn Tensor(comptime SA: []const DimExpr, comptime TA: type) type {
 
         //     return result;
         // }
-        fn computeOneHotShape(comptime num_classes: usize) [N + 1]DimExpr {
-            var shape_i = [_]DimExpr{DimExpr.static(num_classes)} ** (N + 1);
+        fn computeOneHotShape(comptime num_classes: usize) [N + 1]SizeExpr {
+            var shape_i = [_]SizeExpr{SizeExpr.static(num_classes)} ** (N + 1);
             for (0..N) |i| {
                 shape_i[i] = SA[i];
             }
@@ -448,14 +448,14 @@ pub fn Tensor(comptime SA: []const DimExpr, comptime TA: type) type {
             return result;
         }
 
-        fn computeIndexSelectShape(comptime dim: usize, comptime dim_expr: DimExpr) [N]DimExpr {
-            var new_shape = utils.array.comptimeSliceToArray(DimExpr, SA);
+        fn computeIndexSelectShape(comptime dim: usize, comptime dim_expr: SizeExpr) [N]SizeExpr {
+            var new_shape = utils.array.comptimeSliceToArray(SizeExpr, SA);
             new_shape[dim] = dim_expr;
 
             return new_shape;
         }
 
-        pub fn indexSelect(self: *const Self, comptime dim: usize, comptime dim_expr: DimExpr, indices: []const usize) !Tensor(
+        pub fn indexSelect(self: *const Self, comptime dim: usize, comptime dim_expr: SizeExpr, indices: []const usize) !Tensor(
             &computeIndexSelectShape(dim, dim_expr),
             T,
         ) {
@@ -485,7 +485,7 @@ pub fn Tensor(comptime SA: []const DimExpr, comptime TA: type) type {
         pub fn gather(
             self: *const Self,
             comptime dim: usize,
-            comptime shape_expr_a: []const DimExpr,
+            comptime shape_expr_a: []const SizeExpr,
             shape_env: *const ShapeEnv,
             index_tensor: Tensor(shape_expr_a, usize),
         ) !Tensor(shape_expr_a, T) {
@@ -553,7 +553,7 @@ pub fn Tensor(comptime SA: []const DimExpr, comptime TA: type) type {
         }
 
         pub fn crossEntropyLogits(self: *const Self, other: *const Self) !Tensor(
-            &[_]DimExpr{DimExpr.static(1)} ** N,
+            &[_]SizeExpr{SizeExpr.static(1)} ** N,
             T,
         ) {
             switch (@typeInfo(T)) {
@@ -1110,10 +1110,10 @@ pub fn Tensor(comptime SA: []const DimExpr, comptime TA: type) type {
         }
 
         // reduce method
-        fn computeReducedShapeExpr(comptime dm: usize) [N]DimExpr {
-            var shape_i = [_]DimExpr{undefined} ** N;
+        fn computeReducedShapeExpr(comptime dm: usize) [N]SizeExpr {
+            var shape_i = [_]SizeExpr{undefined} ** N;
             inline for (0..N) |i| {
-                shape_i[i] = if (i == dm) DimExpr.static(1) else SA[i];
+                shape_i[i] = if (i == dm) SizeExpr.static(1) else SA[i];
             }
             return shape_i;
         }
@@ -1125,8 +1125,8 @@ pub fn Tensor(comptime SA: []const DimExpr, comptime TA: type) type {
             return shape_i;
         }
 
-        fn computeReducedAllShapeExpr() [N]DimExpr {
-            return [_]DimExpr{DimExpr.static(1)} ** N;
+        fn computeReducedAllShapeExpr() [N]SizeExpr {
+            return [_]SizeExpr{SizeExpr.static(1)} ** N;
         }
 
         pub fn reduce(
@@ -1400,7 +1400,7 @@ pub fn Tensor(comptime SA: []const DimExpr, comptime TA: type) type {
         }
 
         // attributes
-        pub fn broadcastTo(self: *const Self, comptime target_shape_expr: []const DimExpr) Tensor(
+        pub fn broadcastTo(self: *const Self, comptime target_shape_expr: []const SizeExpr) Tensor(
             target_shape_expr,
             T,
         ) {
@@ -1513,7 +1513,7 @@ pub fn Tensor(comptime SA: []const DimExpr, comptime TA: type) type {
 
         fn computeSharedViewShape(comptime slice_views: anytype) [N - computeSharedViewShapeErasedPrefixSize(slice_views)]usize {
             const ranges = computeSliceViewRanges(slice_views);
-            comptime var base_shape = utils.array.comptimeSliceToArray(DimExpr, SA);
+            comptime var base_shape = utils.array.comptimeSliceToArray(SizeExpr, SA);
 
             inline for (ranges, 0..) |range, i| {
                 base_shape[i] = range.end - range.start;
@@ -1570,7 +1570,7 @@ pub fn Tensor(comptime SA: []const DimExpr, comptime TA: type) type {
             };
         }
 
-        pub fn reshape(self: *const Self, comptime new_shape_expr: []const DimExpr) !Tensor(
+        pub fn reshape(self: *const Self, comptime new_shape_expr: []const SizeExpr) !Tensor(
             new_shape_expr,
             T,
             .{},
@@ -2006,7 +2006,7 @@ pub fn linspace(
         .fromDataImpl(layout, storage, 0);
 }
 
-pub fn full(allocator: std.mem.Allocator, comptime shape_expr_a: []const DimExpr, shape_env: *const ShapeEnv, value: anytype) !Tensor(
+pub fn full(allocator: std.mem.Allocator, comptime shape_expr_a: []const SizeExpr, shape_env: *const ShapeEnv, value: anytype) !Tensor(
     shape_expr_a,
     utils.comptimeNumberTypeEraseComp(@TypeOf(value)),
 ) {
@@ -2029,7 +2029,7 @@ pub fn fullLike(allocator: std.mem.Allocator, tensor: anytype, value: anytype) !
     return try full(allocator, @TypeOf(tensor).S, tensor.layout.shape_env(), value);
 }
 
-pub fn zeros(allocator: std.mem.Allocator, comptime T: type, comptime shape_expr_a: []const DimExpr, shape_env: *const ShapeEnv) !Tensor(
+pub fn zeros(allocator: std.mem.Allocator, comptime T: type, comptime shape_expr_a: []const SizeExpr, shape_env: *const ShapeEnv) !Tensor(
     shape_expr_a,
     T,
 ) {
@@ -2066,7 +2066,7 @@ pub fn eye(allocator: std.mem.Allocator, row: usize, column: usize, value: anyty
     return tensor;
 }
 
-pub fn rand(allocator: std.mem.Allocator, comptime shape_expr_a: []const DimExpr, shape_env: *const ShapeEnv, low: anytype, high: @TypeOf(low)) !Tensor(
+pub fn rand(allocator: std.mem.Allocator, comptime shape_expr_a: []const SizeExpr, shape_env: *const ShapeEnv, low: anytype, high: @TypeOf(low)) !Tensor(
     shape_expr_a,
     utils.comptimeNumberTypeEraseComp(@TypeOf(low)),
 ) {
@@ -2088,7 +2088,7 @@ pub fn rand(allocator: std.mem.Allocator, comptime shape_expr_a: []const DimExpr
     );
 }
 
-pub fn randNorm(allocator: std.mem.Allocator, comptime shape_expr_a: []const DimExpr, shape_env: *const ShapeEnv, mean_a: anytype, stddev: @TypeOf(mean_a)) !Tensor(
+pub fn randNorm(allocator: std.mem.Allocator, comptime shape_expr_a: []const SizeExpr, shape_env: *const ShapeEnv, mean_a: anytype, stddev: @TypeOf(mean_a)) !Tensor(
     shape_expr_a,
     utils.floatBasicType(@TypeOf(mean_a)),
 ) {
@@ -2177,7 +2177,7 @@ test "tensor create" {
     var shape_env = ShapeEnv.init(allocator);
     defer shape_env.deinit();
     {
-        const a = comptime [_]DimExpr{ DimExpr.static(10), DimExpr.static(13) };
+        const a = comptime [_]SizeExpr{ SizeExpr.static(10), SizeExpr.static(13) };
         const t3 = try full(allocator, &a, &shape_env, @as(f32, 10.2));
         defer t3.deinit();
         try std.testing.expect(t3.ndim() == 2);
