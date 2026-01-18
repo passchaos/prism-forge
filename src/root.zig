@@ -3,7 +3,6 @@ const std = @import("std");
 
 const tensor = @import("tensor.zig");
 const basic = @import("nn/basic.zig");
-const matmul = @import("matmul.zig");
 
 // pub fn logFn(
 //     comptime level: std.log.Level,

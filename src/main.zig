@@ -3,7 +3,6 @@ const tensor = @import("tensor.zig");
 
 const DType = @import("dtype.zig").DataType;
 const plot = @import("plot.zig");
-const matmul = @import("matmul.zig");
 const basic = @import("nn/basic.zig");
 const layer = @import("nn/layer.zig");
 const log = @import("log.zig");
@@ -46,12 +45,6 @@ fn matmulDemo(allocator: std.mem.Allocator) !void {
     const t2_tc = try t2.contiguous();
 
     log.print(@src(), "is contiguous: t1= {} t2_tc= {}\n", .{ t1.isContiguous(), t2_tc.isContiguous() });
-
-    const begin = std.time.milliTimestamp();
-    const t3 = try matmul.matmul(t1, t2_tc);
-    const end = std.time.milliTimestamp();
-
-    log.print(@src(), "t3: {f}\nelapsed: {d} milliseconds\n", .{ t3.layout, end - begin });
 }
 
 pub fn main() !void {
@@ -85,6 +78,9 @@ fn generateXY() !void {
 }
 
 test {
+    const demo = @import("nn/demo.zig");
+
     std.testing.refAllDeclsRecursive(@This());
     std.testing.refAllDeclsRecursive(basic);
+    std.testing.refAllDeclsRecursive(demo);
 }

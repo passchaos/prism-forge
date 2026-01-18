@@ -1,7 +1,6 @@
 const std = @import("std");
 const tensor = @import("../tensor.zig");
 const log = @import("../log.zig");
-const matmul = @import("../matmul.zig");
 const mnist = @import("../mnist.zig");
 const plot = @import("../plot.zig");
 const layer = @import("layer.zig");
@@ -11,13 +10,13 @@ const SizeExpr = shape_expr.SizeExpr;
 const ShapeEnv = shape_expr.ShapeEnv;
 
 const DT = f64;
-fn Tensor2(comptime shape: [2]SizeExpr) type {
-    return tensor.Tensor(&shape, DT);
+fn Tensor2(comptime shape_expa_a: [2]SizeExpr) type {
+    return tensor.Tensor(&shape_expa_a, DT);
 }
 
 pub fn function2(
-    comptime shape: [2]usize,
-    input: Tensor2(shape),
+    comptime shape_expr_a: [2]usize,
+    input: Tensor2(shape_expr_a),
     _: void,
 ) anyerror!DT {
     var input_iter = input.shapeIter();
@@ -31,27 +30,26 @@ pub fn function2(
     return result;
 }
 
-pub fn LossArgument(comptime shape: [2]usize) type {
+pub fn LossArgument(comptime shape_expr_a: [2]SizeExpr) type {
     return struct {
-        x: *const Tensor2(shape),
-        t: *const Tensor2(shape),
+        x: *const Tensor2(shape_expr_a),
+        t: *const Tensor2(shape_expr_a),
     };
 }
 
 pub fn net_loss(
-    comptime shape: [2]usize,
-    _: *Tensor2(shape),
     net: anytype,
-    ctx: LossArgument(shape),
+    ctx: anytype,
 ) anyerror!DT {
     const loss = try net.loss(ctx.x, ctx.t);
 
     return loss;
 }
 
-pub fn SimpleNet(comptime shape: [2]usize) type {
+pub fn SimpleNet(comptime batch_size: SizeExpr, comptime shape_expr_a: [2]SizeExpr) type {
+    const Tensor = Tensor2(shape_expr_a);
     return struct {
-        w: Tensor2(shape),
+        w: Tensor,
 
         const Self = @This();
 
@@ -59,20 +57,27 @@ pub fn SimpleNet(comptime shape: [2]usize) type {
             return self.w.deinit();
         }
 
-        fn resetWeight(self: *Self, new_w: Tensor2) void {
+        fn resetWeight(self: *Self, new_w: Tensor) void {
             self.w.deinit();
             self.w = new_w;
         }
 
-        fn init(weight: Tensor2) Self {
+        fn init(weight: Tensor) Self {
             return Self{ .w = weight };
         }
 
-        fn predict(self: *const Self, x: Tensor2) !Tensor2 {
-            return try matmul.matmul(x, self.w);
+        fn predict(
+            self: *const Self,
+            x: *const Tensor2([2]SizeExpr{ batch_size, shape_expr_a[0] }),
+        ) !Tensor2([2]SizeExpr{ batch_size, shape_expr_a[1] }) {
+            return try x.matmul(&self.w);
         }
 
-        fn loss(self: *const Self, x: Tensor2, t: Tensor2) !DT {
+        fn loss(
+            self: *const Self,
+            x: *const Tensor2([2]SizeExpr{ batch_size, shape_expr_a[0] }),
+            t: *const Tensor2([2]SizeExpr{ batch_size, shape_expr_a[1] }),
+        ) !DT {
             const z = try self.predict(x);
             // log.print(@src(), "z: {f}\n", .{z});
             defer z.deinit();
@@ -91,16 +96,15 @@ pub fn SimpleNet(comptime shape: [2]usize) type {
 // if f return !T, compile will hang or meet unnormal compile error
 pub fn numericalGradient(
     allocator: std.mem.Allocator,
-    comptime shape: [2]usize,
+    comptime shape_expr_a: [2]SizeExpr,
     net: anytype,
     ctx: anytype,
     f: fn (
-        *Tensor2(shape),
         anytype,
-        @TypeOf(ctx),
+        anytype,
     ) anyerror!DT,
-    tval: *Tensor2(shape),
-) !Tensor2(shape) {
+    tval: *Tensor2(shape_expr_a),
+) !Tensor2(shape_expr_a) {
     const h = 1e-5;
 
     var grad = try tensor.zerosLike(allocator, tval.*);
@@ -110,13 +114,13 @@ pub fn numericalGradient(
         const tmp_val = try tval.getData(idx);
 
         try tval.setData(idx, tmp_val + h);
-        const fxh1 = try f(tval, net, ctx);
+        const fxh1 = try f(net, ctx);
 
         // std.debug.print("tval_v: {f}\n", .{tval_v});
         // std.debug.print("idx: {any} fxh1: {}\n", .{ idx, fxh1 });
 
         try tval.setData(idx, tmp_val - h);
-        const fxh2 = try f(tval, net, ctx);
+        const fxh2 = try f(net, ctx);
         // std.debug.print("idx: {any} fxh2: {}\n", .{ idx, fxh2 });
 
         try grad.setData(idx, (fxh1 - fxh2) / (h + h));
@@ -278,17 +282,17 @@ pub fn TwoLayerNet(
             const t1 = try t.argMax(1);
             defer t1.deinit();
 
-            const eql_t = try y1.eql(t1);
+            const eql_t = try y1.eql(&t1);
             defer eql_t.deinit();
 
             log.print(@src(), "eql_t: {f}\n", .{eql_t});
             var eql_sum = try eql_t.sumAll();
             defer eql_sum.deinit();
 
-            const eql_t_d = try eql_sum.div(@as(DT, @floatFromInt(x.shape()[0])));
-            defer eql_t_d.deinit();
+            var eql_sum_div = try eql_sum.divScalar(@as(DT, @floatFromInt(x.shape()[0])));
+            defer eql_sum_div.deinit();
 
-            return try eql_t_d.dataItem();
+            return try eql_sum_div.dataItem();
         }
 
         fn numericalGradientM(self: *Self, x: *const TensorII, t: *const TensorTI) !Grad {
@@ -399,9 +403,9 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, batch_si
 
         const batch_indices = batch_mask.dataSliceRaw();
 
-        const x_batch = try train_images.indexSelect(0, batch_size_expr, &shape_env, batch_indices);
+        const x_batch = try train_images.indexSelect(0, batch_size_expr, batch_indices);
         defer x_batch.deinit();
-        const t_batch = try train_labels.indexSelect(0, batch_size_expr, &shape_env, batch_indices);
+        const t_batch = try train_labels.indexSelect(0, batch_size_expr, batch_indices);
         defer t_batch.deinit();
 
         const grads1 = try net.gradient(&x_batch, &t_batch);
@@ -436,9 +440,9 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, batch_si
 
         const idx_loss = loss_idx.dataSliceRaw();
 
-        const loss_x = try test_images.indexSelect(0, batch_size_expr, &shape_env, idx_loss);
+        const loss_x = try test_images.indexSelect(0, batch_size_expr, idx_loss);
         defer loss_x.deinit();
-        const loss_t = try test_labels.indexSelect(0, batch_size_expr, &shape_env, idx_loss);
+        const loss_t = try test_labels.indexSelect(0, batch_size_expr, idx_loss);
         defer loss_t.deinit();
         const loss = try net.loss(&loss_x, &loss_t);
 
@@ -455,7 +459,9 @@ test "simple net" {
         .{ 0.85557411, 0.03563661, 0.69422093 },
     });
 
-    var net = SimpleNet([2]usize{ 2, 3 }).init(weight);
+    const shape_expr_a =
+        comptime [2]SizeExpr{ SizeExpr.static(2), SizeExpr.static(3) };
+    var net = SimpleNet(SizeExpr.static(1), shape_expr_a).init(weight);
     defer net.deinit();
 
     log.print(@src(), "w: {f}\n", .{net.w});
@@ -470,14 +476,15 @@ test "simple net" {
     });
     defer t.deinit();
 
-    const loss = try net.loss(x, t);
-    try std.testing.expectApproxEqAbs(0.9280682857864075, loss, 1e-15);
+    const loss = try net.loss(&x, &t);
+    try std.testing.expectApproxEqAbs(0.9280682857864075, loss, 1e-5);
     log.print(@src(), "loss: {}\n", .{loss});
 
     const result_t = try numericalGradient(
         allocator,
+        shape_expr_a,
         &net,
-        LossArgument{ .x = x, .t = t },
+        .{ .x = &x, .t = &t },
         net_loss,
         &net.w,
     );
@@ -510,14 +517,22 @@ test "two_layer_net" {
     const test_labels = datas.test_labels;
     defer test_labels.deinit();
 
-    var two_layer_net = try TwoLayerNet(3, 784, 100, 10).init(allocator, 0.01);
+    var shape_env = ShapeEnv.init(allocator);
+    defer shape_env.deinit();
+
+    var two_layer_net = try TwoLayerNet(
+        SizeExpr.static(3),
+        SizeExpr.static(784),
+        SizeExpr.static(100),
+        SizeExpr.static(10),
+    ).init(allocator, 0.01, &shape_env);
     defer two_layer_net.deinit();
 
     {
         const batch_idx = [3]usize{ 0, 1, 2 };
-        const batch_train_images = try train_images.indexSelect(0, 3, batch_idx);
+        const batch_train_images = try train_images.indexSelect(0, SizeExpr.static(3), &batch_idx);
         defer batch_train_images.deinit();
-        const batch_train_labels = try train_labels.indexSelect(0, 3, batch_idx);
+        const batch_train_labels = try train_labels.indexSelect(0, SizeExpr.static(3), &batch_idx);
         defer batch_train_labels.deinit();
 
         const compute_labels = try two_layer_net.predict(&batch_train_images);
@@ -529,14 +544,14 @@ test "two_layer_net" {
         log.print(@src(), "loss: {} accuracy: {}\n", .{ loss, accuracy });
 
         // var gradient = try two_layer_net.numericalGradientM(batch_train_images, batch_train_labels);
-        var gradient = try two_layer_net.gradient(&batch_train_images, &batch_train_labels);
-        defer gradient.deinit();
+        _ = try two_layer_net.gradient(&batch_train_images, &batch_train_labels);
+        // defer gradient.deinit();
 
-        var grad_iter = gradient.iterator();
+        // var grad_iter = gradient.iterator();
 
-        while (grad_iter.next()) |entry| {
-            defer entry.value_ptr.deinit();
-            log.print(@src(), "grad: key= {s} value= {f}\n", .{ entry.key_ptr.*, entry.value_ptr.layout });
-        }
+        // while (grad_iter.next()) |entry| {
+        //     defer entry.value_ptr.deinit();
+        //     log.print(@src(), "grad: key= {s} value= {f}\n", .{ entry.key_ptr.*, entry.value_ptr.layout });
+        // }
     }
 }

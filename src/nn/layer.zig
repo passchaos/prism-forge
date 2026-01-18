@@ -192,7 +192,7 @@ pub fn SoftmaxWithLoss(comptime shape: []const SizeExpr, comptime T: type) type 
             const batch_size = self.t.?.shape()[0];
 
             // std.debug.print("y: {f} t: {f}\n", .{ self.y.?, self.t.? });
-            var dx = try self.y.?.sub(self.t.?);
+            var dx = try self.y.?.sub(&self.t.?);
             dx.divScalar_(@as(T, @floatFromInt(batch_size)));
 
             return dx;

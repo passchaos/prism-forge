@@ -16,8 +16,6 @@ const DimExpr = shape_expr.SizeExpr;
 const ShapeEnv = shape_expr.ShapeEnv;
 const parseSpec = shape_expr.parseSpec;
 
-const matmul_t = @import("./matmul.zig");
-
 pub const View = struct {
     const Range = struct {
         start: usize,
@@ -457,7 +455,7 @@ pub fn Tensor(comptime SA: []const DimExpr, comptime TA: type) type {
             return new_shape;
         }
 
-        pub fn indexSelect(self: *const Self, comptime dim: usize, comptime dim_expr: DimExpr, shape_env: *const ShapeEnv, indices: []const usize) !Tensor(
+        pub fn indexSelect(self: *const Self, comptime dim: usize, comptime dim_expr: DimExpr, indices: []const usize) !Tensor(
             &computeIndexSelectShape(dim, dim_expr),
             T,
         ) {
@@ -471,7 +469,7 @@ pub fn Tensor(comptime SA: []const DimExpr, comptime TA: type) type {
 
             const new_shape_expr = comptime computeIndexSelectShape(dim, dim_expr);
 
-            var indices_t = try zeros(self.s_allocator(), usize, &new_shape_expr, shape_env);
+            var indices_t = try zeros(self.s_allocator(), usize, &new_shape_expr, self.layout.shape_env());
             defer indices_t.deinit();
 
             var index_iter = indices_t.shapeIter();
@@ -481,7 +479,7 @@ pub fn Tensor(comptime SA: []const DimExpr, comptime TA: type) type {
 
             // log.print(@src(), "indices_t: {f}\n", .{indices_t});
 
-            return try self.gather(dim, &new_shape_expr, shape_env, indices_t);
+            return try self.gather(dim, &new_shape_expr, self.layout.shape_env(), indices_t);
         }
 
         pub fn gather(
@@ -602,7 +600,7 @@ pub fn Tensor(comptime SA: []const DimExpr, comptime TA: type) type {
             }
         }
 
-        pub fn crossEntropy(self: *const Self, other: *const Self) !Tensor(0, .{ .T = T }) {
+        pub fn crossEntropy(self: *const Self, other: *const Self) !Tensor(&computeReducedAllShapeExpr(), T) {
             switch (@typeInfo(T)) {
                 .float => |_| {
                     const batch_size = switch (N) {
@@ -615,12 +613,12 @@ pub fn Tensor(comptime SA: []const DimExpr, comptime TA: type) type {
                     defer a.deinit();
 
                     a.log_();
-                    try a.mul_(-1.0);
+                    a.mulScalar_(-1.0);
 
-                    try a.mul_(other);
+                    a.mul_(other);
 
                     var res = try a.sumAll();
-                    try res.div_(@as(T, @floatFromInt(batch_size)));
+                    res.divScalar_(@as(T, @floatFromInt(batch_size)));
 
                     return res;
                 },
@@ -709,18 +707,8 @@ pub fn Tensor(comptime SA: []const DimExpr, comptime TA: type) type {
             return TI.fromDataImpl(layout, storage, 0);
         }
 
-        pub fn eql(self: *const Self, value: anytype) !Tensor(N, .{ .T = bool }) {
-            const TV = @TypeOf(value);
-
-            switch (TV) {
-                @This() => {
-                    return try self.binaryOp(value, bool, BasicOpFuncs.eql);
-                },
-                T => {
-                    return try self.map(value, bool, BasicOpFuncs.eql);
-                },
-                else => @compileError("unsupported eql argument type" ++ " self: " ++ @typeName(@This()) ++ " input: " ++ @typeName(TV)),
-            }
+        pub fn eql(self: *const Self, value: *const Self) !Tensor(S, bool) {
+            return try self.binaryOp(value, bool, BasicOpFuncs.eql);
         }
 
         pub fn lt(self: *const Self, value: anytype) !Tensor(N, .{ .T = bool }) {
@@ -796,8 +784,8 @@ pub fn Tensor(comptime SA: []const DimExpr, comptime TA: type) type {
         }
 
         pub fn binaryOp(
-            self: Self,
-            other: Self,
+            self: *const Self,
+            other: *const Self,
             comptime RT: type,
             op_func: fn (x: T, y: T) RT,
         ) !Tensor(SA, RT) {
@@ -823,7 +811,7 @@ pub fn Tensor(comptime SA: []const DimExpr, comptime TA: type) type {
                 new_buf,
             );
 
-            return Tensor(SA, T).fromDataImpl(layout, storage, 0);
+            return Tensor(SA, RT).fromDataImpl(layout, storage, 0);
         }
 
         pub fn clamp_(self: *Self, min_a: T, max_a: T) void {
@@ -882,19 +870,8 @@ pub fn Tensor(comptime SA: []const DimExpr, comptime TA: type) type {
             return self.binaryOp_(value, BasicOpFuncs.sub);
         }
 
-        pub fn sub(self: *const Self, value: anytype) !Self {
-            const TV = @TypeOf(value);
-            switch (TV) {
-                @This() => {
-                    return try self.binaryOp(@as(@This(), value), T, BasicOpFuncs.sub);
-                },
-                T => {
-                    const vv = @as(T, value);
-
-                    return try self.map(vv, T, BasicOpFuncs.sub);
-                },
-                else => @compileError("unsupported sub argument type" ++ " self: " ++ @typeName(@This()) ++ " input: " ++ @typeName(TV)),
-            }
+        pub fn sub(self: *const Self, value: *const Self) !Self {
+            return self.binaryOp(value, T, BasicOpFuncs.sub);
         }
 
         pub fn mulScalar_(self: *Self, value: T) void {
@@ -928,27 +905,20 @@ pub fn Tensor(comptime SA: []const DimExpr, comptime TA: type) type {
             return self.binaryOp_(value, BasicOpFuncs.div);
         }
 
-        pub fn div(self: *const Self, value: anytype) !Tensor(N, .{ .T = utils.tensor.tensorArithmeticTypeCast(T, @TypeOf(value)) }) {
-            const TV = @TypeOf(value);
+        pub fn div(self: *const Self, value: *const Self) !Self {
+            return try self.binaryOp(value, T, BasicOpFuncs.div);
+        }
 
-            if (comptime TV == @This()) {
-                return try self.binaryOp(@as(@This(), value), T, BasicOpFuncs.div);
-            }
+        pub fn divScalar(self: *const Self, value: anytype) !Tensor(S, @TypeOf(value)) {
+            const DT = @TypeOf(value);
+            const func = struct {
+                fn call(v: T, ctx: DT) DT {
+                    const vt = utils.promoteNumberType(DT, v);
 
-            if (comptime utils.isNumber(TV)) {
-                const RT = comptime utils.arithmetricTypePromotion(T, @TypeOf(value));
-                const vv = utils.promoteNumberType(RT, value);
-
-                const func = struct {
-                    fn call(v: T, o: RT) RT {
-                        return utils.promoteNumberType(RT, v) / o;
-                    }
-                }.call;
-
-                return try self.map(vv, RT, func);
-            }
-
-            @compileError("unsupported div argument type" ++ " self: " ++ @typeName(@This()) ++ " input: " ++ @typeName(TV));
+                    return vt / ctx;
+                }
+            }.call;
+            return try self.map(value, DT, func);
         }
 
         pub fn sin_(self: *Self) void {
@@ -1125,7 +1095,7 @@ pub fn Tensor(comptime SA: []const DimExpr, comptime TA: type) type {
             const a_b = a.broadcastTo(SA);
             defer a_b.deinit();
 
-            var v = try self.sub(a_b);
+            var v = try self.sub(&a_b);
             v.exp_();
 
             const vs = try v.sum(N - 1);
@@ -1278,7 +1248,10 @@ pub fn Tensor(comptime SA: []const DimExpr, comptime TA: type) type {
 
         pub fn sumAll(self: *const Self) !Tensor(&computeReducedAllShapeExpr(), if (T == bool) i64 else T) {
             if (T == bool) {
-                return try reduceAllWithBoolType(N, self, ItemGenerator(N, i64).sum, i64, null);
+                const tmp = try self.to(i64);
+                defer tmp.deinit();
+
+                return try tmp.sumAll();
             } else {
                 return try self.reduceAll(Item.sum, T, null);
             }
@@ -1357,11 +1330,7 @@ pub fn Tensor(comptime SA: []const DimExpr, comptime TA: type) type {
             };
         }
 
-        pub fn to(self: Self, comptime NT: type) !Tensor(SA, NT, .{}) {
-            if (T == NT) {
-                return self;
-            }
-
+        pub fn to(self: *const Self, comptime NT: type) !Tensor(SA, NT) {
             const layout = Layout.init(self.layout.shape_env()) catch unreachable;
 
             var new_buf = try self.storage.allocator.alloc(NT, self.size());
@@ -1394,9 +1363,9 @@ pub fn Tensor(comptime SA: []const DimExpr, comptime TA: type) type {
                 }
             }
 
-            const storage = try storage_t.Storage(NT, .Cpu).initImpl(self.storage.allocator, new_buf);
+            const storage = try storage_t.Storage(NT).initImpl(self.storage.allocator, new_buf);
 
-            return Tensor(SA, NT, .{}).fromDataImpl(layout, storage, 0);
+            return Tensor(SA, NT).fromDataImpl(layout, storage, 0);
         }
 
         pub fn clone(self: *const Self) !Self {
@@ -2070,7 +2039,7 @@ pub fn zeros(allocator: std.mem.Allocator, comptime T: type, comptime shape_expr
 }
 
 pub fn zerosLike(allocator: std.mem.Allocator, tensor: anytype) !@TypeOf(tensor) {
-    return try zeros(allocator, @TypeOf(tensor).T, tensor.shape());
+    return try zeros(allocator, @TypeOf(tensor).T, @TypeOf(tensor).S, tensor.layout.shape_env());
 }
 
 pub fn ones(allocator: std.mem.Allocator, shapes_a: anytype) !Tensor(
