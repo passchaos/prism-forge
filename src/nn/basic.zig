@@ -392,11 +392,12 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, batch_si
     defer net.deinit();
 
     for (0..iters_num) |idx| {
+        try shape_env.bind(batch_size_expr.Sym.id, batch_size);
+
         const batch_mask = try tensor.rand(allocator, &.{batch_size_expr}, &shape_env, @as(usize, 0), train_size);
         defer batch_mask.deinit();
 
         const batch_indices = batch_mask.dataSliceRaw();
-        // const batch_indices = &.{ 0, 1 };
 
         const x_batch = try train_images.indexSelect(0, batch_size_expr, &shape_env, batch_indices);
         defer x_batch.deinit();
@@ -405,36 +406,10 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, batch_si
 
         const grads1 = try net.gradient(&x_batch, &t_batch);
 
-        // var grads = try net.numericalGradientM(&x_batch, &t_batch);
-        // defer grads.deinit();
-        // {
-        //     var map_key_iter = grads.keyIterator();
-        //     while (map_key_iter.next()) |key| {
-        //         var v = grads.get(key.*).?;
-        //         const v1 = grads1.get(key.*).?;
-
-        //         // std.debug.print("v : {f}\nv1: {f}\n", .{ v, v1 });
-
-        //         var res = try v.sub(v1);
-        //         res.abs_();
-
-        //         const mean_diff = try res.meanAll();
-        //         defer mean_diff.deinit();
-
-        //         std.debug.print("key: {s} diff: {}\n", .{ key.*, try mean_diff.dataItem() });
-        //     }
-        // }
-
         {
             var grad_dw1 = grads1.dw1;
-            // defer grad_dw1.deinit();
             grad_dw1.mulScalar_(learning_rate);
-            // log.print(@src(), "grad dw1: {f} sum: {f}\n", .{ grad_dw1, try grad_dw1.sumAll() });
-            // log.print(@src(), "affine1 dw: sum= {f}\n", .{try net.affine1.dw.?.sumAll()});
-            // log.print(@src(), "grad dw1: sum= {f}\n", .{try grad_dw1.sumAll()});
             net.affine1.w.sub_(&grad_dw1);
-
-            // log.print(@src(), "after grad update affine1 dw: sum: {f}\n", .{try net.affine1.dw.?.sumAll()});
 
             var grad_db1 = grads1.db1;
             // defer grad_db1.deinit();
@@ -452,21 +427,11 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, batch_si
             net.affine2.b.sub_(&grad_db2);
         }
 
-        // {
-        //     var grads_iter = grads1.iterator();
-        //     while (grads_iter.next()) |entry| {
-        //         const param = entry.key_ptr;
+        const check_count = 1000;
+        // need to resuse shape env, or else will get different batch value
+        try shape_env.bind(batch_size_expr.Sym.id, check_count);
 
-        //         const grad = entry.value_ptr;
-        //         defer grad.deinit();
-
-        //         try grad.mul_(learning_rate);
-
-        //         try net.params.getPtr(param.*).?.sub_(grad);
-        //     }
-        // }
-
-        const loss_idx = try tensor.arange(allocator, @as(usize, 100), .{});
+        const loss_idx = try tensor.arange(allocator, @as(usize, check_count), .{});
         defer loss_idx.deinit();
 
         const idx_loss = loss_idx.dataSliceRaw();

@@ -156,6 +156,12 @@ pub const ShapeEnv = struct {
         self.sym_map.deinit();
     }
 
+    pub fn clone(self: *const Self) !Self {
+        return .{
+            .sym_map = try self.sym_map.clone(),
+        };
+    }
+
     pub fn bind(self: *Self, id: SymId, value: usize) !void {
         try self.sym_map.put(id, value);
     }
