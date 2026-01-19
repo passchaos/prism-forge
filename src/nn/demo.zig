@@ -8,6 +8,8 @@ const Affine = layer.Affine;
 const Relu = layer.Relu;
 const SoftmaxWithLoss = layer.SoftmaxWithLoss;
 
+const DT = f64;
+
 fn TwoDimDemo(
     comptime batch_size: shape_expr.SizeExpr,
     comptime input_size: shape_expr.SizeExpr,
@@ -18,10 +20,14 @@ fn TwoDimDemo(
 
     const Tensor2_L = tensor.Tensor(&.{ batch_size, output_size }, f64);
 
-    const dw1_T = tensor.Tensor(&.{ input_size, hidden_size }, f64);
-    const db1_T = tensor.Tensor(&.{ shape_expr.SizeExpr.static(1), hidden_size }, f64);
-    const dw2_T = tensor.Tensor(&.{ hidden_size, output_size }, f64);
-    const db2_T = tensor.Tensor(&.{ shape_expr.SizeExpr.static(1), output_size }, f64);
+    const W1_SE = &.{ input_size, hidden_size };
+    const W1_T = tensor.Tensor(W1_SE, f64);
+    const B1_SE = &.{ shape_expr.SizeExpr.static(1), hidden_size };
+    const B1_T = tensor.Tensor(B1_SE, f64);
+    const W2_SE = &.{ hidden_size, output_size };
+    const W2_T = tensor.Tensor(W2_SE, f64);
+    const B2_SE = &.{ shape_expr.SizeExpr.static(1), output_size };
+    const B2_T = tensor.Tensor(B2_SE, f64);
 
     const AffineI = Affine(batch_size, input_size, hidden_size, f64);
     const Affine2I = Affine(batch_size, hidden_size, output_size, f64);
@@ -90,10 +96,10 @@ fn TwoDimDemo(
         }
 
         pub fn backward_orig(self: *Self, x: *const Tensor2, t: *const Tensor2_L) !struct {
-            dw: dw1_T,
-            db: db1_T,
-            dw2: dw2_T,
-            db2: db2_T,
+            dw: W1_T,
+            db: B1_T,
+            dw2: W2_T,
+            db2: B2_T,
         } {
             _ = try self.loss(x, t);
             // defer logits.deinit();
@@ -151,26 +157,59 @@ fn TwoDimDemo(
             };
         }
 
-        pub fn numericalGradient(self: *Self, x: *const Tensor2, t: *const Tensor2_L) !struct { dw: Tensor2, db: Tensor2, dw2: Tensor2, db2: Tensor2 } {
-            const dw = try basic.numericalGradient(self.allocator, self, basic.LossArgument{
-                .x = x,
-                .t = t,
-            }, basic.net_loss, &self.affine.w);
+        pub fn numericalGradient(self: *Self, x: *const Tensor2, t: *const Tensor2_L) !struct {
+            dw: W1_T,
+            db: B1_T,
+            dw2: W2_T,
+            db2: B2_T,
+        } {
+            const dw = try basic.numericalGradient(
+                self.allocator,
+                W1_SE,
+                self,
+                .{
+                    .x = x,
+                    .t = t,
+                },
+                basic.net_loss,
+                &self.affine.w,
+            );
 
-            const db = try basic.numericalGradient(self.allocator, self, basic.LossArgument{
-                .x = x,
-                .t = t,
-            }, basic.net_loss, &self.affine.b);
+            const db = try basic.numericalGradient(
+                self.allocator,
+                B1_SE,
+                self,
+                .{
+                    .x = x,
+                    .t = t,
+                },
+                basic.net_loss,
+                &self.affine.b,
+            );
 
-            const dw2 = try basic.numericalGradient(self.allocator, self, basic.LossArgument{
-                .x = x,
-                .t = t,
-            }, basic.net_loss, &self.affine2.w);
+            const dw2 = try basic.numericalGradient(
+                self.allocator,
+                W2_SE,
+                self,
+                .{
+                    .x = x,
+                    .t = t,
+                },
+                basic.net_loss,
+                &self.affine2.w,
+            );
 
-            const db2 = try basic.numericalGradient(self.allocator, self, basic.LossArgument{
-                .x = x,
-                .t = t,
-            }, basic.net_loss, &self.affine2.b);
+            const db2 = try basic.numericalGradient(
+                self.allocator,
+                B2_SE,
+                self,
+                .{
+                    .x = x,
+                    .t = t,
+                },
+                basic.net_loss,
+                &self.affine2.b,
+            );
 
             return .{
                 .dw = dw,
@@ -197,6 +236,7 @@ test "numerical and analytic gradients" {
     const hidden_dim = comptime shape_expr.SizeExpr.static(50);
     const output_dim = comptime shape_expr.SizeExpr.static(10);
     const batch_size = comptime shape_expr.SizeExpr.static(50);
+    const num_classes_size = comptime shape_expr.SizeExpr.static(10);
 
     var shape_env = shape_expr.ShapeEnv.init(allocator);
     defer shape_env.deinit();
@@ -206,7 +246,7 @@ test "numerical and analytic gradients" {
 
     const ta = try tensor.rand(allocator, &.{batch_size}, &shape_env, 0, 10);
     defer ta.deinit();
-    const t = try ta.oneHot(f64, 10);
+    const t = try ta.oneHot(f64, num_classes_size);
     std.debug.print("t: {f}\n", .{t});
     // const t = try tensor.fromArray(allocator, [batch_size][output_dim]f64{
     //     .{ 0.0, 0.0, 1.0, 0.0, 0.0 },
@@ -228,6 +268,8 @@ test "numerical and analytic gradients" {
     defer {
         analytic_orig_grads.dw.deinit();
         analytic_orig_grads.db.deinit();
+        analytic_orig_grads.dw2.deinit();
+        analytic_orig_grads.db2.deinit();
     }
     // const analytic_grads = try net.backward(&x, &t);
     // defer {
@@ -238,14 +280,16 @@ test "numerical and analytic gradients" {
     defer {
         numerical_grads.dw.deinit();
         numerical_grads.db.deinit();
+        numerical_grads.dw2.deinit();
+        numerical_grads.db2.deinit();
     }
 
     // try analytic_orig_grads.dw.sub_(&analytic_grads.dw);
     // try analytic_orig_grads.db.sub_(&analytic_grads.db);
-    try analytic_orig_grads.dw.sub_(&numerical_grads.dw);
-    try analytic_orig_grads.db.sub_(&numerical_grads.db);
-    try analytic_orig_grads.dw2.sub_(&numerical_grads.dw2);
-    try analytic_orig_grads.db2.sub_(&numerical_grads.db2);
+    analytic_orig_grads.dw.sub_(&numerical_grads.dw);
+    analytic_orig_grads.db.sub_(&numerical_grads.db);
+    analytic_orig_grads.dw2.sub_(&numerical_grads.dw2);
+    analytic_orig_grads.db2.sub_(&numerical_grads.db2);
 
     analytic_orig_grads.dw.abs_();
     analytic_orig_grads.db.abs_();

@@ -96,15 +96,15 @@ pub fn SimpleNet(comptime batch_size: SizeExpr, comptime shape_expr_a: [2]SizeEx
 // if f return !T, compile will hang or meet unnormal compile error
 pub fn numericalGradient(
     allocator: std.mem.Allocator,
-    comptime shape_expr_a: [2]SizeExpr,
+    comptime shape_expr_a: []const SizeExpr,
     net: anytype,
     ctx: anytype,
     f: fn (
         anytype,
         anytype,
     ) anyerror!DT,
-    tval: *Tensor2(shape_expr_a),
-) !Tensor2(shape_expr_a) {
+    tval: *tensor.Tensor(shape_expr_a, DT),
+) !tensor.Tensor(shape_expr_a, DT) {
     const h = 1e-5;
 
     var grad = try tensor.zerosLike(allocator, tval.*);
