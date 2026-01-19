@@ -362,8 +362,8 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, batch_si
     const batch_size_expr = comptime SizeExpr.sym(.{ .name = "batch_size" });
 
     var shape_env = ShapeEnv.init(allocator);
-    try shape_env.bind(batch_size_expr.Sym.id, batch_size);
-    try shape_env.bind(num_classes_expr.Sym.id, 10);
+    try shape_env.bind(&batch_size_expr.Sym, batch_size);
+    try shape_env.bind(&num_classes_expr.Sym, 10);
 
     const datas = try mnist.loadDatas(
         DT,
@@ -410,9 +410,15 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, batch_si
     defer net.deinit();
 
     for (0..iters_num) |idx| {
-        try shape_env.bind(batch_size_expr.Sym.id, batch_size);
+        try shape_env.bind(&batch_size_expr.Sym, batch_size);
 
-        const batch_mask = try tensor.rand(allocator, &.{batch_size_expr}, &shape_env, @as(usize, 0), train_size);
+        const batch_mask = try tensor.rand(
+            allocator,
+            &.{batch_size_expr},
+            &shape_env,
+            @as(usize, 0),
+            train_size,
+        );
         defer batch_mask.deinit();
 
         const batch_indices = batch_mask.dataSliceRaw();
@@ -447,7 +453,7 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, batch_si
 
         const check_count = 1000;
         // need to resuse shape env, or else will get different batch value
-        try shape_env.bind(batch_size_expr.Sym.id, check_count);
+        try shape_env.bind(&batch_size_expr.Sym, check_count);
 
         const loss_idx = try tensor.arange(allocator, @as(usize, check_count), .{});
         defer loss_idx.deinit();

@@ -132,7 +132,7 @@ pub const SizeExpr = union(enum) {
     pub fn eval(self: *const Self, env: *const ShapeEnv) !usize {
         return switch (self.*) {
             .Static => |v| v,
-            .Sym => |s| env.lookup(s.id),
+            .Sym => |s| env.lookup(&s),
             .Add => |add_s| try add_s.lhs.eval(env) + try add_s.rhs.eval(env),
             .Mul => |mul_s| try mul_s.lhs.eval(env) * try mul_s.rhs.eval(env),
             .Max => |max_s| @max(try max_s.lhs.eval(env), try max_s.rhs.eval(env)),
@@ -144,30 +144,70 @@ pub const SizeExpr = union(enum) {
 pub const ShapeEnv = struct {
     const Self = @This();
 
+    sym_ids: std.AutoHashMap(SymId, []const u8),
     sym_map: std.AutoHashMap(SymId, usize),
+    fingerprint: u64 = 0,
+
+    pub fn format(
+        self: @This(),
+        writer: *std.Io.Writer,
+    ) std.Io.Writer.Error!void {
+        try writer.print("ShapeEnv {{\n", .{});
+        try writer.print("  fingerprint: {},\n", .{self.fingerprint});
+
+        try writer.print("  syms: {{,\n", .{});
+        var map_iter = self.sym_map.iterator();
+        while (map_iter.next()) |entry| {
+            try writer.print("    {s}: {},\n", .{
+                self.sym_ids.get(entry.key_ptr.*).?,
+                entry.value_ptr.*,
+            });
+        }
+        try writer.print("  }}\n", .{});
+
+        try writer.print("}}\n", .{});
+    }
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return .{
+            .sym_ids = std.AutoHashMap(SymId, []const u8).init(allocator),
             .sym_map = std.AutoHashMap(SymId, usize).init(allocator),
         };
     }
 
     pub fn deinit(self: *Self) void {
+        self.sym_ids.deinit();
         self.sym_map.deinit();
     }
 
     pub fn clone(self: *const Self) !Self {
         return .{
+            .sym_ids = try self.sym_ids.clone(),
             .sym_map = try self.sym_map.clone(),
         };
     }
 
-    pub fn bind(self: *Self, id: SymId, value: usize) !void {
-        try self.sym_map.put(id, value);
+    pub fn bind(self: *Self, sym: *const SymbolHandle, value: usize) !void {
+        if (self.sym_map.get(sym.id)) |v| {
+            if (v == value) {
+                return;
+            }
+
+            std.debug.print("update sym map value: name= {s} old= {} new= {}\n", .{ sym.name, v, value });
+        }
+
+        std.debug.print(
+            "bind sym: name= {s} id= {} value= {}\n",
+            .{ sym.name, sym.id, value },
+        );
+
+        try self.sym_map.put(sym.id, value);
+        try self.sym_ids.put(sym.id, sym.name);
+        self.fingerprint += 1;
     }
 
-    pub fn lookup(self: *const Self, id: SymId) !usize {
-        if (self.sym_map.get(id)) |v| return v;
+    pub fn lookup(self: *const Self, sym: *const SymbolHandle) !usize {
+        if (self.sym_map.get(sym.id)) |v| return v;
 
         return error.UnboundSymbol;
     }

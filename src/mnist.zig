@@ -44,8 +44,8 @@ pub fn loadImages(
     const read_shape = &.{ @as(usize, @intCast(samples)), @as(usize, @intCast(rows * columns)) };
     log.print(@src(), "read images shape: {any}\n", .{read_shape});
 
-    try shape_env.bind(shape_expr_a[0].Sym.id, samples);
-    try shape_env.bind(shape_expr_a[1].Sym.id, rows * columns);
+    try shape_env.bind(&shape_expr_a[0].Sym, samples);
+    try shape_env.bind(&shape_expr_a[1].Sym, rows * columns);
 
     return try tensor.fromData(u8, allocator, data, shape_expr_a, shape_env);
 }
@@ -76,7 +76,7 @@ pub fn loadLabels(
 
     log.print(@src(), "read labels: {}\n", .{samples});
 
-    try shape_env.bind(count_size_expr.Sym.id, samples);
+    try shape_env.bind(&count_size_expr.Sym, samples);
 
     return try tensor.fromData(u8, allocator, new_buf, &.{count_size_expr}, shape_env);
 }
@@ -155,13 +155,17 @@ test "mnist images and labels" {
     const test_data_count_expr = comptime shape_expr.SizeExpr.sym(.{ .name = "test_data_count" });
     const image_data_len_expr = comptime shape_expr.SizeExpr.sym(.{ .name = "image_data_len" });
 
+    const num_classes_expr = comptime shape_expr.SizeExpr.sym(.{ .name = "num_classes" });
+
+    try shape_env.bind(&num_classes_expr.Sym, 10);
+
     const res = try loadDatas(
         f32,
         allocator,
         train_data_count_expr,
         test_data_count_expr,
         image_data_len_expr,
-        10,
+        num_classes_expr,
         &shape_env,
     );
 
@@ -174,5 +178,6 @@ test "mnist images and labels" {
     const test_labels = res.test_labels;
     defer test_labels.deinit();
 
-    log.print(@src(), "train_images: {f} train_labels: {f} test_images: {f} test_labels: {f}\n", .{ train_images, train_labels, test_images, test_labels });
+    std.debug.print("shape env: {f}\n", .{shape_env});
+    std.debug.print("train_images: {f} train_labels: {f} test_images: {f} test_labels: {f}\n", .{ train_images, train_labels, test_images, test_labels });
 }
