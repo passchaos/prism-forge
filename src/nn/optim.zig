@@ -62,6 +62,9 @@ pub fn Momentum(comptime T: type) type {
 
                 for (self.velocity.?, params) |*v, p| {
                     v.* = try self.allocator.alloc(T, p.len);
+                    for (v.*) |*v_i| {
+                        v_i.* = 0;
+                    }
                 }
             }
             for (params, grads, self.velocity.?) |param, grad, vel| {
