@@ -147,6 +147,7 @@ pub const ShapeEnv = struct {
     sym_ids: std.AutoHashMap(SymId, []const u8),
     sym_map: std.AutoHashMap(SymId, usize),
     fingerprint: u64 = 0,
+    rwlock: std.Thread.RwLock = std.Thread.RwLock{},
 
     pub fn format(
         self: @This(),
@@ -156,12 +157,14 @@ pub const ShapeEnv = struct {
         try writer.print("  fingerprint: {},\n", .{self.fingerprint});
 
         try writer.print("  syms: {{,\n", .{});
-        var map_iter = self.sym_map.iterator();
-        while (map_iter.next()) |entry| {
-            try writer.print("    {s}: {},\n", .{
-                self.sym_ids.get(entry.key_ptr.*).?,
-                entry.value_ptr.*,
-            });
+        {
+            var map_iter = self.sym_map.iterator();
+            while (map_iter.next()) |entry| {
+                try writer.print("    {s}: {},\n", .{
+                    self.sym_ids.get(entry.key_ptr.*).?,
+                    entry.value_ptr.*,
+                });
+            }
         }
         try writer.print("  }}\n", .{});
 
@@ -188,6 +191,9 @@ pub const ShapeEnv = struct {
     }
 
     pub fn bind(self: *Self, sym: *const SymbolHandle, value: usize) !void {
+        self.rwlock.lock();
+        defer self.rwlock.unlock();
+
         if (self.sym_map.get(sym.id)) |v| {
             if (v == value) {
                 return;
