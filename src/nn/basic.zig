@@ -5,6 +5,7 @@ const mnist = @import("../mnist.zig");
 const plot = @import("../plot.zig");
 const layer = @import("layer.zig");
 const shape_expr = @import("../shape_expr.zig");
+const optim = @import("optim.zig");
 
 const SizeExpr = shape_expr.SizeExpr;
 const ShapeEnv = shape_expr.ShapeEnv;
@@ -401,73 +402,82 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, batch_si
         learning_rate,
     });
 
-    var net = try TwoLayerNet(
-        batch_size_expr,
-        image_data_len_expr,
-        SizeExpr.static(50),
-        num_classes_expr,
-    ).init(allocator, 0.01, &shape_env);
-    defer net.deinit();
+    const optimizer_t = optim.Optimizer(DT);
 
-    for (0..iters_num) |idx| {
-        try shape_env.bind(&batch_size_expr.Sym, batch_size);
+    const sgd =
+        optimizer_t{ .SGD = optim.Sgd(DT).init(learning_rate) };
+    const momentum =
+        optimizer_t{ .MOMENTUM = optim.Momentum(DT).init(learning_rate, 0.9, allocator) };
 
-        const batch_mask = try tensor.rand(
-            allocator,
-            &.{batch_size_expr},
-            &shape_env,
-            @as(usize, 0),
-            train_size,
-        );
-        defer batch_mask.deinit();
+    var optimizers = [_]optimizer_t{ momentum, sgd, momentum };
 
-        const batch_indices = batch_mask.dataSliceRaw();
+    for (&optimizers) |*optimizer| {
+        var net = try TwoLayerNet(
+            batch_size_expr,
+            image_data_len_expr,
+            SizeExpr.static(50),
+            num_classes_expr,
+        ).init(allocator, 0.01, &shape_env);
+        defer net.deinit();
 
-        const x_batch = try train_images.indexSelect(0, batch_size_expr, batch_indices);
-        defer x_batch.deinit();
-        const t_batch = try train_labels.indexSelect(0, batch_size_expr, batch_indices);
-        defer t_batch.deinit();
+        for (0..iters_num) |idx| {
+            try shape_env.bind(&batch_size_expr.Sym, batch_size);
 
-        const grads1 = try net.gradient(&x_batch, &t_batch);
+            const batch_mask = try tensor.rand(
+                allocator,
+                &.{batch_size_expr},
+                &shape_env,
+                @as(usize, 0),
+                train_size,
+            );
+            defer batch_mask.deinit();
 
-        {
-            var grad_dw1 = grads1.dw1;
-            grad_dw1.mulScalar_(learning_rate);
-            net.affine1.w.sub_(&grad_dw1);
+            const batch_indices = batch_mask.dataSliceRaw();
 
-            var grad_db1 = grads1.db1;
-            // defer grad_db1.deinit();
-            grad_db1.mulScalar_(learning_rate);
-            net.affine1.b.sub_(&grad_db1);
+            const x_batch = try train_images.indexSelect(0, batch_size_expr, batch_indices);
+            defer x_batch.deinit();
+            const t_batch = try train_labels.indexSelect(0, batch_size_expr, batch_indices);
+            defer t_batch.deinit();
 
-            var grad_dw2 = grads1.dw2;
-            // defer grad_dw2.deinit();
-            grad_dw2.mulScalar_(learning_rate);
-            net.affine2.w.sub_(&grad_dw2);
+            const grads1 = try net.gradient(&x_batch, &t_batch);
 
-            var grad_db2 = grads1.db2;
-            // defer grad_db2.deinit();
-            grad_db2.mulScalar_(learning_rate);
-            net.affine2.b.sub_(&grad_db2);
+            {
+                const params = [4][]DT{
+                    net.affine1.w.dataSliceRaw(),
+                    net.affine1.b.dataSliceRaw(),
+                    net.affine2.w.dataSliceRaw(),
+                    net.affine2.b.dataSliceRaw(),
+                };
+                const grads = [4][]DT{
+                    grads1.dw1.dataSliceRaw(),
+                    grads1.db1.dataSliceRaw(),
+                    grads1.dw2.dataSliceRaw(),
+                    grads1.db2.dataSliceRaw(),
+                };
+
+                try optimizer.update(&params, &grads);
+            }
+
+            const check_count = 1000;
+            // need to resuse shape env, or else will get different batch value
+            try shape_env.bind(&batch_size_expr.Sym, check_count);
+
+            const loss_idx = try tensor.arange(allocator, @as(usize, check_count), .{});
+            defer loss_idx.deinit();
+
+            const idx_loss = loss_idx.dataSliceRaw();
+
+            const loss_x = try test_images.indexSelect(0, batch_size_expr, idx_loss);
+            defer loss_x.deinit();
+            const loss_t = try test_labels.indexSelect(0, batch_size_expr, idx_loss);
+            defer loss_t.deinit();
+            const loss = try net.loss(&loss_x, &loss_t);
+
+            const tag = @tagName(optimizer.*);
+
+            try plot.appendData(tag, &.{@as(f64, @floatFromInt(idx))}, &.{loss});
+            log.print(@src(), "{s}: idx= {} loss= {}\n", .{ tag, idx, loss });
         }
-
-        const check_count = 1000;
-        // need to resuse shape env, or else will get different batch value
-        try shape_env.bind(&batch_size_expr.Sym, check_count);
-
-        const loss_idx = try tensor.arange(allocator, @as(usize, check_count), .{});
-        defer loss_idx.deinit();
-
-        const idx_loss = loss_idx.dataSliceRaw();
-
-        const loss_x = try test_images.indexSelect(0, batch_size_expr, idx_loss);
-        defer loss_x.deinit();
-        const loss_t = try test_labels.indexSelect(0, batch_size_expr, idx_loss);
-        defer loss_t.deinit();
-        const loss = try net.loss(&loss_x, &loss_t);
-
-        try plot.appendData("idx", &.{@as(f64, @floatFromInt(idx))}, &.{loss});
-        log.print(@src(), "idx: {} loss: {}\n", .{ idx, loss });
     }
 }
 

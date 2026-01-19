@@ -212,13 +212,13 @@ pub const ShapeEnv = struct {
                 return;
             }
 
-            std.debug.print("update sym map value: name= {s} old= {} new= {}\n", .{ sym.name, v, value });
+            // std.debug.print("update sym map value: name= {s} old= {} new= {}\n", .{ sym.name, v, value });
         }
 
-        std.debug.print(
-            "bind sym: name= {s} id= {} value= {}\n",
-            .{ sym.name, sym.id, value },
-        );
+        // std.debug.print(
+        //     "bind sym: name= {s} id= {} value= {}\n",
+        //     .{ sym.name, sym.id, value },
+        // );
 
         try self.sym_map.put(sym, value);
         self.fingerprint += 1;
