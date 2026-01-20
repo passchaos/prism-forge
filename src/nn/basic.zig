@@ -408,9 +408,10 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, batch_si
         optimizer_t{ .SGD = optim.Sgd(DT).init(learning_rate) };
     const momentum =
         optimizer_t{ .MOMENTUM = optim.Momentum(DT).init(learning_rate, 0.9, allocator) };
-    const ada_grad = optimizer_t{ .ADAGRAD = optim.AdaGrad(DT).init(learning_rate / 10.0, allocator) };
+    const ada_grad = optimizer_t{ .ADAGRAD = optim.AdaGrad(DT).init(learning_rate, allocator) };
+    const adam = optimizer_t{ .ADAM = optim.Adam(DT).init(learning_rate / 10.0, 0.9, 0.999, allocator) };
 
-    var optimizers = [_]optimizer_t{ ada_grad, momentum, sgd };
+    var optimizers = [_]optimizer_t{ adam, ada_grad, momentum, sgd };
 
     for (&optimizers) |*optimizer| {
         var net = try TwoLayerNet(

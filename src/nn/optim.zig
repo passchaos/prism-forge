@@ -11,6 +11,7 @@ pub fn Optimizer(comptime T: type) type {
         SGD: Sgd(T),
         MOMENTUM: Momentum(T),
         ADAGRAD: AdaGrad(T),
+        ADAM: Adam(T),
 
         const Self = @This();
 
@@ -27,6 +28,7 @@ pub fn Optimizer(comptime T: type) type {
                 .SGD => |*sgd| try sgd.update(params, grads),
                 .MOMENTUM => |*momentum| try momentum.update(params, grads),
                 .ADAGRAD => |*adagrad| try adagrad.update(params, grads),
+                .ADAM => |*adam| try adam.update(params, grads),
             }
         }
     };
@@ -137,6 +139,90 @@ pub fn AdaGrad(comptime T: type) type {
                 // std.debug.print("sub: {} orig: {}\n", .{ grad_c_1.data[5], grad.data[5] });
 
                 try param.sub_(&grad_c_1);
+            }
+        }
+    };
+}
+
+pub fn Adam(comptime T: type) type {
+    return struct {
+        lr: T,
+        beta1: T,
+        beta2: T,
+        iter: usize = 0,
+        allocator: std.mem.Allocator,
+        m: ?[]tensor.TensorView(T) = null,
+        v: ?[]tensor.TensorView(T) = null,
+
+        const Self = @This();
+
+        pub fn init(lr: T, beta1: T, beta2: T, allocator: std.mem.Allocator) Self {
+            return Self{
+                .lr = lr,
+                .beta1 = beta1,
+                .beta2 = beta2,
+                .allocator = allocator,
+            };
+        }
+
+        pub fn update(
+            self: *Self,
+            params: []tensor.TensorView(T),
+            grads: []const tensor.TensorView(T),
+        ) !void {
+            if (self.m == null) {
+                self.m = try self.allocator.alloc(tensor.TensorView(T), params.len);
+                self.v = try self.allocator.alloc(tensor.TensorView(T), params.len);
+                for (self.m.?, self.v.?, params) |*m, *v, p| {
+                    var new_h = try p.clone();
+                    new_h.resetData(0);
+
+                    m.* = try new_h.clone();
+                    v.* = new_h;
+                }
+            }
+
+            self.iter += 1;
+
+            const lr_t = self.lr * @sqrt(1.0 - std.math.pow(
+                T,
+                self.beta2,
+                @as(T, @floatFromInt(self.iter)),
+            )) / (1.0 - std.math.pow(
+                T,
+                self.beta1,
+                @as(T, @floatFromInt(self.iter)),
+            ));
+
+            for (params, grads, self.m.?, self.v.?) |*param, grad, *m, *v| {
+                var grad_m_c = try grad.clone();
+                defer grad_m_c.deinit();
+
+                try grad_m_c.sub_(m);
+                grad_m_c.mulScalar_(1.0 - self.beta1);
+                try m.add_(&grad_m_c);
+
+                var grad_v_c = try grad.clone();
+                defer grad_v_c.deinit();
+
+                try grad_v_c.mul_(&grad_v_c);
+                try grad_v_c.sub_(v);
+                grad_v_c.mulScalar_(1.0 - self.beta2);
+                try v.add_(&grad_v_c);
+
+                var v_c = try v.clone();
+                defer v_c.deinit();
+
+                v_c.sqrt_();
+                v_c.addScalar_(1e-7);
+
+                var m_c = try m.clone();
+                defer m_c.deinit();
+
+                try m_c.div_(&v_c);
+                m_c.mulScalar_(lr_t);
+
+                try param.sub_(&m_c);
             }
         }
     };
