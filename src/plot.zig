@@ -129,7 +129,16 @@ fn plotImpl() !void {
         return;
     }
 
-    const axis_info = pair_entry.axisInfo();
+    var axis_info = pair_entry.axisInfo();
+
+    while (data_iter.next()) |entry| {
+        const new_axis_info = entry.value_ptr.axisInfo();
+
+        axis_info.x_max = @max(axis_info.x_max, new_axis_info.x_max);
+        axis_info.x_min = @min(axis_info.x_min, new_axis_info.x_min);
+        axis_info.y_max = @max(axis_info.y_max, new_axis_info.y_max);
+        axis_info.y_min = @min(axis_info.y_min, new_axis_info.y_min);
+    }
 
     const gridline_color = dvui.Color.fromHSLuv(0, 0, 0, 100);
     const subtick_gridline_color = dvui.Color.fromHSLuv(0, 0, 0, 30);

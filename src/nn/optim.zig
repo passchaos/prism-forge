@@ -15,6 +15,15 @@ pub fn Optimizer(comptime T: type) type {
 
         const Self = @This();
 
+        pub fn deinit(self: *Self) void {
+            switch (self.*) {
+                .SGD => |*sgd| sgd.deinit(),
+                .MOMENTUM => |*momentum| momentum.deinit(),
+                .ADAGRAD => |*adagrad| adagrad.deinit(),
+                .ADAM => |*adam| adam.deinit(),
+            }
+        }
+
         pub fn update(
             self: *Self,
             params: []tensor.TensorView(T),
@@ -63,6 +72,16 @@ pub fn Momentum(comptime T: type) type {
         velocity: ?[]tensor.TensorView(T) = null,
         allocator: std.mem.Allocator,
 
+        pub fn deinit(self: *Self) void {
+            if (self.velocity) |vel| {
+                for (vel) |v| {
+                    v.deinit();
+                }
+
+                self.allocator.free(vel);
+            }
+        }
+
         pub fn init(lr: T, momentum: T, allocator: std.mem.Allocator) Self {
             return Self{ .lr = lr, .momentum = momentum, .allocator = allocator };
         }
@@ -98,6 +117,16 @@ pub fn AdaGrad(comptime T: type) type {
         allocator: std.mem.Allocator,
 
         const Self = @This();
+
+        pub fn deinit(self: *Self) void {
+            if (self.h) |hr| {
+                for (hr) |h| {
+                    h.deinit();
+                }
+
+                self.allocator.free(hr);
+            }
+        }
 
         pub fn init(lr: T, allocator: std.mem.Allocator) Self {
             return Self{ .lr = lr, .allocator = allocator };
@@ -155,6 +184,23 @@ pub fn Adam(comptime T: type) type {
         v: ?[]tensor.TensorView(T) = null,
 
         const Self = @This();
+
+        pub fn deinit(self: *Self) void {
+            if (self.m) |m| {
+                for (m) |mv| {
+                    mv.deinit();
+                }
+
+                self.allocator.free(m);
+            }
+            if (self.v) |v| {
+                for (v) |vv| {
+                    vv.deinit();
+                }
+
+                self.allocator.free(v);
+            }
+        }
 
         pub fn init(lr: T, beta1: T, beta2: T, allocator: std.mem.Allocator) Self {
             return Self{
