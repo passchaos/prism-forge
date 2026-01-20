@@ -409,7 +409,7 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, batch_si
     const momentum =
         optimizer_t{ .MOMENTUM = optim.Momentum(DT).init(learning_rate, 0.9, allocator) };
 
-    var optimizers = [_]optimizer_t{ momentum, sgd, momentum };
+    var optimizers = [_]optimizer_t{ momentum, sgd };
 
     for (&optimizers) |*optimizer| {
         var net = try TwoLayerNet(
