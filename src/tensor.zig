@@ -25,7 +25,7 @@ pub fn TensorView(comptime T: type) type {
         stride: []const usize,
         data: []T,
 
-        fn deinit(self: *Self) void {
+        pub fn deinit(self: *Self) void {
             if (self.is_owned) {
                 self.allocator.free(self.shape);
                 self.allocator.free(self.stride);
@@ -47,7 +47,7 @@ pub fn TensorView(comptime T: type) type {
             @memcpy(new_stride, self.stride);
 
             const new_data = try self.allocator.alloc(T, self.data.len);
-            @memset(new_data, 0);
+            @memcpy(new_data, self.data);
 
             return Self{
                 .is_contiguous = self.is_contiguous,
@@ -85,9 +85,51 @@ pub fn TensorView(comptime T: type) type {
             }
         }
 
+        pub fn sub_(self: *Self, other: *const Self) !void {
+            try checkElementwiseCondition(self, other);
+
+            for (self.data, other.data) |*s, o| {
+                s.* -= o;
+            }
+        }
+
+        pub fn addScalar_(self: *Self, value: T) void {
+            for (self.data) |*s| {
+                s.* += value;
+            }
+        }
+
+        pub fn subScalar_(self: *Self, value: T) void {
+            for (self.data) |*s| {
+                s.* -= value;
+            }
+        }
+
         pub fn mulScalar_(self: *Self, value: T) void {
             for (self.data) |*s| {
                 s.* *= value;
+            }
+        }
+
+        pub fn mul_(self: *Self, other: *const Self) !void {
+            try checkElementwiseCondition(self, other);
+
+            for (self.data, other.data) |*s, o| {
+                s.* *= o;
+            }
+        }
+
+        pub fn div_(self: *Self, other: *const Self) !void {
+            try checkElementwiseCondition(self, other);
+
+            for (self.data, other.data) |*s, o| {
+                s.* /= o;
+            }
+        }
+
+        pub fn sqrt_(self: *Self) void {
+            for (self.data) |*s| {
+                s.* = @sqrt(s.*);
             }
         }
     };
