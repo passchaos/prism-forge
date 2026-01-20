@@ -442,17 +442,17 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, batch_si
             const grads1 = try net.gradient(&x_batch, &t_batch);
 
             {
-                const params = [4][]DT{
-                    net.affine1.w.dataSliceRaw(),
-                    net.affine1.b.dataSliceRaw(),
-                    net.affine2.w.dataSliceRaw(),
-                    net.affine2.b.dataSliceRaw(),
+                var params = [4]tensor.TensorView(DT){
+                    net.affine1.w.view(),
+                    net.affine1.b.view(),
+                    net.affine2.w.view(),
+                    net.affine2.b.view(),
                 };
-                const grads = [4][]DT{
-                    grads1.dw1.dataSliceRaw(),
-                    grads1.db1.dataSliceRaw(),
-                    grads1.dw2.dataSliceRaw(),
-                    grads1.db2.dataSliceRaw(),
+                const grads = [4]tensor.TensorView(DT){
+                    grads1.dw1.view(),
+                    grads1.db1.view(),
+                    grads1.dw2.view(),
+                    grads1.db2.view(),
                 };
 
                 try optimizer.update(&params, &grads);

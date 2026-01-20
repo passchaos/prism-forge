@@ -16,34 +16,82 @@ const SizeExpr = shape_expr.SizeExpr;
 const ShapeEnv = shape_expr.ShapeEnv;
 const parseSpec = shape_expr.parseSpec;
 
-pub const View = struct {
-    const Range = struct {
-        start: usize,
-        end: usize,
+pub fn TensorView(comptime T: type) type {
+    return struct {
+        is_contiguous: bool,
+        allocator: std.mem.Allocator,
+        is_owned: bool,
+        shape: []const usize,
+        stride: []const usize,
+        data: []T,
+
+        fn deinit(self: *Self) void {
+            if (self.is_owned) {
+                self.allocator.free(self.shape);
+                self.allocator.free(self.stride);
+                self.allocator.free(self.data);
+            }
+        }
+
+        const Self = @This();
+
+        pub fn resetData(self: *Self, value: T) void {
+            @memset(self.data, value);
+        }
+
+        pub fn clone(self: *const Self) !Self {
+            const new_shape = try self.allocator.alloc(usize, self.shape.len);
+            @memcpy(new_shape, self.shape);
+
+            const new_stride = try self.allocator.alloc(usize, self.stride.len);
+            @memcpy(new_stride, self.stride);
+
+            const new_data = try self.allocator.alloc(T, self.data.len);
+            @memset(new_data, 0);
+
+            return Self{
+                .is_contiguous = self.is_contiguous,
+                .allocator = self.allocator,
+                .is_owned = true,
+                .shape = new_shape,
+                .stride = new_stride,
+                .data = new_data,
+            };
+        }
+
+        fn checkElementwiseCondition(self: *const Self, other: *const Self) !void {
+            if (self.data.len != other.data.len) {
+                return error.ShapeMismatch;
+            }
+
+            if (!self.is_contiguous or !other.is_contiguous) {
+                return error.NotContiguous;
+            }
+        }
+
+        pub fn addSubFused_(self: *Self, alpha: T, other: *const Self, beta: T) !void {
+            try checkElementwiseCondition(self, other);
+
+            for (self.data, other.data) |*s, o| {
+                s.* = alpha * s.* + beta * o;
+            }
+        }
+
+        pub fn add_(self: *Self, other: *const Self) !void {
+            try checkElementwiseCondition(self, other);
+
+            for (self.data, other.data) |*s, o| {
+                s.* += o;
+            }
+        }
+
+        pub fn mulScalar_(self: *Self, value: T) void {
+            for (self.data) |*s| {
+                s.* *= value;
+            }
+        }
     };
-
-    fn resultSqueezeDim(comptime svt: type) usize {
-        return switch (@typeInfo(svt)) {
-            .array => |at| blk: {
-                if (at.child == Range) {
-                    break :blk 0;
-                }
-
-                switch (@typeInfo(at.child)) {
-                    .int, .comptime_int => break :blk at.len,
-                    else => @compileError("unsupported slice view array item type: " ++ @typeName(svt)),
-                }
-                break :blk 0;
-            },
-            else => 0,
-        };
-        // if (@TypeOf(svt) == .array and utils.array.getArrayItemTypeComp(@TypeOf(svt)) == .Range) {
-        //     return utils.array.getArrayLengthComp(@TypeOf(svt));
-        // } else {
-        //     return 0;
-        // }
-    }
-};
+}
 
 pub fn BasicOpFuncsGenerator(comptime T: type) type {
     return struct {
@@ -647,26 +695,10 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
                 @compileError("matmul shape mismatch: " ++ std.fmt.comptimePrint("lhs: {f} rhs: {f}\n", .{ SA[1], @TypeOf(other.*).S[0] }));
             }
 
-            var lhs = self;
-            var rhs = other;
-
-            if (!lhs.isContiguous()) {
-                lhs = &(try lhs.contiguous());
-            }
-            defer {
-                if (!self.isContiguous()) {
-                    lhs.deinit();
-                }
-            }
-            if (!rhs.isContiguous()) {
-                var rhs_c = try rhs.contiguous();
-                rhs = &rhs_c;
-            }
-            defer {
-                if (!other.isContiguous()) {
-                    rhs.deinit();
-                }
-            }
+            var lhs = try self.contiguous();
+            defer lhs.deinit();
+            var rhs = try other.contiguous();
+            defer rhs.deinit();
 
             const m = lhs.shape()[0];
             const k = lhs.shape()[1];
@@ -1379,9 +1411,8 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
             return Self.fromDataImpl(layout, storage, 0);
         }
 
-        pub fn contiguous(self: Self) !Self {
+        pub fn contiguous(self: *const Self) !Self {
             if (self.layout.isContiguous()) {
-                // return self;
                 return self.sharedView(.{});
             }
 
@@ -1400,7 +1431,7 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
 
             const storage = try Storage.initImpl(self.storage.allocator, new_buf);
 
-            return Self.fromDataImpl(layout, storage, 0);
+            return Tensor(S, T).fromDataImpl(layout, storage, self._storage_offset);
         }
 
         // attributes
@@ -1413,6 +1444,17 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
             const storage = self.storage.shared();
 
             return Tensor(target_shape_expr, T).fromDataImpl(new_layout, storage, self._storage_offset);
+        }
+
+        pub fn view(self: *const Self) TensorView(T) {
+            return TensorView(T){
+                .is_contiguous = self.isContiguous(),
+                .is_owned = false,
+                .allocator = self.s_allocator(),
+                .shape = &self.shape(),
+                .stride = &self.stride(),
+                .data = self.dataSliceRaw(),
+            };
         }
 
         pub fn getData(self: *const Self, indices: [N]usize) !T {
@@ -2329,7 +2371,7 @@ test "contiguous test" {
     try std.testing.expect(!t2.isContiguous());
     std.debug.print("t1 transpose_: {f}\n", .{t1});
 
-    const t1tc = try t1.contiguous();
+    var t1tc = try t1.contiguous();
     defer t1tc.deinit();
 
     std.debug.print("t1tc: {f}\n", .{t1tc});
