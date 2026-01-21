@@ -414,6 +414,8 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, batch_si
     var optimizers = [_]optimizer_t{ adam, ada_grad, momentum, sgd };
 
     for (&optimizers) |*optimizer| {
+        defer optimizer.deinit();
+
         var net = try TwoLayerNet(
             batch_size_expr,
             image_data_len_expr,

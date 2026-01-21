@@ -17,10 +17,10 @@ pub fn Optimizer(comptime T: type) type {
 
         pub fn deinit(self: *Self) void {
             switch (self.*) {
-                .SGD => |*sgd| sgd.deinit(),
                 .MOMENTUM => |*momentum| momentum.deinit(),
                 .ADAGRAD => |*adagrad| adagrad.deinit(),
                 .ADAM => |*adam| adam.deinit(),
+                else => {},
             }
         }
 
