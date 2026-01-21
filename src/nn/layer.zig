@@ -5,11 +5,18 @@ const shape_expr = @import("../shape_expr.zig");
 
 const SizeExpr = shape_expr.SizeExpr;
 
+pub const Layer = enum {
+    Relu,
+    Affine,
+    SoftmaxWithLoss,
+};
+
 pub fn Relu(comptime shape: []const SizeExpr, comptime T: type) type {
     const Tensor = tensor.Tensor(shape, T);
     const BoolTensor = tensor.Tensor(shape, bool);
 
     return struct {
+        tag: Layer = Layer.Relu,
         mask: ?BoolTensor = null,
 
         const Self = @This();
@@ -45,6 +52,19 @@ pub fn Relu(comptime shape: []const SizeExpr, comptime T: type) type {
     };
 }
 
+pub fn AffineWeight(comptime T: type) type {
+    return union(enum) { Std: T, Xavier, He };
+}
+
+pub fn AffineWeightGradView(comptime T: type) type {
+    return struct {
+        w_view: tensor.TensorView(T),
+        dw_view: tensor.TensorView(T),
+        b_view: tensor.TensorView(T),
+        db_view: tensor.TensorView(T),
+    };
+}
+
 pub fn Affine(comptime batch_size: SizeExpr, comptime input_size: SizeExpr, comptime output_size: SizeExpr, comptime T: type) type {
     const Tensor = tensor.Tensor(&.{ batch_size, input_size }, T);
     const TensorW = tensor.Tensor(&.{ input_size, output_size }, T);
@@ -52,6 +72,7 @@ pub fn Affine(comptime batch_size: SizeExpr, comptime input_size: SizeExpr, comp
     const TensorG = tensor.Tensor(&.{ batch_size, output_size }, T);
 
     return struct {
+        tag: Layer = Layer.Affine,
         w: TensorW,
         b: TensorB,
         x: ?Tensor = null,
@@ -91,7 +112,25 @@ pub fn Affine(comptime batch_size: SizeExpr, comptime input_size: SizeExpr, comp
             }
         }
 
-        pub fn init(w: TensorW, b: TensorB) Self {
+        pub fn init(allocator: std.mem.Allocator, shape_env: *const shape_expr.ShapeEnv, weight_init: AffineWeight(T)) !Self {
+            var w = try tensor.randNorm(allocator, &.{ input_size, output_size }, shape_env, 0.0, 1.0);
+            const scale = switch (weight_init) {
+                .Std => |init_std| init_std,
+                .Xavier => blk: {
+                    const fan_in = try input_size.eval(shape_env);
+                    const scale = @sqrt(2.0 / @as(T, @floatFromInt(fan_in)));
+                    break :blk scale;
+                },
+                .He => blk: {
+                    const fan_in = try input_size.eval(shape_env);
+                    const scale = @sqrt(2.0 / @as(T, @floatFromInt(fan_in)));
+                    break :blk scale;
+                },
+            };
+            w.mulScalar_(scale);
+
+            const b = try tensor.zeros(allocator, T, &.{ shape_expr.SizeExpr.static(1), output_size }, shape_env);
+
             return Self{
                 .w = w,
                 .b = b,
@@ -141,6 +180,20 @@ pub fn Affine(comptime batch_size: SizeExpr, comptime input_size: SizeExpr, comp
 
             return dx;
         }
+
+        pub fn weightGradView(self: *const Self) !AffineWeightGradView(T) {
+            const w_view = self.w.view();
+            const dw_view = self.dw.?.view();
+            const b_view = self.b.view();
+            const db_view = self.db.?.view();
+
+            return .{
+                .w_view = w_view,
+                .dw_view = dw_view,
+                .b_view = b_view,
+                .db_view = db_view,
+            };
+        }
     };
 }
 
@@ -148,6 +201,7 @@ pub fn SoftmaxWithLoss(comptime shape: []const SizeExpr, comptime T: type) type 
     const Tensor = tensor.Tensor(shape, T);
 
     return struct {
+        tag: Layer = Layer.SoftmaxWithLoss,
         y: ?Tensor = null,
         t: ?Tensor = null,
 

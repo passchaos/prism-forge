@@ -9,6 +9,7 @@ const optim = @import("optim.zig");
 
 const SizeExpr = shape_expr.SizeExpr;
 const ShapeEnv = shape_expr.ShapeEnv;
+const Layer = layer.Layer;
 
 const DT = f64;
 fn Tensor2(comptime shape_expa_a: [2]SizeExpr) type {
@@ -156,31 +157,39 @@ pub fn gradientDescent(
 pub fn TwoLayerNet(
     comptime batch_size: SizeExpr,
     comptime input_size: SizeExpr,
-    comptime hidden_size: SizeExpr,
+    comptime hidden_sizes: []const SizeExpr,
     comptime output_size: SizeExpr,
 ) type {
     return struct {
         const TensorII = Tensor2([2]SizeExpr{ batch_size, input_size });
         const TensorTI = Tensor2([2]SizeExpr{ batch_size, output_size });
 
-        const Affine1I = layer.Affine(batch_size, input_size, hidden_size, DT);
-        const ReluI = layer.Relu(&.{ batch_size, hidden_size }, DT);
-        const Affine2I = layer.Affine(batch_size, hidden_size, output_size, DT);
-        const SoftmaxWithLossI = layer.SoftmaxWithLoss(&.{ batch_size, output_size }, DT);
-        const Grad = struct {
-            dw1: Tensor2([2]SizeExpr{ input_size, hidden_size }),
-            db1: Tensor2([2]SizeExpr{ SizeExpr.static(1), hidden_size }),
-            dw2: Tensor2([2]SizeExpr{ hidden_size, output_size }),
-            db2: Tensor2([2]SizeExpr{ SizeExpr.static(1), output_size }),
-        };
+        // const Affine1I = layer.Affine(batch_size, input_size, hidden_size, DT);
+        // const ReluI = layer.Relu(&.{ batch_size, hidden_size }, DT);
+        // const Affine2I = layer.Affine(batch_size, hidden_size, output_size, DT);
+        // const SoftmaxWithLossI = layer.SoftmaxWithLoss(&.{ batch_size, output_size }, DT);
+        // const Grad = struct {
+        //     dw1: Tensor2([2]SizeExpr{ input_size, hidden_size }),
+        //     db1: Tensor2([2]SizeExpr{ SizeExpr.static(1), hidden_size }),
+        //     dw2: Tensor2([2]SizeExpr{ hidden_size, output_size }),
+        //     db2: Tensor2([2]SizeExpr{ SizeExpr.static(1), output_size }),
+        // };
+
+        const OutputLayer = layer.Affine(batch_size, hidden_sizes[hidden_sizes.len - 1], output_size, DT);
+        const SoftmaxWithLossLayer = layer.SoftmaxWithLoss(&.{ batch_size, output_size }, DT);
 
         // params: std.StringHashMap(Tensor2),
         allocator: std.mem.Allocator,
 
-        affine1: Affine1I,
-        relu1: ReluI,
-        affine2: Affine2I,
-        last_layer: SoftmaxWithLossI,
+        hidden_affine_layers: []*anyopaque,
+        hidden_relu_layers: []*anyopaque,
+        output_layer: OutputLayer,
+        softmax_with_loss: SoftmaxWithLossLayer,
+
+        // affine1: Affine1I,
+        // relu1: ReluI,
+        // affine2: Affine2I,
+        // last_layer: SoftmaxWithLossI,
 
         const Self = @This();
 
@@ -191,165 +200,187 @@ pub fn TwoLayerNet(
             // }
             // self.params.deinit();
 
-            self.affine1.deinit();
-            self.relu1.deinit();
-            self.affine2.deinit();
-            self.last_layer.deinit();
+            // self.affine1.deinit();
+            // self.relu1.deinit();
+            // self.affine2.deinit();
+            self.softmax_with_loss.deinit();
         }
 
         fn init(
             allocator: std.mem.Allocator,
-            weight_init_std: DT,
+            weight_init_std: layer.AffineWeight(DT),
             shape_env: *const ShapeEnv,
         ) !Self {
-            // var params_i = std.StringHashMap(Tensor2).init(allocator);
+            const hidden_affine_layers = try allocator.alloc(*anyopaque, hidden_sizes.len);
+            const hidden_relu_layers = try allocator.alloc(*anyopaque, hidden_sizes.len);
 
-            var w1 = try tensor.randNorm(
-                allocator,
-                &.{ input_size, hidden_size },
-                shape_env,
-                0.0,
-                1.0,
-            );
-            w1.mulScalar_(weight_init_std);
+            comptime var tmp_size = input_size;
 
-            const b1 = try tensor.zeros(allocator, DT, &.{ SizeExpr.static(1), hidden_size }, shape_env);
+            inline for (hidden_sizes, 0..) |hidden_size, i| {
+                const Affine = layer.Affine(batch_size, tmp_size, hidden_size, DT);
+                const affine = try allocator.create(Affine);
 
-            var w2 = try tensor.randNorm(
-                allocator,
-                &.{ hidden_size, output_size },
-                shape_env,
-                0.0,
-                1.0,
-            );
-            w2.mulScalar_(weight_init_std);
+                affine.* = try Affine.init(allocator, shape_env, weight_init_std);
 
-            const b2 = try tensor.zeros(allocator, DT, &.{ SizeExpr.static(1), output_size }, shape_env);
+                const Relu = layer.Relu(&.{ batch_size, hidden_size }, DT);
+                const relu = try allocator.create(Relu);
+                relu.* = Relu.init();
 
-            // try params_i.put("W1", w1);
-            // try params_i.put("b1", b1);
-            // try params_i.put("W2", w2);
-            // try params_i.put("b2", b2);
+                hidden_affine_layers[hidden_sizes.len - 1 - i] = affine;
+                hidden_relu_layers[hidden_sizes.len - 1 - i] = relu;
 
-            // const w1_c = try w1.clone();
-            // const b1_c = try b1.clone();
-            // const w2_c = try w2.clone();
-            // const b2_c = try b2.clone();
+                tmp_size = hidden_size;
+            }
 
-            // log.print(@src(), "init w1 sum: {f}", .{try w1_c.sumAll()});
-
-            const affine1 = Affine1I.init(w1, b1);
-            const relu1 = ReluI.init();
-            const affine2 = Affine2I.init(w2, b2);
-            const last_layer = SoftmaxWithLossI.init();
+            const output_layer = try OutputLayer.init(allocator, shape_env, weight_init_std);
+            const softmax_with_loss = SoftmaxWithLossLayer.init();
 
             return Self{
-                // .params = params_i,
                 .allocator = allocator,
-                .affine1 = affine1,
-                .relu1 = relu1,
-                .affine2 = affine2,
-                .last_layer = last_layer,
+                .hidden_affine_layers = hidden_affine_layers,
+                .hidden_relu_layers = hidden_relu_layers,
+                .output_layer = output_layer,
+                .softmax_with_loss = softmax_with_loss,
             };
         }
 
         fn predict(self: *Self, x: *const TensorII) !TensorTI {
-            var x_1 = try self.affine1.forward(x);
-            defer x_1.deinit();
+            var tmp_val: *const anyopaque = x;
 
-            var x_2 = try self.relu1.forward(&x_1);
-            defer x_2.deinit();
+            comptime var tmp_size = input_size;
+            inline for (hidden_sizes, self.hidden_affine_layers, self.hidden_relu_layers) |hidden_size, affine, relu| {
+                const Affine = layer.Affine(batch_size, tmp_size, hidden_size, DT);
+                const Relu = layer.Relu(&.{ batch_size, hidden_size }, DT);
 
-            const x_3 = try self.affine2.forward(&x_2);
+                var affine_layer: *Affine = @ptrCast(@alignCast(affine));
+                var relu_layer: *Relu = @ptrCast(@alignCast(relu));
+                const input: *const tensor.Tensor(&.{ batch_size, tmp_size }, DT) = @ptrCast(@alignCast(tmp_val));
 
-            return x_3;
+                const affine_output = try affine_layer.forward(input);
+                const relu_output = try relu_layer.forward(&affine_output);
+
+                tmp_val = &relu_output;
+                tmp_size = hidden_size;
+            }
+
+            const hidden_output: *const tensor.Tensor(&.{ batch_size, tmp_size }, DT) = @ptrCast(@alignCast(tmp_val));
+
+            const final_output = try self.output_layer.forward(hidden_output);
+            return final_output;
         }
 
         fn loss(self: *Self, x: *const TensorII, t: *const TensorTI) !DT {
             const y = try self.predict(x);
             defer y.deinit();
 
-            const loss_t = try self.last_layer.forward(&y, t);
+            const loss_t = try self.softmax_with_loss.forward(&y, t);
 
             return loss_t;
         }
 
-        fn accuracy(self: *Self, x: *const TensorII, t: *const TensorTI) !DT {
-            const y = try self.predict(x);
-            defer y.deinit();
+        // fn accuracy(self: *Self, x: *const TensorII, t: *const TensorTI) !DT {
+        //     const y = try self.predict(x);
+        //     defer y.deinit();
 
-            const y1 = try y.argMax(1);
-            defer y1.deinit();
-            const t1 = try t.argMax(1);
-            defer t1.deinit();
+        //     const y1 = try y.argMax(1);
+        //     defer y1.deinit();
+        //     const t1 = try t.argMax(1);
+        //     defer t1.deinit();
 
-            const eql_t = try y1.eql(&t1);
-            defer eql_t.deinit();
+        //     const eql_t = try y1.eql(&t1);
+        //     defer eql_t.deinit();
 
-            log.print(@src(), "eql_t: {f}\n", .{eql_t});
-            var eql_sum = try eql_t.sumAll();
-            defer eql_sum.deinit();
+        //     log.print(@src(), "eql_t: {f}\n", .{eql_t});
+        //     var eql_sum = try eql_t.sumAll();
+        //     defer eql_sum.deinit();
 
-            var eql_sum_div = try eql_sum.divScalar(@as(DT, @floatFromInt(x.shape()[0])));
-            defer eql_sum_div.deinit();
+        //     var eql_sum_div = try eql_sum.divScalar(@as(DT, @floatFromInt(x.shape()[0])));
+        //     defer eql_sum_div.deinit();
 
-            return try eql_sum_div.dataItem();
+        //     return try eql_sum_div.dataItem();
+        // }
+
+        // fn numericalGradientM(self: *Self, x: *const TensorII, t: *const TensorTI) !Grad {
+        //     const w1 = try numericalGradient(self.allocator, self, LossArgument{
+        //         .x = x,
+        //         .t = t,
+        //     }, net_loss, &self.affine1.w);
+
+        //     const w2 = try numericalGradient(self.allocator, self, LossArgument{
+        //         .x = x,
+        //         .t = t,
+        //     }, net_loss, &self.affine2.w);
+
+        //     const b1 = try numericalGradient(self.allocator, self, LossArgument{
+        //         .x = x,
+        //         .t = t,
+        //     }, net_loss, &self.affine1.b);
+
+        //     const b2 = try numericalGradient(self.allocator, self, LossArgument{
+        //         .x = x,
+        //         .t = t,
+        //     }, net_loss, &self.affine2.b);
+
+        //     return Grad{
+        //         .dw1 = w1,
+        //         .db1 = b1,
+        //         .dw2 = w2,
+        //         .db2 = b2,
+        //     };
+        // }
+
+        fn weightGradView(self: *Self) ![]layer.AffineWeightGradView(DT) {
+            var count = hidden_sizes.len + 1;
+            var grad_list = try self.allocator.alloc(layer.AffineWeightGradView(T), count);
+
+            comptime var tmp_size = input_size;
+            for (self.hidden_affine_layers, hidden_sizes, 0..) |affine_layer, hidden_size, i| {
+                const Affine = layer.Affine(batch_size, tmp_size, hidden_size, DT);
+
+                var affine_layer: *Affine = @ptrCast(@alignCast(affine));
+
+                const wg_view = try affine_layer.weightGradView();
+                grad_list[i] = wg_view;
+            }
+
+            grad_list[count - 1] = try self.output_layer.weightGradView();
+
+            return grad_list;
         }
 
-        fn numericalGradientM(self: *Self, x: *const TensorII, t: *const TensorTI) !Grad {
-            const w1 = try numericalGradient(self.allocator, self, LossArgument{
-                .x = x,
-                .t = t,
-            }, net_loss, &self.affine1.w);
-
-            const w2 = try numericalGradient(self.allocator, self, LossArgument{
-                .x = x,
-                .t = t,
-            }, net_loss, &self.affine2.w);
-
-            const b1 = try numericalGradient(self.allocator, self, LossArgument{
-                .x = x,
-                .t = t,
-            }, net_loss, &self.affine1.b);
-
-            const b2 = try numericalGradient(self.allocator, self, LossArgument{
-                .x = x,
-                .t = t,
-            }, net_loss, &self.affine2.b);
-
-            return Grad{
-                .dw1 = w1,
-                .db1 = b1,
-                .dw2 = w2,
-                .db2 = b2,
-            };
-        }
-
-        fn gradient(self: *Self, x: *const TensorII, t: *const TensorTI) !Grad {
+        fn gradient(self: *Self, x: *const TensorII, t: *const TensorTI) ![]layer.AffineWeightGradView(DT) {
             _ = try self.loss(x, t);
 
-            const dout = try self.last_layer.backward();
+            const dout = try self.softmax_with_loss.backward();
             defer dout.deinit();
+
             // log.print(@src(), "dout layout: {f}\n", .{dout.layout});
 
-            var dout1 = try self.affine2.backward(&dout);
+            var dout1 = try self.output_layer.backward(&dout);
             defer dout1.deinit();
+
             // log.print(@src(), "dout1 layout: {f}\n", .{dout1.layout});
 
-            var dout2 = try self.relu1.backward(&dout1);
-            defer dout2.deinit();
-            // log.print(@src(), "dout2 layout: {f}\n", .{dout2.layout});
+            var tmp_grad: *const anyopaque = &dout1;
 
-            const dout3 = try self.affine1.backward(&dout2);
-            defer dout3.deinit();
-            // log.print(@src(), "dw1: {f} db1: {f}\n", .{ self.affine1.dw.?, self.affine1.db.? });
+            comptime var tmp_size = output_size;
+            inline for (0..hidden_sizes.len) |i| {
+                const Affine = layer.Affine(batch_size, hidden_sizes[hidden_sizes.len - i - 1], tmp_size, DT);
+                const Relu = layer.Relu(&.{ batch_size, tmp_size }, DT);
 
-            return Grad{
-                .dw1 = self.affine1.dw.?,
-                .db1 = self.affine1.db.?,
-                .dw2 = self.affine2.dw.?,
-                .db2 = self.affine2.db.?,
-            };
+                const grad: *const tensor.Tensor(&.{ batch_size, tmp_size }, DT) = @ptrCast(@alignCast(tmp_grad));
+
+                const relu: *Relu = @ptrCast(@alignCast(self.hidden_relu_layers[hidden_sizes.len - i - 1]));
+                const affine: *Affine = @ptrCast(@alignCast(self.hidden_affine_layers[hidden_sizes.len - i - 1]));
+                const grad1 = try relu.backward(grad);
+
+                const grad2 = try affine.backward(&grad1);
+
+                tmp_grad = &grad2;
+                tmp_size = hidden_sizes[hidden_sizes.len - i - 1];
+            }
+
+            return self.weightGradView();
         }
     };
 }
@@ -419,9 +450,9 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, batch_si
         var net = try TwoLayerNet(
             batch_size_expr,
             image_data_len_expr,
-            SizeExpr.static(50),
+            &.{SizeExpr.static(50)},
             num_classes_expr,
-        ).init(allocator, 0.01, &shape_env);
+        ).init(allocator, layer.AffineWeight(DT){ .Std = 0.01 }, &shape_env);
         defer net.deinit();
 
         for (0..iters_num) |idx| {
