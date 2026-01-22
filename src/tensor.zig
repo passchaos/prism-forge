@@ -2056,37 +2056,35 @@ pub fn fromArrayList(allocator: std.mem.Allocator, comptime T: type, arr_list: s
 }
 
 fn computeArangeCount(start: anytype, step: @TypeOf(start), end: @TypeOf(start)) usize {
-    const v = @divFloor(end - start + step - 1, step);
+    var count: usize = 0;
 
-    if (utils.isTypeFloat(@TypeOf(v))) {
-        return @as(usize, @intFromFloat(v));
-    } else {
-        return @intCast(v);
+    var tmp = start;
+    while (tmp < end) {
+        count += 1;
+        tmp += step;
     }
+
+    return count;
 }
 
 pub fn arange(
     allocator: std.mem.Allocator,
-    comptime end: anytype,
+    end: anytype,
+    comptime len_sym: shape_expr.SymbolHandle,
+    shape_env: *ShapeEnv,
     comptime args: struct {
         const T = utils.comptimeNumberTypeEraseComp(@TypeOf(end));
         start: T = @as(T, 0),
         step: T = @as(T, 1),
-        shape: ?[]const usize = null,
     },
 ) !Tensor(
-    &shape_expr.staticShapeExpr(if (args.shape) |s| s else &.{computeArangeCount(args.start, args.step, end)}),
+    &.{SizeExpr{ .Sym = len_sym }},
     utils.comptimeNumberTypeEraseComp(@TypeOf(end)),
 ) {
     const T = utils.comptimeNumberTypeEraseComp(@TypeOf(end));
 
-    const element_count = comptime computeArangeCount(args.start, args.step, end);
-
-    const shape = if (args.shape) |s| blk: {
-        const s_count = utils.product(s);
-        if (s_count != element_count) @compileError("shape does not match element count");
-        break :blk s;
-    } else &.{element_count};
+    const element_count = computeArangeCount(args.start, args.step, end);
+    try shape_env.bind(&len_sym, element_count);
 
     const storage = try storage_t.Storage(T)
         .arange(allocator, .{
@@ -2095,10 +2093,10 @@ pub fn arange(
         .end = end,
     });
 
-    const shape_expr_i = comptime shape_expr.staticShapeExpr(shape);
-    const layout = try layout_t.Layout(&shape_expr_i).init(&ShapeEnv.init(allocator));
+    const shape_expr_i = &.{SizeExpr{ .Sym = len_sym }};
+    const layout = try layout_t.Layout(shape_expr_i).init(shape_env);
 
-    return Tensor(&shape_expr_i, T).fromDataImpl(layout, storage, 0);
+    return Tensor(shape_expr_i, T).fromDataImpl(layout, storage, 0);
 }
 
 pub fn linspace(

@@ -154,7 +154,7 @@ pub fn gradientDescent(
     }
 }
 
-pub fn TwoLayerNet(
+pub fn MultiLayerNet(
     comptime batch_size: SizeExpr,
     comptime input_size: SizeExpr,
     comptime hidden_sizes: []const SizeExpr,
@@ -226,8 +226,8 @@ pub fn TwoLayerNet(
                 const relu = try allocator.create(Relu);
                 relu.* = Relu.init();
 
-                hidden_affine_layers[hidden_sizes.len - 1 - i] = affine;
-                hidden_relu_layers[hidden_sizes.len - 1 - i] = relu;
+                hidden_affine_layers[i] = affine;
+                hidden_relu_layers[i] = relu;
 
                 tmp_size = hidden_size;
             }
@@ -256,7 +256,10 @@ pub fn TwoLayerNet(
                 var relu_layer: *Relu = @ptrCast(@alignCast(relu));
                 const input: *const tensor.Tensor(&.{ batch_size, tmp_size }, DT) = @ptrCast(@alignCast(tmp_val));
 
+                // log.print(@src(), "begin affine predict: layout= {f} input= {f}\n", .{ affine_layer.w.layout, input.layout });
                 const affine_output = try affine_layer.forward(input);
+
+                // log.print(@src(), "begin relu predict\n", .{});
                 const relu_output = try relu_layer.forward(&affine_output);
 
                 tmp_val = &relu_output;
@@ -373,8 +376,10 @@ pub fn TwoLayerNet(
             var tmp_grad: *const anyopaque = &dout1;
 
             inline for (0..hidden_sizes.len) |i| {
-                const input_size_i = if (i == 0) input_size else hidden_sizes[hidden_sizes.len - i - 1];
-                const output_size_i = hidden_sizes[hidden_sizes.len - i - 1];
+                const reverse_idx = hidden_sizes.len - 1 - i;
+
+                const input_size_i = if (i == hidden_sizes.len - 1) input_size else hidden_sizes[reverse_idx - 1];
+                const output_size_i = hidden_sizes[reverse_idx];
 
                 const Affine = layer.Affine(batch_size, input_size_i, output_size_i, DT);
                 const Relu = layer.Relu(&.{ batch_size, output_size_i }, DT);
@@ -459,10 +464,10 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, batch_si
     for (&optimizers) |*optimizer| {
         defer optimizer.deinit();
 
-        var net = try TwoLayerNet(
+        var net = try MultiLayerNet(
             batch_size_expr,
             image_data_len_expr,
-            &.{SizeExpr.static(50)},
+            &.{ SizeExpr.static(50), SizeExpr.static(60), SizeExpr.static(70), SizeExpr.static(80), SizeExpr.static(90) },
             num_classes_expr,
         ).init(allocator, layer.AffineWeight(DT){ .Std = 0.01 }, &shape_env);
         defer net.deinit();
@@ -470,6 +475,13 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, batch_si
         for (0..iters_num) |idx| {
             try shape_env.bind(&batch_size_expr.Sym, batch_size);
 
+            // const batch_mask = try tensor.arange(
+            //     allocator,
+            //     batch_size,
+            //     shape_expr.makeSymbol(.{ .name = "len" }),
+            //     &shape_env,
+            //     .{},
+            // );
             const batch_mask = try tensor.rand(
                 allocator,
                 &.{batch_size_expr},
@@ -493,7 +505,13 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, batch_si
             // need to resuse shape env, or else will get different batch value
             try shape_env.bind(&batch_size_expr.Sym, check_count);
 
-            const loss_idx = try tensor.arange(allocator, @as(usize, check_count), .{});
+            const loss_idx = try tensor.arange(
+                allocator,
+                @as(usize, check_count),
+                shape_expr.makeSymbol(.{ .name = "len" }),
+                &shape_env,
+                .{},
+            );
             defer loss_idx.deinit();
 
             const idx_loss = loss_idx.dataSliceRaw();
@@ -581,7 +599,7 @@ test "two_layer_net" {
     var shape_env = ShapeEnv.init(allocator);
     defer shape_env.deinit();
 
-    var two_layer_net = try TwoLayerNet(
+    var two_layer_net = try MultiLayerNet(
         SizeExpr.static(3),
         SizeExpr.static(784),
         SizeExpr.static(100),

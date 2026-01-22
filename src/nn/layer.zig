@@ -131,6 +131,8 @@ pub fn Affine(comptime batch_size: SizeExpr, comptime input_size: SizeExpr, comp
 
             const b = try tensor.zeros(allocator, T, &.{ shape_expr.SizeExpr.static(1), output_size }, shape_env);
 
+            // log.print(@src(), "init affine layout: w= {f} b= {f}\n", .{ w.layout, b.layout });
+
             return Self{
                 .w = w,
                 .b = b,
@@ -159,7 +161,10 @@ pub fn Affine(comptime batch_size: SizeExpr, comptime input_size: SizeExpr, comp
             const w_t = self.w.transpose();
             defer w_t.deinit();
 
-            // std.debug.print("dout: {f} w_t: {f}\n", .{ dout, w_t });
+            // log.print(@src(), "dout: dout: {f} dout_s: {any} size: {}\n", .{ dout.layout, @TypeOf(dout.*).S, dout.size() });
+            // log.print(@src(), "dout: w_t: {f} w_t_s: {any} size: {}\n", .{ w_t.layout, @TypeOf(w_t).S, w_t.size() });
+
+            // log.print(@src(), "dout: w: {f} w_s: {any} size: {}\n", .{ self.w.layout, @TypeOf(self.w).S, self.w.size() });
             const dx = try dout.matmul(&w_t);
             // std.debug.print("dx: {f}\n", .{dx});
             // std.debug.print("backward: self_x layout= {f}\n", .{self.x.?.layout});
