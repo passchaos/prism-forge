@@ -22,14 +22,12 @@ pub fn TensorView(comptime T: type) type {
         is_contiguous: bool,
         allocator: std.mem.Allocator,
         is_owned: bool,
-        // shape: []const usize,
-        // stride: []const usize,
+        shape: []const usize,
+        stride: []const usize,
         data: []T,
 
         pub fn deinit(self: *Self) void {
             if (self.is_owned) {
-                // self.allocator.free(self.shape);
-                // self.allocator.free(self.stride);
                 self.allocator.free(self.data);
             }
         }
@@ -41,12 +39,6 @@ pub fn TensorView(comptime T: type) type {
         }
 
         pub fn clone(self: *const Self) !Self {
-            // const new_shape = try self.allocator.alloc(usize, self.shape.len);
-            // @memcpy(new_shape, self.shape);
-
-            // const new_stride = try self.allocator.alloc(usize, self.stride.len);
-            // @memcpy(new_stride, self.stride);
-
             const new_data = try self.allocator.alloc(T, self.data.len);
             @memcpy(new_data, self.data);
 
@@ -55,8 +47,8 @@ pub fn TensorView(comptime T: type) type {
                 .is_contiguous = self.is_contiguous,
                 .allocator = self.allocator,
                 .is_owned = true,
-                // .shape = new_shape,
-                // .stride = new_stride,
+                .shape = self.shape,
+                .stride = self.shape,
                 .data = new_data,
             };
         }
@@ -1492,20 +1484,13 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
         }
 
         pub fn view(self: *const Self) TensorView(T) {
-            // std.debug.print("layout: {f} data_len: {}\n", .{ self.layout, self.size() });
-            // const new_shape = try self.s_allocator().alloc(usize, self.shape().len);
-            // @memcpy(new_shape, &self.shape());
-
-            // const new_stride = try self.s_allocator().alloc(usize, self.shape().len);
-            // @memcpy(new_stride, &self.stride());
-
             return TensorView(T){
                 .owner = self,
                 .is_contiguous = self.isContiguous(),
                 .is_owned = false,
                 .allocator = self.s_allocator(),
-                // .shape = new_shape,
-                // .stride = new_stride,
+                .shape = self.shapeRef(),
+                .stride = self.strideRef(),
                 .data = self.dataSliceRaw(),
             };
         }
@@ -1742,8 +1727,16 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
             return self.layout.shape();
         }
 
+        pub fn shapeRef(self: *const Self) []const usize {
+            return &self.layout.shape();
+        }
+
         pub fn stride(self: *const Self) [N]usize {
             return self.layout.stride();
+        }
+
+        pub fn strideRef(self: *const Self) []const usize {
+            return &self.layout.stride();
         }
 
         pub fn s_allocator(self: *const Self) std.mem.Allocator {

@@ -155,12 +155,20 @@ pub fn Layout(comptime shape_spec: []const DimExpr) type {
             return self._shape;
         }
 
+        pub fn shapeRef(self: *const Self) []const usize {
+            return &self._shape;
+        }
+
         pub fn shape_env(self: *const Self) *const ShapeEnv {
             return self._shape_env;
         }
 
         pub fn stride(self: *const Self) [N]usize {
             return self._stride;
+        }
+
+        pub fn strideRef(self: *const Self) []const usize {
+            return &self._stride;
         }
 
         pub fn isContiguous(self: *const Self) bool {
