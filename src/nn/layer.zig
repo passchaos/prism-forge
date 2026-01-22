@@ -185,25 +185,6 @@ pub fn Affine(comptime batch_size: SizeExpr, comptime input_size: SizeExpr, comp
 
             return dx;
         }
-
-        pub fn weightGradView(self: *const Self) !AffineWeightGradView(T) {
-            const w_view = self.w.view();
-            const dw_view = self.dw.?.view();
-            const b_view = self.b.view();
-            const db_view = self.db.?.view();
-
-            // std.debug.print(
-            //     "shape: w= {f} dw= {f} b= {f} db= {f}\n",
-            //     .{ self.w.layout, self.dw.?.layout, self.b.layout, self.db.?.layout },
-            // );
-
-            return .{
-                .w_view = w_view,
-                .dw_view = dw_view,
-                .b_view = b_view,
-                .db_view = db_view,
-            };
-        }
     };
 }
 

@@ -341,21 +341,18 @@ pub fn TwoLayerNet(
 
                 var affine_layer: *Affine = @ptrCast(@alignCast(affine));
 
-                const wg_view = try affine_layer.weightGradView();
-
-                weights[i * 2] = wg_view.w_view;
-                weights[i * 2 + 1] = wg_view.b_view;
-                grads[i * 2] = wg_view.dw_view;
-                grads[i * 2 + 1] = wg_view.db_view;
+                weights[i * 2] = affine_layer.w.view();
+                weights[i * 2 + 1] = affine_layer.b.view();
+                grads[i * 2] = affine_layer.dw.?.view();
+                grads[i * 2 + 1] = affine_layer.db.?.view();
 
                 tmp_size = hidden_size;
             }
 
-            const last_affine_wg_view = try self.output_layer.weightGradView();
-            weights[(count - 1) * 2] = last_affine_wg_view.w_view;
-            weights[(count - 1) * 2 + 1] = last_affine_wg_view.b_view;
-            grads[(count - 1) * 2] = last_affine_wg_view.dw_view;
-            grads[(count - 1) * 2 + 1] = last_affine_wg_view.db_view;
+            weights[(count - 1) * 2] = self.output_layer.w.view();
+            weights[(count - 1) * 2 + 1] = self.output_layer.b.view();
+            grads[(count - 1) * 2] = self.output_layer.dw.?.view();
+            grads[(count - 1) * 2 + 1] = self.output_layer.db.?.view();
 
             return .{ weights, grads };
         }
