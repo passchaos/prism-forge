@@ -98,6 +98,7 @@ pub fn Layout(comptime shape_spec: []const DimExpr) type {
             ),
         ) {
             const new_shape_expr = comptime computePermutedShapeExpr(SE, &perm);
+            // std.debug.print("layout permute: old= {any} new= {any}\n", .{ SE, new_shape_expr });
 
             var new_strides = self._stride;
 

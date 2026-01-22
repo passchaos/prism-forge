@@ -155,16 +155,19 @@ pub fn Affine(comptime batch_size: SizeExpr, comptime input_size: SizeExpr, comp
         }
 
         pub fn backward(self: *Self, dout: *const TensorG) !Tensor {
+            // std.debug.print("backward: dout layout= {f}\n", .{dout.layout});
             const w_t = self.w.transpose();
             defer w_t.deinit();
 
             // std.debug.print("dout: {f} w_t: {f}\n", .{ dout, w_t });
             const dx = try dout.matmul(&w_t);
             // std.debug.print("dx: {f}\n", .{dx});
+            // std.debug.print("backward: self_x layout= {f}\n", .{self.x.?.layout});
 
             const x_t = self.x.?.transpose();
             defer x_t.deinit();
 
+            // std.debug.print("x_t= {f} dout= {f}\n", .{ x_t.layout, dout.layout });
             const n_dw = try x_t.matmul(dout);
             const n_db = try dout.sum(0);
 
@@ -178,6 +181,8 @@ pub fn Affine(comptime batch_size: SizeExpr, comptime input_size: SizeExpr, comp
             self.dw = n_dw;
             self.db = n_db;
 
+            // std.debug.print("backward: dw layout= {f}\n", .{n_dw.layout});
+
             return dx;
         }
 
@@ -186,6 +191,11 @@ pub fn Affine(comptime batch_size: SizeExpr, comptime input_size: SizeExpr, comp
             const dw_view = self.dw.?.view();
             const b_view = self.b.view();
             const db_view = self.db.?.view();
+
+            // std.debug.print(
+            //     "shape: w= {f} dw= {f} b= {f} db= {f}\n",
+            //     .{ self.w.layout, self.dw.?.layout, self.b.layout, self.db.?.layout },
+            // );
 
             return .{
                 .w_view = w_view,

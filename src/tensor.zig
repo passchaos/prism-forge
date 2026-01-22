@@ -18,17 +18,18 @@ const parseSpec = shape_expr.parseSpec;
 
 pub fn TensorView(comptime T: type) type {
     return struct {
+        owner: *const anyopaque,
         is_contiguous: bool,
         allocator: std.mem.Allocator,
         is_owned: bool,
-        shape: []const usize,
-        stride: []const usize,
+        // shape: []const usize,
+        // stride: []const usize,
         data: []T,
 
         pub fn deinit(self: *Self) void {
             if (self.is_owned) {
-                self.allocator.free(self.shape);
-                self.allocator.free(self.stride);
+                // self.allocator.free(self.shape);
+                // self.allocator.free(self.stride);
                 self.allocator.free(self.data);
             }
         }
@@ -40,27 +41,29 @@ pub fn TensorView(comptime T: type) type {
         }
 
         pub fn clone(self: *const Self) !Self {
-            const new_shape = try self.allocator.alloc(usize, self.shape.len);
-            @memcpy(new_shape, self.shape);
+            // const new_shape = try self.allocator.alloc(usize, self.shape.len);
+            // @memcpy(new_shape, self.shape);
 
-            const new_stride = try self.allocator.alloc(usize, self.stride.len);
-            @memcpy(new_stride, self.stride);
+            // const new_stride = try self.allocator.alloc(usize, self.stride.len);
+            // @memcpy(new_stride, self.stride);
 
             const new_data = try self.allocator.alloc(T, self.data.len);
             @memcpy(new_data, self.data);
 
             return Self{
+                .owner = self.owner,
                 .is_contiguous = self.is_contiguous,
                 .allocator = self.allocator,
                 .is_owned = true,
-                .shape = new_shape,
-                .stride = new_stride,
+                // .shape = new_shape,
+                // .stride = new_stride,
                 .data = new_data,
             };
         }
 
         fn checkElementwiseCondition(self: *const Self, other: *const Self) !void {
             if (self.data.len != other.data.len) {
+                std.debug.print("self data len: {} other data len: {}\n", .{ self.data.len, other.data.len });
                 return error.ShapeMismatch;
             }
 
@@ -1489,12 +1492,20 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
         }
 
         pub fn view(self: *const Self) TensorView(T) {
+            // std.debug.print("layout: {f} data_len: {}\n", .{ self.layout, self.size() });
+            // const new_shape = try self.s_allocator().alloc(usize, self.shape().len);
+            // @memcpy(new_shape, &self.shape());
+
+            // const new_stride = try self.s_allocator().alloc(usize, self.shape().len);
+            // @memcpy(new_stride, &self.stride());
+
             return TensorView(T){
+                .owner = self,
                 .is_contiguous = self.isContiguous(),
                 .is_owned = false,
                 .allocator = self.s_allocator(),
-                .shape = &self.shape(),
-                .stride = &self.stride(),
+                // .shape = new_shape,
+                // .stride = new_stride,
                 .data = self.dataSliceRaw(),
             };
         }
@@ -1661,6 +1672,8 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
 
         pub fn permute(self: *const Self, comptime perm: [N]usize) Tensor(&layout_t.computePermutedShapeExpr(SA, &perm), T) {
             const new_layout = self.layout.permute(perm);
+
+            // std.debug.print("permute: old= {f} new= {f}\n", .{ self.layout, new_layout });
             const new_storage = self.storage.shared();
 
             return Tensor(&layout_t.computePermutedShapeExpr(SA, &perm), T){

@@ -329,26 +329,38 @@ pub fn TwoLayerNet(
         //     };
         // }
 
-        fn weightGradView(self: *Self) ![]layer.AffineWeightGradView(DT) {
-            var count = hidden_sizes.len + 1;
-            var grad_list = try self.allocator.alloc(layer.AffineWeightGradView(T), count);
+        fn weightGradView(self: *Self) !struct { []tensor.TensorView(DT), []tensor.TensorView(DT) } {
+            const count = hidden_sizes.len + 1;
+
+            var weights = try self.allocator.alloc(tensor.TensorView(DT), count * 2);
+            var grads = try self.allocator.alloc(tensor.TensorView(DT), count * 2);
 
             comptime var tmp_size = input_size;
-            for (self.hidden_affine_layers, hidden_sizes, 0..) |affine_layer, hidden_size, i| {
+            inline for (self.hidden_affine_layers, hidden_sizes, 0..) |affine, hidden_size, i| {
                 const Affine = layer.Affine(batch_size, tmp_size, hidden_size, DT);
 
                 var affine_layer: *Affine = @ptrCast(@alignCast(affine));
 
                 const wg_view = try affine_layer.weightGradView();
-                grad_list[i] = wg_view;
+
+                weights[i * 2] = wg_view.w_view;
+                weights[i * 2 + 1] = wg_view.b_view;
+                grads[i * 2] = wg_view.dw_view;
+                grads[i * 2 + 1] = wg_view.db_view;
+
+                tmp_size = hidden_size;
             }
 
-            grad_list[count - 1] = try self.output_layer.weightGradView();
+            const last_affine_wg_view = try self.output_layer.weightGradView();
+            weights[(count - 1) * 2] = last_affine_wg_view.w_view;
+            weights[(count - 1) * 2 + 1] = last_affine_wg_view.b_view;
+            grads[(count - 1) * 2] = last_affine_wg_view.dw_view;
+            grads[(count - 1) * 2 + 1] = last_affine_wg_view.db_view;
 
-            return grad_list;
+            return .{ weights, grads };
         }
 
-        fn gradient(self: *Self, x: *const TensorII, t: *const TensorTI) ![]layer.AffineWeightGradView(DT) {
+        fn gradient(self: *Self, x: *const TensorII, t: *const TensorTI) !struct { []tensor.TensorView(DT), []tensor.TensorView(DT) } {
             _ = try self.loss(x, t);
 
             const dout = try self.softmax_with_loss.backward();
@@ -363,12 +375,14 @@ pub fn TwoLayerNet(
 
             var tmp_grad: *const anyopaque = &dout1;
 
-            comptime var tmp_size = output_size;
             inline for (0..hidden_sizes.len) |i| {
-                const Affine = layer.Affine(batch_size, hidden_sizes[hidden_sizes.len - i - 1], tmp_size, DT);
-                const Relu = layer.Relu(&.{ batch_size, tmp_size }, DT);
+                const input_size_i = if (i == 0) input_size else hidden_sizes[hidden_sizes.len - i - 1];
+                const output_size_i = hidden_sizes[hidden_sizes.len - i - 1];
 
-                const grad: *const tensor.Tensor(&.{ batch_size, tmp_size }, DT) = @ptrCast(@alignCast(tmp_grad));
+                const Affine = layer.Affine(batch_size, input_size_i, output_size_i, DT);
+                const Relu = layer.Relu(&.{ batch_size, output_size_i }, DT);
+
+                const grad: *const tensor.Tensor(&.{ batch_size, output_size_i }, DT) = @ptrCast(@alignCast(tmp_grad));
 
                 const relu: *Relu = @ptrCast(@alignCast(self.hidden_relu_layers[hidden_sizes.len - i - 1]));
                 const affine: *Affine = @ptrCast(@alignCast(self.hidden_affine_layers[hidden_sizes.len - i - 1]));
@@ -376,8 +390,9 @@ pub fn TwoLayerNet(
 
                 const grad2 = try affine.backward(&grad1);
 
+                // std.debug.print("grad2 layout: {f}\n", .{grad2.layout});
+
                 tmp_grad = &grad2;
-                tmp_size = hidden_sizes[hidden_sizes.len - i - 1];
             }
 
             return self.weightGradView();
@@ -475,23 +490,7 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, batch_si
             defer t_batch.deinit();
 
             const grads1 = try net.gradient(&x_batch, &t_batch);
-
-            {
-                var params = [4]tensor.TensorView(DT){
-                    net.affine1.w.view(),
-                    net.affine1.b.view(),
-                    net.affine2.w.view(),
-                    net.affine2.b.view(),
-                };
-                const grads = [4]tensor.TensorView(DT){
-                    grads1.dw1.view(),
-                    grads1.db1.view(),
-                    grads1.dw2.view(),
-                    grads1.db2.view(),
-                };
-
-                try optimizer.update(&params, &grads);
-            }
+            try optimizer.update(grads1.@"0", grads1.@"1");
 
             const check_count = 1000;
             // need to resuse shape env, or else will get different batch value

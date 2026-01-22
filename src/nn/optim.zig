@@ -74,7 +74,7 @@ pub fn Momentum(comptime T: type) type {
 
         pub fn deinit(self: *Self) void {
             if (self.velocity) |vel| {
-                for (vel) |v| {
+                for (vel) |*v| {
                     v.deinit();
                 }
 
@@ -120,7 +120,7 @@ pub fn AdaGrad(comptime T: type) type {
 
         pub fn deinit(self: *Self) void {
             if (self.h) |hr| {
-                for (hr) |h| {
+                for (hr) |*h| {
                     h.deinit();
                 }
 
@@ -187,14 +187,14 @@ pub fn Adam(comptime T: type) type {
 
         pub fn deinit(self: *Self) void {
             if (self.m) |m| {
-                for (m) |mv| {
+                for (m) |*mv| {
                     mv.deinit();
                 }
 
                 self.allocator.free(m);
             }
             if (self.v) |v| {
-                for (v) |vv| {
+                for (v) |*vv| {
                     vv.deinit();
                 }
 
