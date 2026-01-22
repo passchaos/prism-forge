@@ -164,32 +164,19 @@ pub fn MultiLayerNet(
         const TensorII = Tensor2([2]SizeExpr{ batch_size, input_size });
         const TensorTI = Tensor2([2]SizeExpr{ batch_size, output_size });
 
-        // const Affine1I = layer.Affine(batch_size, input_size, hidden_size, DT);
-        // const ReluI = layer.Relu(&.{ batch_size, hidden_size }, DT);
-        // const Affine2I = layer.Affine(batch_size, hidden_size, output_size, DT);
-        // const SoftmaxWithLossI = layer.SoftmaxWithLoss(&.{ batch_size, output_size }, DT);
-        // const Grad = struct {
-        //     dw1: Tensor2([2]SizeExpr{ input_size, hidden_size }),
-        //     db1: Tensor2([2]SizeExpr{ SizeExpr.static(1), hidden_size }),
-        //     dw2: Tensor2([2]SizeExpr{ hidden_size, output_size }),
-        //     db2: Tensor2([2]SizeExpr{ SizeExpr.static(1), output_size }),
-        // };
-
         const OutputLayer = layer.Affine(batch_size, hidden_sizes[hidden_sizes.len - 1], output_size, DT);
         const SoftmaxWithLossLayer = layer.SoftmaxWithLoss(&.{ batch_size, output_size }, DT);
 
-        // params: std.StringHashMap(Tensor2),
         allocator: std.mem.Allocator,
 
         hidden_affine_layers: []*anyopaque,
         hidden_relu_layers: []*anyopaque,
+
+        use_dropout: bool,
+        hidden_dropout_layers: []*anyopaque,
+
         output_layer: OutputLayer,
         softmax_with_loss: SoftmaxWithLossLayer,
-
-        // affine1: Affine1I,
-        // relu1: ReluI,
-        // affine2: Affine2I,
-        // last_layer: SoftmaxWithLossI,
 
         const Self = @This();
 
@@ -210,9 +197,11 @@ pub fn MultiLayerNet(
             allocator: std.mem.Allocator,
             weight_init_std: layer.AffineWeight(DT),
             shape_env: *const ShapeEnv,
+            dropout_ratio: ?f32,
         ) !Self {
             const hidden_affine_layers = try allocator.alloc(*anyopaque, hidden_sizes.len);
             const hidden_relu_layers = try allocator.alloc(*anyopaque, hidden_sizes.len);
+            const hidden_dropout_layers = try allocator.alloc(*anyopaque, hidden_sizes.len);
 
             comptime var tmp_size = input_size;
 
@@ -225,6 +214,13 @@ pub fn MultiLayerNet(
                 const Relu = layer.Relu(&.{ batch_size, hidden_size }, DT);
                 const relu = try allocator.create(Relu);
                 relu.* = Relu.init();
+
+                if (dropout_ratio) |ratio| {
+                    const Dropout = layer.Dropout(&.{ batch_size, hidden_size }, DT);
+                    const dropout = try allocator.create(Dropout);
+                    dropout.* = Dropout.init(ratio);
+                    hidden_dropout_layers[i] = dropout;
+                }
 
                 hidden_affine_layers[i] = affine;
                 hidden_relu_layers[i] = relu;
@@ -239,6 +235,8 @@ pub fn MultiLayerNet(
                 .allocator = allocator,
                 .hidden_affine_layers = hidden_affine_layers,
                 .hidden_relu_layers = hidden_relu_layers,
+                .use_dropout = if (dropout_ratio) |_| true else false,
+                .hidden_dropout_layers = hidden_dropout_layers,
                 .output_layer = output_layer,
                 .softmax_with_loss = softmax_with_loss,
             };
@@ -248,12 +246,14 @@ pub fn MultiLayerNet(
             var tmp_val: *const anyopaque = x;
 
             comptime var tmp_size = input_size;
-            inline for (hidden_sizes, self.hidden_affine_layers, self.hidden_relu_layers) |hidden_size, affine, relu| {
+            inline for (hidden_sizes, self.hidden_affine_layers, self.hidden_relu_layers, self.hidden_dropout_layers) |hidden_size, affine, relu, dropout| {
                 const Affine = layer.Affine(batch_size, tmp_size, hidden_size, DT);
                 const Relu = layer.Relu(&.{ batch_size, hidden_size }, DT);
+                const Dropout = layer.Dropout(&.{ batch_size, hidden_size }, DT);
 
                 var affine_layer: *Affine = @ptrCast(@alignCast(affine));
                 var relu_layer: *Relu = @ptrCast(@alignCast(relu));
+
                 const input: *const tensor.Tensor(&.{ batch_size, tmp_size }, DT) = @ptrCast(@alignCast(tmp_val));
 
                 // log.print(@src(), "begin affine predict: layout= {f} input= {f}\n", .{ affine_layer.w.layout, input.layout });
@@ -262,7 +262,14 @@ pub fn MultiLayerNet(
                 // log.print(@src(), "begin relu predict\n", .{});
                 const relu_output = try relu_layer.forward(&affine_output);
 
-                tmp_val = &relu_output;
+                if (self.use_dropout) {
+                    var dropout_layer: *Dropout = @ptrCast(@alignCast(dropout));
+                    const dropout_output = try dropout_layer.forward(&relu_output);
+                    tmp_val = &dropout_output;
+                } else {
+                    tmp_val = &relu_output;
+                }
+
                 tmp_size = hidden_size;
             }
 
@@ -383,18 +390,27 @@ pub fn MultiLayerNet(
 
                 const Affine = layer.Affine(batch_size, input_size_i, output_size_i, DT);
                 const Relu = layer.Relu(&.{ batch_size, output_size_i }, DT);
+                const Dropout = layer.Dropout(&.{ batch_size, output_size_i }, DT);
 
                 const grad: *const tensor.Tensor(&.{ batch_size, output_size_i }, DT) = @ptrCast(@alignCast(tmp_grad));
 
-                const relu: *Relu = @ptrCast(@alignCast(self.hidden_relu_layers[hidden_sizes.len - i - 1]));
-                const affine: *Affine = @ptrCast(@alignCast(self.hidden_affine_layers[hidden_sizes.len - i - 1]));
-                const grad1 = try relu.backward(grad);
+                const relu: *Relu = @ptrCast(@alignCast(self.hidden_relu_layers[reverse_idx]));
+                const affine: *Affine = @ptrCast(@alignCast(self.hidden_affine_layers[reverse_idx]));
 
-                const grad2 = try affine.backward(&grad1);
+                if (self.use_dropout) {
+                    const dropout: *Dropout = @ptrCast(@alignCast(self.hidden_dropout_layers[reverse_idx]));
 
-                // std.debug.print("grad2 layout: {f}\n", .{grad2.layout});
+                    const grad1 = try dropout.backward(grad);
+                    const grad2 = try relu.backward(&grad1);
+                    const grad3 = try affine.backward(&grad2);
 
-                tmp_grad = &grad2;
+                    tmp_grad = &grad3;
+                } else {
+                    const grad1 = try relu.backward(grad);
+                    const grad2 = try affine.backward(&grad1);
+
+                    tmp_grad = &grad2;
+                }
             }
 
             return self.weightGradView();
@@ -459,73 +475,74 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, batch_si
     const ada_grad = optimizer_t{ .ADAGRAD = optim.AdaGrad(DT).init(learning_rate, allocator) };
     const adam = optimizer_t{ .ADAM = optim.Adam(DT).init(learning_rate / 10.0, 0.9, 0.999, allocator) };
 
-    var optimizers = [_]optimizer_t{ adam, ada_grad, momentum, sgd };
+    _ = [_]optimizer_t{ adam, ada_grad, momentum, sgd };
 
-    for (&optimizers) |*optimizer| {
-        defer optimizer.deinit();
+    var optimizers = [_]optimizer_t{adam};
+    const use_dropout = [4]?f32{ null, 0.1, 0.2, 0.5 };
 
-        var net = try MultiLayerNet(
-            batch_size_expr,
-            image_data_len_expr,
-            &.{ SizeExpr.static(50), SizeExpr.static(60), SizeExpr.static(70), SizeExpr.static(80), SizeExpr.static(90) },
-            num_classes_expr,
-        ).init(allocator, layer.AffineWeight(DT){ .Std = 0.01 }, &shape_env);
-        defer net.deinit();
+    for (use_dropout) |dropout_ratio| {
+        for (&optimizers) |*optimizer| {
+            defer optimizer.reset();
 
-        for (0..iters_num) |idx| {
-            try shape_env.bind(&batch_size_expr.Sym, batch_size);
+            var net = try MultiLayerNet(
+                batch_size_expr,
+                image_data_len_expr,
+                &.{ SizeExpr.static(50), SizeExpr.static(60), SizeExpr.static(70), SizeExpr.static(80), SizeExpr.static(90) },
+                num_classes_expr,
+            ).init(allocator, layer.AffineWeight(DT){ .Std = 0.01 }, &shape_env, dropout_ratio);
+            defer net.deinit();
 
-            // const batch_mask = try tensor.arange(
-            //     allocator,
-            //     batch_size,
-            //     shape_expr.makeSymbol(.{ .name = "len" }),
-            //     &shape_env,
-            //     .{},
-            // );
-            const batch_mask = try tensor.rand(
-                allocator,
-                &.{batch_size_expr},
-                &shape_env,
-                @as(usize, 0),
-                train_size,
-            );
-            defer batch_mask.deinit();
+            for (0..iters_num) |idx| {
+                try shape_env.bind(&batch_size_expr.Sym, batch_size);
 
-            const batch_indices = batch_mask.dataSliceRaw();
+                // const batch_mask = try tensor.arange(
+                //     allocator,
+                //     batch_size,
+                //     shape_expr.makeSymbol(.{ .name = "len" }),
+                //     &shape_env,
+                //     .{},
+                // );
+                const batch_mask = try tensor.rand(
+                    allocator,
+                    &.{batch_size_expr},
+                    &shape_env,
+                    @as(usize, 0),
+                    train_size,
+                );
+                defer batch_mask.deinit();
 
-            const x_batch = try train_images.indexSelect(0, batch_size_expr, batch_indices);
-            defer x_batch.deinit();
-            const t_batch = try train_labels.indexSelect(0, batch_size_expr, batch_indices);
-            defer t_batch.deinit();
+                const batch_indices = batch_mask.dataSliceRaw();
 
-            const grads1 = try net.gradient(&x_batch, &t_batch);
-            try optimizer.update(grads1.@"0", grads1.@"1");
+                const x_batch = try train_images.indexSelect(0, batch_size_expr, batch_indices);
+                defer x_batch.deinit();
+                const t_batch = try train_labels.indexSelect(0, batch_size_expr, batch_indices);
+                defer t_batch.deinit();
 
-            const check_count = 1000;
-            // need to resuse shape env, or else will get different batch value
-            try shape_env.bind(&batch_size_expr.Sym, check_count);
+                const grads1 = try net.gradient(&x_batch, &t_batch);
+                try optimizer.update(grads1.@"0", grads1.@"1");
 
-            const loss_idx = try tensor.arange(
-                allocator,
-                @as(usize, check_count),
-                shape_expr.makeSymbol(.{ .name = "len" }),
-                &shape_env,
-                .{},
-            );
-            defer loss_idx.deinit();
+                const loss_idx = try tensor.arange(
+                    allocator,
+                    @as(usize, batch_size),
+                    shape_expr.makeSymbol(.{ .name = "len" }),
+                    &shape_env,
+                    .{},
+                );
+                defer loss_idx.deinit();
 
-            const idx_loss = loss_idx.dataSliceRaw();
+                const idx_loss = loss_idx.dataSliceRaw();
 
-            const loss_x = try test_images.indexSelect(0, batch_size_expr, idx_loss);
-            defer loss_x.deinit();
-            const loss_t = try test_labels.indexSelect(0, batch_size_expr, idx_loss);
-            defer loss_t.deinit();
-            const loss = try net.loss(&loss_x, &loss_t);
+                const loss_x = try test_images.indexSelect(0, batch_size_expr, idx_loss);
+                defer loss_x.deinit();
+                const loss_t = try test_labels.indexSelect(0, batch_size_expr, idx_loss);
+                defer loss_t.deinit();
+                const loss = try net.loss(&loss_x, &loss_t);
 
-            const tag = @tagName(optimizer.*);
+                const tag_str = try std.fmt.allocPrint(allocator, "dropout: {any} optimizer: {s}", .{ dropout_ratio, @tagName(optimizer.*) });
 
-            try plot.appendData(tag, &.{@as(f64, @floatFromInt(idx))}, &.{loss});
-            log.print(@src(), "{s}: idx= {} loss= {}\n", .{ tag, idx, loss });
+                try plot.appendData(tag_str, &.{@as(f64, @floatFromInt(idx))}, &.{loss});
+                log.print(@src(), "{s}: idx= {} loss= {}\n", .{ tag_str, idx, loss });
+            }
         }
     }
 }

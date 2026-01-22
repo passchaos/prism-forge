@@ -15,6 +15,15 @@ pub fn Optimizer(comptime T: type) type {
 
         const Self = @This();
 
+        pub fn reset(self: *Self) void {
+            switch (self.*) {
+                .MOMENTUM => |*momentum| momentum.reset(),
+                .ADAGRAD => |*adagrad| adagrad.reset(),
+                .ADAM => |*adam| adam.reset(),
+                else => {},
+            }
+        }
+
         pub fn deinit(self: *Self) void {
             switch (self.*) {
                 .MOMENTUM => |*momentum| momentum.deinit(),
@@ -72,6 +81,12 @@ pub fn Momentum(comptime T: type) type {
         velocity: ?[]tensor.TensorView(T) = null,
         allocator: std.mem.Allocator,
 
+        pub fn reset(self: *Self) void {
+            self.deinit();
+
+            self.velocity = null;
+        }
+
         pub fn deinit(self: *Self) void {
             if (self.velocity) |vel| {
                 for (vel) |*v| {
@@ -117,6 +132,12 @@ pub fn AdaGrad(comptime T: type) type {
         allocator: std.mem.Allocator,
 
         const Self = @This();
+
+        pub fn reset(self: *Self) void {
+            self.deinit();
+
+            self.h = null;
+        }
 
         pub fn deinit(self: *Self) void {
             if (self.h) |hr| {
@@ -184,6 +205,14 @@ pub fn Adam(comptime T: type) type {
         v: ?[]tensor.TensorView(T) = null,
 
         const Self = @This();
+
+        pub fn reset(self: *Self) void {
+            self.deinit();
+
+            self.iter = 0;
+            self.m = null;
+            self.v = null;
+        }
 
         pub fn deinit(self: *Self) void {
             if (self.m) |m| {

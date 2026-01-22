@@ -193,6 +193,51 @@ pub fn Affine(comptime batch_size: SizeExpr, comptime input_size: SizeExpr, comp
     };
 }
 
+pub fn Dropout(comptime shape_expr_a: []const SizeExpr, comptime T: type) type {
+    const Tensor = tensor.Tensor(shape_expr_a, T);
+
+    return struct {
+        const Self = @This();
+
+        dropout_ratio: f32,
+        mask: ?tensor.Tensor(shape_expr_a, T),
+
+        pub fn init(dropout_ratio: f32) Self {
+            return Self{
+                .dropout_ratio = dropout_ratio,
+                .mask = null,
+            };
+        }
+
+        pub fn forward(self: *Self, x: *const Tensor) !Tensor {
+            if (self.mask == null) {
+                var mask = try tensor.rand(
+                    x.s_allocator(),
+                    shape_expr_a,
+                    x.layout.shape_env(),
+                    @as(T, 0.0),
+                    1.0,
+                );
+
+                const func = struct {
+                    fn call(input: T, ctx: f32) T {
+                        return if (input < ctx) @as(T, 0.0) else @as(T, 1.0);
+                    }
+                }.call;
+                mask.map_(self.dropout_ratio, func);
+
+                self.mask = mask;
+            }
+
+            return x.mul(&self.mask.?);
+        }
+
+        pub fn backward(self: *Self, dout: *const Tensor) !Tensor {
+            return try dout.mul(&self.mask.?);
+        }
+    };
+}
+
 pub fn SoftmaxWithLoss(comptime shape: []const SizeExpr, comptime T: type) type {
     const Tensor = tensor.Tensor(shape, T);
 

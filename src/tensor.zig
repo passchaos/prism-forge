@@ -955,19 +955,8 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
             return self.binaryOp_(value, BasicOpFuncs.mul);
         }
 
-        pub fn mul(self: *const Self, value: anytype) !Self {
-            const TV = @TypeOf(value);
-            switch (TV) {
-                @This() => {
-                    return try self.binaryOp(@as(@This(), value), T, BasicOpFuncs.mul);
-                },
-                T => {
-                    const vv = @as(T, value);
-
-                    return try self.map(vv, T, BasicOpFuncs.mul);
-                },
-                else => @compileError("unsupported mul argument type" ++ " self: " ++ @typeName(@This()) ++ " input: " ++ @typeName(TV)),
-            }
+        pub fn mul(self: *const Self, value: *const Self) !Self {
+            return try self.binaryOp(value, T, BasicOpFuncs.mul);
         }
 
         pub fn divScalar_(self: *Self, value: T) void {
