@@ -87,6 +87,10 @@ pub fn build(b: *std.Build) void {
     const zeit_dep = b.dependency("zeit", .{ .target = target, .optimize = optimize });
     const zeit_mod = zeit_dep.module("zeit");
     exe_mod.addImport("zeit", zeit_mod);
+
+    const zdt_dep = b.dependency("zdt", .{ .target = target, .optimize = optimize });
+    const zdt_mod = zdt_dep.module("zdt");
+    exe_mod.addImport("zdt", zdt_mod);
     // mod.addImport("zeit", zeit_mod);
 
     // Here we define an executable. An executable needs to have a root module

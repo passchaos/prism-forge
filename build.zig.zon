@@ -40,6 +40,10 @@
             .url = "git+https://github.com/rockorager/zeit?ref=main#7ac64d72dbfb1a4ad549102e7d4e232a687d32d8",
             .hash = "zeit-0.6.0-5I6bk36tAgATpSl9wjFmRPMqYN2Mn0JQHgIcRNcqDpJA",
         },
+        .zdt = .{
+            .url = "https://codeberg.org/FObersteiner/zdt/archive/v0.8.2-zig_0.15.tar.gz",
+            .hash = "zdt-0.8.2-xr0_vAxbDwCls8V4MLlamv4JHrDkziMYnySAc2bL2n3t",
+        },
     },
     .paths = .{
         "build.zig",
