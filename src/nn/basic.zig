@@ -426,9 +426,9 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, batch_si
 
     const batch_size_expr = comptime SizeExpr.sym(.{ .name = "batch_size" });
 
-    var shape_env = ShapeEnv.init(allocator);
-    try shape_env.bind(&batch_size_expr.Sym, batch_size);
-    try shape_env.bind(&num_classes_expr.Sym, 10);
+    var shape_env = try ShapeEnv.init(allocator);
+    try shape_env.bindGlobal(&batch_size_expr.Sym, batch_size);
+    try shape_env.bindGlobal(&num_classes_expr.Sym, 10);
 
     const datas = try mnist.loadDatas(
         DT,
@@ -484,16 +484,21 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, batch_si
         for (&optimizers) |*optimizer| {
             defer optimizer.reset();
 
+            try shape_env.pushScope();
+            defer shape_env.popScope();
+
             var net = try MultiLayerNet(
                 batch_size_expr,
                 image_data_len_expr,
                 &.{ SizeExpr.static(50), SizeExpr.static(60), SizeExpr.static(70), SizeExpr.static(80), SizeExpr.static(90) },
                 num_classes_expr,
-            ).init(allocator, layer.AffineWeight(DT){ .Std = 0.01 }, &shape_env, dropout_ratio);
+            ).init(allocator, .He, &shape_env, dropout_ratio);
             defer net.deinit();
 
             for (0..iters_num) |idx| {
-                try shape_env.bind(&batch_size_expr.Sym, batch_size);
+                try shape_env.pushScope();
+                defer shape_env.popScope();
+                // try shape_env.bind(&batch_size_expr.Sym, batch_size);
 
                 // const batch_mask = try tensor.arange(
                 //     allocator,
@@ -539,6 +544,10 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, batch_si
                 const loss = try net.loss(&loss_x, &loss_t);
 
                 const tag_str = try std.fmt.allocPrint(allocator, "dropout: {any} optimizer: {s}", .{ dropout_ratio, @tagName(optimizer.*) });
+
+                // if (idx % 10 == 0) {
+                //     std.debug.print("shape env: {f}\n", .{shape_env});
+                // }
 
                 try plot.appendData(tag_str, &.{@as(f64, @floatFromInt(idx))}, &.{loss});
                 log.print(@src(), "{s}: idx= {} loss= {}\n", .{ tag_str, idx, loss });

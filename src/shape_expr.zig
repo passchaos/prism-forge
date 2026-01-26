@@ -158,19 +158,26 @@ const SymbolHandleHashMap = std.HashMap(
     80,
 );
 
+const SymbolHandleHashSet = std.HashMap(
+    *const SymbolHandle,
+    void,
+    SymbolHandleHash,
+    80,
+);
+
 pub const ShapeEnv = struct {
     const Self = @This();
 
+    allocator: std.mem.Allocator,
     sym_map: SymbolHandleHashMap,
-    fingerprint: u64 = 0,
-    rwlock: std.Thread.RwLock = std.Thread.RwLock{},
+    globals: SymbolHandleHashSet,
+    scopes: std.ArrayList(SymbolHandleHashSet),
 
     pub fn format(
         self: @This(),
         writer: *std.Io.Writer,
     ) std.Io.Writer.Error!void {
         try writer.print("ShapeEnv {{\n", .{});
-        try writer.print("  fingerprint: {},\n", .{self.fingerprint});
 
         try writer.print("  syms: {{,\n", .{});
         {
@@ -183,45 +190,107 @@ pub const ShapeEnv = struct {
             }
         }
         try writer.print("  }}\n", .{});
+        try writer.print("  globals: {{,\n", .{});
+        {
+            var global_iter = self.globals.iterator();
+            try writer.print("   ", .{});
+            while (global_iter.next()) |entry| {
+                try writer.print(" \"{s}\"", .{
+                    entry.key_ptr.*.name,
+                });
+            }
+        }
+        try writer.print("\n  }}\n", .{});
+
+        try writer.print("  scopes: {{\n", .{});
+        {
+            for (self.scopes.items, 0..) |scope, i| {
+                var scope_iter = scope.iterator();
+
+                try writer.print("    {}:", .{i});
+                while (scope_iter.next()) |entry| {
+                    try writer.print(" \"{s}\"", .{
+                        entry.key_ptr.*.name,
+                    });
+                }
+                try writer.print("\n", .{});
+            }
+        }
+        try writer.print("  }}\n", .{});
 
         try writer.print("}}\n", .{});
     }
 
-    pub fn init(allocator: std.mem.Allocator) Self {
+    pub fn init(allocator: std.mem.Allocator) !Self {
         return .{
+            .allocator = allocator,
             .sym_map = SymbolHandleHashMap.init(allocator),
+            .globals = SymbolHandleHashSet.init(allocator),
+            .scopes = try std.ArrayList(SymbolHandleHashSet).initCapacity(allocator, 10),
         };
+    }
+
+    pub fn reset(self: *Self) void {
+        self.sym_map.clearAndFree();
+        self.globals.clearAndFree();
+        for (self.scopes) |scope| {
+            scope.clearAndFree();
+        }
+        self.scopes.clearAndFree(self.allocator);
     }
 
     pub fn deinit(self: *Self) void {
+        self.reset();
         self.sym_map.deinit();
     }
 
-    pub fn clone(self: *const Self) !Self {
-        return .{
-            .sym_map = try self.sym_map.clone(),
-        };
+    pub fn pushScope(self: *Self) !void {
+        try self.scopes.append(self.allocator, SymbolHandleHashSet.init(self.allocator));
+    }
+
+    pub fn popScope(self: *Self) void {
+        if (self.scopes.items.len == 0) @panic("no scope found");
+        if (self.scopes.pop()) |scope| {
+            var iter = scope.keyIterator();
+            while (iter.next()) |k| {
+                _ = self.sym_map.remove(k.*);
+            }
+
+            {
+                var ss = scope;
+                ss.clearAndFree();
+            }
+        }
+    }
+
+    fn bindInner(self: *Self, sym: *const SymbolHandle, value: usize) !void {
+        if (self.sym_map.get(sym)) |v| {
+            if (v != value) return error.CannotRebindSymbolOtherValue;
+        } else {
+            try self.sym_map.put(sym, value);
+        }
+    }
+
+    pub fn bindGlobal(self: *Self, sym: *const SymbolHandle, value: usize) !void {
+        // std.debug.print("bind global: sym= {f} value= {}\n", .{ sym, value });
+
+        try self.bindInner(sym, value);
+        try self.globals.put(sym, void{});
     }
 
     pub fn bind(self: *Self, sym: *const SymbolHandle, value: usize) !void {
-        self.rwlock.lock();
-        defer self.rwlock.unlock();
+        // std.debug.print("bind scope: sym= {f} value= {}\n", .{ sym, value });
 
-        if (self.sym_map.get(sym)) |v| {
-            if (v == value) {
-                return;
-            }
+        try self.bindInner(sym, value);
 
-            // std.debug.print("update sym map value: name= {s} old= {} new= {}\n", .{ sym.name, v, value });
+        const scope_len = self.scopes.items.len;
+        if (scope_len == 0) {
+            try self.pushScope();
         }
 
-        // std.debug.print(
-        //     "bind sym: name= {s} id= {} value= {}\n",
-        //     .{ sym.name, sym.id, value },
-        // );
-
-        try self.sym_map.put(sym, value);
-        self.fingerprint += 1;
+        if (scope_len > 0) {
+            try self.scopes.items[scope_len - 1].put(sym, void{});
+        }
     }
 
     pub fn lookup(self: *const Self, sym: *const SymbolHandle) !usize {
