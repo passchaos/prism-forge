@@ -34,6 +34,41 @@ pub const str = struct {
 };
 
 pub const stt = struct {
+    pub fn makeStruct(comptime field_names: []const [:0]const u8, comptime TS: []const type) type {
+        var fields: []const std.builtin.Type.StructField = &.{};
+        comptime {
+            var tmp: [field_names.len]std.builtin.Type.StructField = undefined;
+            for (field_names, TS, 0..) |name, T, i| {
+                tmp[i] = .{
+                    .name = name,
+                    .type = T,
+                    .default_value_ptr = null,
+                    .is_comptime = false,
+                    .alignment = @alignOf(T),
+                };
+            }
+            fields = tmp[0..];
+        }
+
+        return @Type(.{
+            .@"struct" = .{
+                .layout = .auto,
+                .fields = fields,
+                .decls = &.{},
+                .is_tuple = false,
+            },
+        });
+    }
+
+    pub fn structSignature(comptime T: type) []const u8 {
+        comptime var signature: []const u8 = "";
+        const fields = @typeInfo(T).@"struct".fields;
+        inline for (fields) |field| {
+            signature = signature ++ field.name ++ ": " ++ @typeName(field.type) ++ ", ";
+        }
+        return signature;
+    }
+
     pub fn getFieldsLenComptime(comptime T: type) usize {
         return @typeInfo(T).@"struct".fields.len;
     }

@@ -1,5 +1,6 @@
 const std = @import("std");
 const shape_expr = @import("shape_expr.zig");
+const utils = @import("utils.zig");
 
 const SizeExpr = shape_expr.SizeExpr;
 
@@ -72,5 +73,18 @@ test "field_parent" {
                 std.debug.print("Affine Layer: {}\n", .{parent});
             },
         }
+    }
+}
+
+test "type_diff" {
+    // const allocator = std.testing.allocator;
+
+    inline for (0..5) |i| {
+        // const buf = try std.fmt.allocPrint(allocator, "ddd: {}", .{i});
+        const buf = std.fmt.comptimePrint("ddd_{}", .{i});
+        const v = utils.stt.makeStruct(&.{ "name", buf }, &.{ []const u8, i32 });
+        // const v = .{ .name = buf };
+
+        std.debug.print("tname: {s} signature: {s} tuid: {}\n", .{ @typeName(v), utils.stt.structSignature(v), shape_expr.typeUniqueId(v) });
     }
 }
