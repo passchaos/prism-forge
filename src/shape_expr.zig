@@ -71,7 +71,7 @@ pub const BinaryOpExpr = struct {
     const Self = @This();
 
     pub fn equal(self: Self, other: Self) bool {
-        return self.tag == other.tag and self.lhs.equal(other.lhs) and self.rhs.equal(other.rhs);
+        return self.tag == other.tag and self.lhs.equal(other.lhs.*) and self.rhs.equal(other.rhs.*);
     }
 
     pub fn format(self: @This(), writer: *std.Io.Writer) !void {
@@ -98,7 +98,7 @@ pub const SizeExpr = union(enum) {
         switch (self) {
             .Static => |v| try writer.print("{d}", .{v}),
             .Sym => |s| try writer.print("\"{s}\"", .{s.name}),
-            .BinaryOpExpr => |op| try writer.print("Binary{{{f}}}", .{op}),
+            .BinaryOpExpr => |op| try writer.print("{f}", .{op}),
         }
     }
 
@@ -135,9 +135,9 @@ pub const SizeExpr = union(enum) {
         return Self{ .Sym = makeSymbol(sym_v) };
     }
 
-    pub fn add(comptime lhs: *const Self, comptime rhs: *const Self) Self {
-        switch (lhs.*) {
-            .Static => |a_v| switch (rhs.*) {
+    pub fn add(comptime lhs: Self, comptime rhs: Self) Self {
+        switch (lhs) {
+            .Static => |a_v| switch (rhs) {
                 .Static => |b_v| return SizeExpr.static(a_v + b_v),
                 else => {},
             },
@@ -146,8 +146,8 @@ pub const SizeExpr = union(enum) {
 
         const boe = BinaryOpExpr{
             .tag = .Add,
-            .lhs = lhs,
-            .rhs = rhs,
+            .lhs = &lhs,
+            .rhs = &rhs,
         };
         return Self{ .BinaryOpExpr = boe };
     }

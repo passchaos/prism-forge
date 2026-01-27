@@ -307,15 +307,14 @@ pub fn Convolution(
     comptime stride: SizeExpr,
     comptime T: type,
 ) type {
-    const OH = H.add(&pads[2].add(&pads[3])).sub(&FH).div(&stride).add(&SizeExpr.static(1));
-    const OW = W.add(&pads[0].add(&pads[1])).sub(&FW).div(&stride).add(&SizeExpr.static(1));
-
-    const WT = tensor.Tensor(&.{ FN, C, FH, FW }, T);
-    const BT = tensor.Tensor(&.{ FN, SizeExpr.static(1), SizeExpr.static(1) }, T);
-    const IT = tensor.Tensor(&.{ N, C, H, W }, T);
-    const OT = tensor.Tensor(&.{ N, FN, OH, OW }, T);
-
     return struct {
+        const OH = H.add(pads[2].add(pads[3])).sub(&FH).div(&stride).add(SizeExpr.static(1));
+        const OW = W.add(pads[0].add(pads[1])).sub(&FW).div(&stride).add(SizeExpr.static(1));
+
+        const WT = tensor.Tensor(&.{ FN, C, FH, FW }, T);
+        const BT = tensor.Tensor(&.{ FN, SizeExpr.static(1), SizeExpr.static(1) }, T);
+        const IT = tensor.Tensor(&.{ N, C, H, W }, T);
+        const OT = tensor.Tensor(&.{ N, FN, OH, OW }, T);
         const Self = @This();
 
         allocator: std.mem.Allocator,
@@ -430,8 +429,13 @@ test "Convolution" {
         const FH = comptime SizeExpr.static(3);
         const FW = comptime SizeExpr.static(3);
 
-        const PAD = comptime SizeExpr.static(1);
+        const PAD = comptime SizeExpr.sym(.{ .name = "pad" });
         const STRIDE = comptime SizeExpr.static(1);
+
+        std.debug.print(
+            "N= {f} C= {f} H= {f} W= {f} FN= {f} FH= {f} FW= {f}\n",
+            .{ N, C, H, W, FN, FH, FW },
+        );
 
         const Conv = Convolution(
             N,
@@ -445,12 +449,14 @@ test "Convolution" {
             STRIDE,
             f32,
         );
+        std.debug.print("OH= {f} OW= {f}\n", .{ Conv.OH, Conv.OW });
 
         var shape_env = try shape_expr.ShapeEnv.init(allocator);
         defer shape_env.deinit();
 
         try shape_env.bind(&N.Sym, 1);
         try shape_env.bind(&FN.Sym, 1);
+        try shape_env.bind(&PAD.Sym, 1);
 
         var w = try tensor.fromArray(allocator, [4][4]f32{
             [4]f32{ 1.0, 2.0, 3.0, 0.0 },
