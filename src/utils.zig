@@ -534,9 +534,9 @@ pub fn typeSignature(comptime T: type) []const u8 {
                 if (field.default_value_ptr) |dv| {
                     const val = @as(*const field.type, @ptrCast(@alignCast(dv)));
                     if (comptime str.isString(field.type)) {
-                        signature = signature ++ std.fmt.comptimePrint("= {s}", .{val.*});
+                        signature = signature ++ std.fmt.comptimePrint(" = {s}", .{val.*});
                     } else if (comptime isNumber(field.type)) {
-                        signature = signature ++ std.fmt.comptimePrint("= {d}", .{val.*});
+                        signature = signature ++ std.fmt.comptimePrint(" = {d}", .{val.*});
                     }
                 }
 

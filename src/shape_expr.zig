@@ -1,14 +1,6 @@
 const std = @import("std");
 const utils = @import("utils.zig");
 
-pub fn typeUniqueId(comptime base_str: []const u8, comptime T: type) u64 {
-    const signature = switch (@typeInfo(T)) {
-        .@"struct" => comptime utils.stt.structSignature(T),
-        else => @typeName(T),
-    };
-    return std.hash.Wyhash.hash(0, base_str ++ signature);
-}
-
 pub const SymId = u64;
 
 pub const SymbolHandle = struct {
