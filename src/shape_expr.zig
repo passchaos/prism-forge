@@ -120,6 +120,7 @@ pub const SizeExpr = union(enum) {
                 .Sym => |b_s| a_s.id == b_s.id and std.mem.eql(u8, a_s.name, b_s.name),
                 else => |_| false,
             },
+            // else => false,
             .BinaryOpExpr => |boe| switch (b) {
                 .BinaryOpExpr => |boe2| boe.equal(boe2),
                 else => |_| false,
@@ -127,7 +128,7 @@ pub const SizeExpr = union(enum) {
         };
     }
 
-    pub fn static(comptime v: usize) Self {
+    pub fn static(v: usize) Self {
         return Self{ .Static = v };
     }
 
@@ -205,7 +206,14 @@ pub const SizeExpr = union(enum) {
                 },
                 else => {},
             },
-            else => {},
+            else => |a_v| switch (rhs.*) {
+                .Static => |b_v| {
+                    if (b_v == 1) {
+                        return a_v;
+                    }
+                },
+                else => {},
+            },
         }
         const boe = BinaryOpExpr{
             .tag = .Div,
@@ -484,16 +492,40 @@ pub const ShapeEnv = struct {
 
 pub fn product(dim_exprs: []const SizeExpr) SizeExpr {
     var result = SizeExpr.static(1);
+
+    // only compute static
     for (dim_exprs) |dim| {
-        result = switch (result) {
-            .Static => |rs| switch (dim) {
-                .Static => |ds| SizeExpr.static(rs * ds),
-                else => SizeExpr.mul(&result, &dim),
+        switch (dim) {
+            .Static => |ds| switch (result) {
+                .Static => |rs| result = SizeExpr.static(rs * ds),
+                else => {},
             },
-            else => SizeExpr.mul(&result, &dim),
-        };
+            else => {},
+        }
     }
+
+    for (dim_exprs) |dim| {
+        switch (dim) {
+            .Static => {},
+            else => |ds| result = SizeExpr.mul(&result, &ds),
+        }
+    }
+
     return result;
+}
+
+test "product" {
+    const s1 = comptime SizeExpr.static(2);
+    const s2 = comptime SizeExpr.static(3);
+    const s11 = comptime SizeExpr.sym(.{ .name = "dd" });
+
+    // const ss1 = product(&.{ s1, s2, s11 });
+    const ss2 = comptime product(&.{ s11, s1, s2 });
+
+    // @setEvalBranchQuota(30000);
+    @compileLog(ss2);
+    // @compileLog(std.fmt.comptimePrint("ss2: {f}\n", .{ss2}));
+    // std.debug.print("ss1: {f} ss2: {f}\n", .{ ss2, ss2 });
 }
 
 pub fn insertDimComptime(

@@ -497,30 +497,8 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
             }
         }
 
-        fn computePaddedShape(comptime pads: []const SizeExpr) [N]SizeExpr {
-            if (pads.len % 2 != 0) @compileError("pads must be even");
-
-            comptime {
-                var new_shape = utils.array.comptimeSliceToArray(SizeExpr, S);
-                const pad_len = pads.len / 2;
-
-                for (0..pad_len) |i| {
-                    const orig_value = new_shape[N - 1 - i];
-                    const pad1 = pads[2 * i];
-                    const pad2 = pads[2 * i + 1];
-
-                    var result = orig_value.add(pad1);
-                    result = result.add(pad2);
-
-                    new_shape[N - 1 - i] = result;
-                }
-
-                return new_shape;
-            }
-        }
-
-        pub fn pad(self: *const Self, comptime pads: []const SizeExpr, value: T) !Tensor(&computePaddedShape(pads), T) {
-            const new_shape = comptime computePaddedShape(pads);
+        pub fn pad(self: *const Self, comptime pads: []const SizeExpr, value: T) !Tensor(&utils.tensor.computePaddedShape(S, pads), T) {
+            const new_shape = comptime utils.tensor.computePaddedShape(S, pads);
 
             var result = try full(self.s_allocator(), &new_shape, self.layout.shape_env(), value);
 

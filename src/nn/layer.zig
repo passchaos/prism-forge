@@ -2,6 +2,7 @@ const std = @import("std");
 const tensor = @import("../tensor.zig");
 const log = @import("../log.zig");
 const shape_expr = @import("../shape_expr.zig");
+const utils = @import("../utils.zig");
 
 const SizeExpr = shape_expr.SizeExpr;
 
@@ -311,10 +312,15 @@ pub fn Convolution(
         const OH = H.add(pads[2].add(pads[3])).sub(&FH).div(&stride).add(SizeExpr.static(1));
         const OW = W.add(pads[0].add(pads[1])).sub(&FW).div(&stride).add(SizeExpr.static(1));
 
+        const IM2COL_M = N.mul(&OH).mul(&OW);
+        const IM2COL_K = FH.mul(&FW).mul(&C);
+
         const WT = tensor.Tensor(&.{ FN, C, FH, FW }, T);
         const BT = tensor.Tensor(&.{ FN, SizeExpr.static(1), SizeExpr.static(1) }, T);
         const IT = tensor.Tensor(&.{ N, C, H, W }, T);
         const OT = tensor.Tensor(&.{ N, FN, OH, OW }, T);
+        const PaddedT = tensor.Tensor(&utils.tensor.computePaddedShape(&.{ N, C, H, W }, &pads), T);
+
         const Self = @This();
 
         allocator: std.mem.Allocator,
@@ -327,6 +333,49 @@ pub fn Convolution(
             self.b.deinit();
         }
 
+        fn im2col(
+            self: *const Self,
+            padded_data: *const PaddedT,
+            shape_env: *const shape_expr.ShapeEnv,
+        ) !tensor.Tensor(&.{ IM2COL_M, IM2COL_K }, T) {
+            const shape = padded_data.shape();
+
+            const n_v = shape[0];
+            const c_v = shape[1];
+
+            const oh_v = try OH.eval(shape_env);
+            const ow_v = try OW.eval(shape_env);
+
+            const filter_shape = self.w.shape();
+            const fh_v = filter_shape[2];
+            const fw_v = filter_shape[3];
+
+            var result = try tensor.zeros(self.allocator, T, &.{ IM2COL_M, IM2COL_K }, shape_env);
+            for (0..n_v) |n_i| {
+                for (0..c_v) |c_i| {
+                    for (0..oh_v) |oh_i| {
+                        for (0..ow_v) |ow_i| {
+                            const r_idx = n_i * oh_v * ow_v + oh_i * ow_v + ow_i;
+
+                            for (0..fh_v) |fh_i| {
+                                for (0..fw_v) |fw_i| {
+                                    const data_idx = [4]usize{ n_i, c_i, oh_i + fh_i, ow_i + fw_i };
+
+                                    const d_v = try padded_data.getData(data_idx);
+
+                                    const c_idx = c_i * fh_v * fw_v + fh_i * fw_v + fw_i;
+
+                                    try result.setData([2]usize{ r_idx, c_idx }, d_v);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            return result;
+        }
+
         fn filterImpl(
             self: *const Self,
             data: *const tensor.Tensor(&.{ N, C, H, W }, T),
@@ -334,6 +383,19 @@ pub fn Convolution(
         ) !tensor.Tensor(&.{ N, FN, OH, OW }, T) {
             const padded_data = try data.pad(&pads, @as(T, 0.0));
             defer padded_data.deinit();
+
+            const cols = try self.im2col(&padded_data, shape_env);
+            defer cols.deinit();
+            std.debug.print("cols: {f}\n", .{cols});
+
+            const filters = self.w.reshape(&.{ FN, IM2COL_K });
+            defer filters.deinit();
+            // const filters_w = filters.transpose();
+            // defer filters_w.deinit();
+
+            // const res1 = try cols.matmul(filters_w);
+            // defer res1.deinit();
+            // std.debug.print("res: {f}\n", .{res1});
 
             const n_v = try N.eval(shape_env);
             const fn_v = try FN.eval(shape_env);
@@ -425,11 +487,14 @@ test "Convolution" {
         const H = comptime SizeExpr.static(4);
         const W = comptime SizeExpr.static(4);
 
+        std.debug.print("N: {f}\n", .{N});
+
         const FN = comptime SizeExpr.sym(.{ .name = "filter_num" });
         const FH = comptime SizeExpr.static(3);
         const FW = comptime SizeExpr.static(3);
 
-        const PAD = comptime SizeExpr.sym(.{ .name = "pad" });
+        // const PAD = comptime SizeExpr.sym(.{ .name = "pad" });
+        const PAD = comptime SizeExpr.static(1);
         const STRIDE = comptime SizeExpr.static(1);
 
         std.debug.print(
@@ -456,7 +521,7 @@ test "Convolution" {
 
         try shape_env.bind(&N.Sym, 1);
         try shape_env.bind(&FN.Sym, 1);
-        try shape_env.bind(&PAD.Sym, 1);
+        // try shape_env.bind(&PAD.Sym, 1);
 
         var w = try tensor.fromArray(allocator, [4][4]f32{
             [4]f32{ 1.0, 2.0, 3.0, 0.0 },

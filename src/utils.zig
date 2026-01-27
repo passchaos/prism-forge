@@ -3,7 +3,7 @@ const log = @import("log.zig");
 const storage = @import("storage.zig");
 
 const shape_expr = @import("shape_expr.zig");
-const DimExpr = shape_expr.SizeExpr;
+const SizeExpr = shape_expr.SizeExpr;
 const ShapeEnv = shape_expr.ShapeEnv;
 // const product = shape_expr.product;
 
@@ -84,7 +84,7 @@ pub const array = struct {
         }
     }
 
-    pub fn getArrayShapeComp(comptime T: type) [getArrayNDimComp(T)]DimExpr {
+    pub fn getArrayShapeComp(comptime T: type) [getArrayNDimComp(T)]SizeExpr {
         switch (@typeInfo(T)) {
             .array => return dimsHelper(T),
             else => @compileError("Unsupported type" ++ @typeName(T)),
@@ -98,7 +98,7 @@ pub const array = struct {
         }
     }
 
-    pub fn getArrayElementCountComp(comptime T: type) DimExpr {
+    pub fn getArrayElementCountComp(comptime T: type) SizeExpr {
         const shape = getArrayShapeComp(T);
         return shape_expr.product(&shape);
     }
@@ -122,13 +122,13 @@ pub const array = struct {
         };
     }
 
-    fn dimsHelper(comptime T: type) [getArrayNDimComp(T)]DimExpr {
+    fn dimsHelper(comptime T: type) [getArrayNDimComp(T)]SizeExpr {
         switch (@typeInfo(T)) {
             .array => |arr| {
                 const child_dims = comptime dimsHelper(arr.child);
-                return [_]DimExpr{DimExpr.static(arr.len)} ++ child_dims;
+                return [_]SizeExpr{SizeExpr.static(arr.len)} ++ child_dims;
             },
-            else => return [_]DimExpr{},
+            else => return [_]SizeExpr{},
         }
     }
 
@@ -273,6 +273,28 @@ pub const array = struct {
 };
 
 pub const tensor = struct {
+    pub fn computePaddedShape(comptime S: []const SizeExpr, comptime pads: []const SizeExpr) [S.len]SizeExpr {
+        if (pads.len % 2 != 0) @compileError("pads must be even");
+
+        comptime {
+            var new_shape = array.comptimeSliceToArray(SizeExpr, S);
+            const pad_len = pads.len / 2;
+
+            for (0..pad_len) |i| {
+                const orig_value = new_shape[S.len - 1 - i];
+                const pad1 = pads[2 * i];
+                const pad2 = pads[2 * i + 1];
+
+                var result = orig_value.add(pad1);
+                result = result.add(pad2);
+
+                new_shape[S.len - 1 - i] = result;
+            }
+
+            return new_shape;
+        }
+    }
+
     pub fn computeTensorsElementType(comptime tensors_type: type) type {
         switch (@typeInfo(tensors_type)) {
             .@"struct" => |si| {

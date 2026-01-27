@@ -112,10 +112,24 @@ pub fn Layout(comptime shape_spec: []const DimExpr) type {
         }
 
         pub fn reshape(self: *const Self, comptime new_shape_expr: []const DimExpr) Layout(new_shape_expr) {
-            const self_size = comptime if (N == 0) 1 else product(SE);
-            const new_size = comptime product(new_shape_expr);
+            // const self_size = comptime if (N == 0) 1 else product(SE);
+            // comptime {
+            //     @setEvalBranchQuota(100000);
+            // const new_size = comptime product(new_shape_expr);
+            //     @compileLog(std.fmt.comptimePrint("new_size= {f}\n", .{new_size}));
+            // }
+            // for (SE) |dim| {
+            //     std.debug.print("dim: s= {f}\n", .{dim});
+            // }
+            // for (new_shape_expr) |dim_n| {
+            //     std.debug.print("dim: n= {f}\n", .{dim_n});
+            // }
 
-            if (comptime self_size.equal(new_size)) @compileError("Invalid shape");
+            // const ss_v = self_size.eval(self.shape_env()) catch unreachable;
+            // const ns_v = new_size.eval(self.shape_env()) catch unreachable;
+            // std.debug.print("ss_v: {} ns_v: {}\n", .{ ss_v, ns_v });
+
+            // if (comptime !self_size.equal(new_size)) @compileError("Invalid target shape");
 
             return Layout(new_shape_expr).init(self._shape_env) catch unreachable;
         }
