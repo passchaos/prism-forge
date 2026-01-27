@@ -175,9 +175,10 @@ pub const SizeExpr = union(enum) {
         return Self{ .BinaryOpExpr = boe };
     }
 
-    pub fn mul(comptime lhs: *const Self, comptime rhs: *const Self) Self {
-        switch (lhs.*) {
-            .Static => |a_v| switch (rhs.*) {
+    // use comptime pointer may cause unexpected comptime behavior
+    pub fn mul(comptime lhs: Self, comptime rhs: Self) Self {
+        switch (lhs) {
+            .Static => |a_v| switch (rhs) {
                 .Static => |b_v| {
                     return SizeExpr.static(a_v * b_v);
                 },
@@ -188,8 +189,8 @@ pub const SizeExpr = union(enum) {
 
         const boe = BinaryOpExpr{
             .tag = .Mul,
-            .lhs = lhs,
-            .rhs = rhs,
+            .lhs = &lhs,
+            .rhs = &rhs,
         };
         return Self{ .BinaryOpExpr = boe };
     }
@@ -507,7 +508,7 @@ pub fn product(dim_exprs: []const SizeExpr) SizeExpr {
     for (dim_exprs) |dim| {
         switch (dim) {
             .Static => {},
-            else => |ds| result = SizeExpr.mul(&result, &ds),
+            else => |ds| result = SizeExpr.mul(result, ds),
         }
     }
 
@@ -519,13 +520,13 @@ test "product" {
     const s2 = comptime SizeExpr.static(3);
     const s11 = comptime SizeExpr.sym(.{ .name = "dd" });
 
-    // const ss1 = product(&.{ s1, s2, s11 });
+    const ss1 = comptime product(&.{ s1, s2, s11 });
     const ss2 = comptime product(&.{ s11, s1, s2 });
 
     // @setEvalBranchQuota(30000);
-    @compileLog(ss2);
+    // @compileLog(ss2);
     // @compileLog(std.fmt.comptimePrint("ss2: {f}\n", .{ss2}));
-    // std.debug.print("ss1: {f} ss2: {f}\n", .{ ss2, ss2 });
+    std.debug.print("ss1: {f} ss2: {f}\n", .{ ss1, ss2 });
 }
 
 pub fn insertDimComptime(

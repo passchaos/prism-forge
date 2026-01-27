@@ -1643,11 +1643,11 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
             };
         }
 
-        pub fn reshape(self: *const Self, comptime new_shape_expr: []const SizeExpr) Tensor(
+        pub fn reshape(self: *const Self, comptime new_shape_expr: []const SizeExpr) !Tensor(
             new_shape_expr,
             T,
         ) {
-            const layout = self.layout.reshape(new_shape_expr);
+            const layout = try self.layout.reshape(new_shape_expr);
             const storage = self.storage.shared();
 
             return Tensor(new_shape_expr, T).fromDataImpl(layout, storage, self._storage_offset);

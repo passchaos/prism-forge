@@ -312,8 +312,8 @@ pub fn Convolution(
         const OH = H.add(pads[2].add(pads[3])).sub(&FH).div(&stride).add(SizeExpr.static(1));
         const OW = W.add(pads[0].add(pads[1])).sub(&FW).div(&stride).add(SizeExpr.static(1));
 
-        const IM2COL_M = N.mul(&OH).mul(&OW);
-        const IM2COL_K = FH.mul(&FW).mul(&C);
+        const IM2COL_M = N.mul(OH).mul(OW);
+        const IM2COL_K = FH.mul(FW).mul(C);
 
         const WT = tensor.Tensor(&.{ FN, C, FH, FW }, T);
         const BT = tensor.Tensor(&.{ FN, SizeExpr.static(1), SizeExpr.static(1) }, T);
@@ -388,7 +388,7 @@ pub fn Convolution(
             defer cols.deinit();
             std.debug.print("cols: {f}\n", .{cols});
 
-            const filters = self.w.reshape(&.{ FN, IM2COL_K });
+            const filters = try self.w.reshape(&.{ FN, IM2COL_K });
             defer filters.deinit();
             // const filters_w = filters.transpose();
             // defer filters_w.deinit();
@@ -531,7 +531,7 @@ test "Convolution" {
         }, &shape_env);
         defer w.deinit();
 
-        var w_f = w.reshape(&.{ N, C, H, W });
+        var w_f = try w.reshape(&.{ N, C, H, W });
         defer w_f.deinit();
 
         var filter = try tensor.fromArray(allocator, [3][3]f32{
@@ -541,7 +541,7 @@ test "Convolution" {
         }, &shape_env);
         defer filter.deinit();
 
-        const filter_f = filter.reshape(&.{ FN, C, FH, FW });
+        const filter_f = try filter.reshape(&.{ FN, C, FH, FW });
 
         const b = try tensor.full(allocator, &.{ FN, SizeExpr.static(1), SizeExpr.static(1) }, &shape_env, @as(f32, 3.0));
 
