@@ -1,12 +1,12 @@
 const std = @import("std");
 const utils = @import("utils.zig");
 
-pub fn typeUniqueId(comptime T: type) u64 {
+pub fn typeUniqueId(comptime base_str: []const u8, comptime T: type) u64 {
     const signature = switch (@typeInfo(T)) {
-        .@"struct" => utils.stt.structSignature(T),
+        .@"struct" => comptime utils.stt.structSignature(T),
         else => @typeName(T),
     };
-    return std.hash.Wyhash.hash(0, signature);
+    return std.hash.Wyhash.hash(0, base_str ++ signature);
 }
 
 pub const SymId = u64;
@@ -14,15 +14,16 @@ pub const SymId = u64;
 pub const SymbolHandle = struct {
     id: SymId,
     name: []const u8,
+    signature: []const u8,
 
     pub fn format(
         self: @This(),
         writer: anytype,
     ) !void {
-        try writer.print("Sym{{ id={}, name={s} }}", .{
-            self.id,
-            self.name,
-        });
+        try writer.print(
+            "Sym{{ id={}, name={s}, signature={s} }}",
+            .{ self.id, self.name, self.signature },
+        );
     }
 };
 
@@ -45,9 +46,13 @@ pub fn makeSymbol(comptime sym: anytype) SymbolHandle {
         },
     };
 
+    const signature = utils.typeSignature(T);
+    const id = std.hash.Wyhash.hash(0, signature);
+
     return SymbolHandle{
-        .id = typeUniqueId(T),
+        .id = id,
         .name = name,
+        .signature = signature,
     };
 }
 
@@ -102,7 +107,7 @@ pub const SizeExpr = union(enum) {
                 else => |_| false,
             },
             .Sym => |a_s| switch (b) {
-                .Sym => |b_s| a_s.id == b_s.id,
+                .Sym => |b_s| a_s.id == b_s.id and std.mem.eql(u8, a_s.name, b_s.name),
                 else => |_| false,
             },
             else => false,
@@ -589,7 +594,13 @@ test "symbol_eql" {
 
     const b1 = makeSymbol(.{ .name = "s1" });
     const b2 = makeSymbol(.{ .name = "s1" });
+    std.debug.print("b1: {f} b2: {f}\n", .{ b1, b2 });
     try std.testing.expect(!(b1.id == b2.id));
+
+    inline for (0..3) |i| {
+        const c1 = makeSymbol(.{ .name = "s1" ++ std.fmt.comptimePrint("{}", .{i}) });
+        std.debug.print("c1: {f}\n", .{c1});
+    }
 }
 
 test "dim_spec" {

@@ -60,15 +60,6 @@ pub const stt = struct {
         });
     }
 
-    pub fn structSignature(comptime T: type) []const u8 {
-        comptime var signature: []const u8 = "";
-        const fields = @typeInfo(T).@"struct".fields;
-        inline for (fields) |field| {
-            signature = signature ++ field.name ++ ": " ++ @typeName(field.type) ++ ", ";
-        }
-        return signature;
-    }
-
     pub fn getFieldsLenComptime(comptime T: type) usize {
         return @typeInfo(T).@"struct".fields.len;
     }
@@ -528,6 +519,36 @@ pub const tensor = struct {
         return false;
     }
 };
+
+pub fn typeSignature(comptime T: type) []const u8 {
+    comptime var signature: []const u8 = @typeName(T);
+
+    switch (@typeInfo(T)) {
+        .@"struct" => |si| {
+            const fields = si.fields;
+
+            signature = signature ++ "{";
+            inline for (fields) |field| {
+                signature = signature ++ field.name ++ ": " ++ @typeName(field.type);
+
+                if (field.default_value_ptr) |dv| {
+                    const val = @as(*const field.type, @ptrCast(@alignCast(dv)));
+                    if (comptime str.isString(field.type)) {
+                        signature = signature ++ std.fmt.comptimePrint("= {s}", .{val.*});
+                    } else if (comptime isNumber(field.type)) {
+                        signature = signature ++ std.fmt.comptimePrint("= {d}", .{val.*});
+                    }
+                }
+
+                signature = signature ++ ", ";
+            }
+
+            signature = signature ++ "}";
+        },
+        else => {},
+    }
+    return signature;
+}
 
 pub fn arithmetricTypePromotion(comptime A: type, comptime B: type) type {
     if (!isNumber(A) or !isNumber(B)) @compileError("only support number type handle");

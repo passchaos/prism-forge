@@ -85,6 +85,6 @@ test "type_diff" {
         const v = utils.stt.makeStruct(&.{ "name", buf }, &.{ []const u8, i32 });
         // const v = .{ .name = buf };
 
-        std.debug.print("tname: {s} signature: {s} tuid: {}\n", .{ @typeName(v), utils.stt.structSignature(v), shape_expr.typeUniqueId(v) });
+        std.debug.print("tname: {s} signature: {s} tuid: {}\n", .{ @typeName(v), utils.stt.structSignature(v), shape_expr.typeUniqueId(buf, v) });
     }
 }
