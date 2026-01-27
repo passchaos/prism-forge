@@ -497,34 +497,40 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
             }
         }
 
-        pub fn pad(self: *const Self, pads: []const usize, value: T) !Self {
-            const pad_dims = pads.len / 2;
+        fn computePaddedShape(comptime pads: []const SizeExpr) [N]SizeExpr {
+            if (pads.len % 2 != 0) @compileError("pads must be even");
 
-            var new_shape = self.shape();
-            for (&new_shape, 0..) |*s, i| {
-                const idx_to_pad_idx = N - i - 1;
+            comptime var new_shape = utils.array.comptimeSliceToArray(SizeExpr, S);
 
-                if (idx_to_pad_idx < pad_dims) {
-                    const left_add = pads[2 * idx_to_pad_idx];
-                    const right_add = pads[2 * idx_to_pad_idx + 1];
-                    s.* += left_add + right_add;
-                }
+            const pad_len = pads.len / 2;
+
+            inline for (0..pad_len) |i| {
+                const orig_value = comptime new_shape[N - 1 - i];
+                const pad1 = comptime pads[2 * i];
+                const pad2 = comptime pads[2 * i + 1];
+
+                comptime var result = orig_value.add(&pad1);
+                result = comptime result.add(&pad2);
+
+                new_shape[N - 1 - i] = result;
             }
 
-            var result = try full(self.s_allocator(), new_shape, value);
+            return new_shape;
+        }
+
+        pub fn pad(self: *const Self, comptime pads: []const SizeExpr, value: T) !Tensor(&computePaddedShape(pads), T) {
+            const new_shape = comptime computePaddedShape(pads);
+
+            var result = try full(self.s_allocator(), &new_shape, self.layout.shape_env(), value);
 
             var shape_iter = self.shapeIter();
             while (shape_iter.next()) |idx| {
                 var dst_idx = idx;
 
-                for (0..N) |i| {
-                    // judge if need to set value from orig tensor
-                    const idx_to_pad_idx = N - i - 1;
-
-                    if (idx_to_pad_idx < pad_dims) {
-                        const left_add = pads[2 * idx_to_pad_idx];
-                        dst_idx[i] += left_add;
-                    }
+                for (0..pads.len / 2) |i| {
+                    const left_add = pads[2 * i];
+                    const left_add_size = try left_add.eval(self.layout.shape_env());
+                    dst_idx[N - 1 - i] += left_add_size;
                 }
 
                 try result.setData(dst_idx, try self.getData(idx));
@@ -1439,7 +1445,7 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
 
         pub fn contiguous(self: *const Self) !Self {
             if (self.layout.isContiguous()) {
-                return self.sharedView(.{});
+                return self.sliceView(.{});
             }
 
             // std.debug.print("run contiguous action\n", .{});
@@ -1617,7 +1623,7 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
             return shape_i;
         }
 
-        pub fn sharedView(self: *const Self, comptime slice_views: anytype) Tensor(
+        pub fn sliceView(self: *const Self, comptime slice_views: anytype) Tensor(
             &computeSharedViewShape(slice_views),
             T,
         ) {
@@ -1658,15 +1664,14 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
             };
         }
 
-        pub fn reshape(self: *const Self, comptime new_shape_expr: []const SizeExpr) !Tensor(
+        pub fn reshape(self: *const Self, comptime new_shape_expr: []const SizeExpr) Tensor(
             new_shape_expr,
             T,
-            .{},
         ) {
-            const layout = try self.layout.reshape(new_shape_expr);
+            const layout = self.layout.reshape(new_shape_expr);
             const storage = self.storage.shared();
 
-            return try Tensor(new_shape_expr, T, .{}).fromDataImpl(layout, storage, self._storage_offset);
+            return Tensor(new_shape_expr, T).fromDataImpl(layout, storage, self._storage_offset);
         }
 
         pub fn unsqueeze(self: *const Self, dim: usize) !Tensor(N + 1, .{ .T = T }) {
@@ -1761,6 +1766,15 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
             const self_data_slice = self.storage.dataSlice();
             const other_data_slice = other.storage.dataSlice();
             return utils.sliceApproxEqual(T, self_data_slice, other_data_slice, relEps, absEps);
+        }
+
+        pub fn typeInfo() []const u8 {
+            comptime var info: []const u8 = @typeName(T) ++ ": ";
+            inline for (S) |se| {
+                info = info ++ "[" ++ std.fmt.comptimePrint("{f}", .{se}) ++ "]";
+            }
+
+            return info;
         }
 
         pub fn format(
@@ -2006,7 +2020,7 @@ pub fn fromArraySpecifyDimension(allocator: std.mem.Allocator, comptime D: usize
     return Tensor(&shape_expr_i, T).fromDataImpl(layout, storage, 0);
 }
 
-pub fn fromArray(allocator: std.mem.Allocator, arr: anytype) !Tensor(
+pub fn fromArray(allocator: std.mem.Allocator, arr: anytype, shape_env: *const ShapeEnv) !Tensor(
     &utils.array.getArrayShapeComp(@TypeOf(arr)),
     utils.array.getArrayItemTypeComp(@TypeOf(arr)),
 ) {
@@ -2021,7 +2035,7 @@ pub fn fromArray(allocator: std.mem.Allocator, arr: anytype) !Tensor(
     // array is in stack, must copy to heap
     @memcpy(new_buf, arr_s);
 
-    const layout = try layout_t.Layout(&shape_expr_i).init(&ShapeEnv.init(allocator));
+    const layout = try layout_t.Layout(&shape_expr_i).init(shape_env);
     const storage = try storage_t.Storage(T).initImpl(allocator, new_buf);
 
     return Tensor(&shape_expr_i, T).fromDataImpl(layout, storage, 0);
@@ -3111,27 +3125,27 @@ test "gather_scatter_indexed" {
 test "shared_view" {
     const allocator = std.testing.allocator;
 
-    var shape_env = ShapeEnv.init(allocator);
+    var shape_env = try ShapeEnv.init(allocator);
     defer shape_env.deinit();
 
     var input = try rand(allocator, &.{ SizeExpr.static(3), SizeExpr.static(5) }, &shape_env, 2.0, 5.0);
     defer input.deinit();
     std.debug.print("input: {f}\n", .{input});
 
-    var iv1 = input.sharedView(.{});
+    var iv1 = input.sliceView(.{});
     defer iv1.deinit();
     try std.testing.expectEqual(iv1.shape(), [2]usize{ 3, 5 });
 
-    var iv2 = input.sharedView(.{1});
+    var iv2 = input.sliceView(.{1});
     defer iv2.deinit();
     try std.testing.expectEqual(iv2.shape(), [1]usize{5});
 
-    var iv3 = input.sharedView(.{ 2, 4 });
+    var iv3 = input.sliceView(.{ 2, 4 });
     defer iv3.deinit();
     try std.testing.expectEqual(iv3.shape(), [0]usize{});
     std.debug.print("iv3: {f}\n", .{iv3});
 
-    var iv4 = input.sharedView(.{ .{ 1, 3 }, .{ 1, 5 } });
+    var iv4 = input.sliceView(.{ .{ 1, 3 }, .{ 1, 5 } });
     defer iv4.deinit();
     std.debug.print("iv4: {f}\n", .{iv4});
 

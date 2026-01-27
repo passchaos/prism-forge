@@ -63,24 +63,42 @@ pub fn staticShapeExpr(comptime shape: []const usize) [shape.len]SizeExpr {
     return result;
 }
 
+pub const BinaryOpExpr = struct {
+    tag: enum { Add, Sub, Mul, Div, Mod, Max, Min },
+    lhs: *const SizeExpr,
+    rhs: *const SizeExpr,
+
+    const Self = @This();
+
+    pub fn equal(self: Self, other: Self) bool {
+        return self.tag == other.tag and self.lhs.equal(other.lhs) and self.rhs.equal(other.rhs);
+    }
+
+    pub fn format(self: @This(), writer: *std.Io.Writer) !void {
+        switch (self.tag) {
+            .Add => try writer.print("({f} + {f})", .{ self.lhs, self.rhs }),
+            .Sub => try writer.print("({f} - {f})", .{ self.lhs, self.rhs }),
+            .Mul => try writer.print("({f} * {f})", .{ self.lhs, self.rhs }),
+            .Div => try writer.print("({f} / {f})", .{ self.lhs, self.rhs }),
+            .Mod => try writer.print("({f} % {f})", .{ self.lhs, self.rhs }),
+            .Max => try writer.print("max({f}, {f})", .{ self.lhs, self.rhs }),
+            .Min => try writer.print("min({f}, {f})", .{ self.lhs, self.rhs }),
+        }
+    }
+};
+
 pub const SizeExpr = union(enum) {
     const Self = @This();
 
     Static: usize,
     Sym: SymbolHandle,
-    Add: BinaryDimOpExpr,
-    Mul: BinaryDimOpExpr,
-    Max: BinaryDimOpExpr,
-    Min: BinaryDimOpExpr,
+    BinaryOpExpr: BinaryOpExpr,
 
     pub fn format(self: @This(), writer: *std.Io.Writer) !void {
         switch (self) {
             .Static => |v| try writer.print("{d}", .{v}),
             .Sym => |s| try writer.print("\"{s}\"", .{s.name}),
-            .Add => |op| try writer.print("({f} + {f})", .{ op.lhs, op.rhs }),
-            .Mul => |op| try writer.print("({f} * {f})", .{ op.lhs, op.rhs }),
-            .Max => |op| try writer.print("max({f}, {f})", .{ op.lhs, op.rhs }),
-            .Min => |op| try writer.print("min({f}, {f})", .{ op.lhs, op.rhs }),
+            .BinaryOpExpr => |op| try writer.print("Binary{{{f}}}", .{op}),
         }
     }
 
@@ -102,11 +120,14 @@ pub const SizeExpr = union(enum) {
                 .Sym => |b_s| a_s.id == b_s.id and std.mem.eql(u8, a_s.name, b_s.name),
                 else => |_| false,
             },
-            else => false,
+            .BinaryOpExpr => |boe| switch (b) {
+                .BinaryOpExpr => |boe2| boe.equal(boe2),
+                else => |_| false,
+            },
         };
     }
 
-    pub fn static(v: usize) Self {
+    pub fn static(comptime v: usize) Self {
         return Self{ .Static = v };
     }
 
@@ -114,33 +135,183 @@ pub const SizeExpr = union(enum) {
         return Self{ .Sym = makeSymbol(sym_v) };
     }
 
-    pub fn add(lhs: *const Self, rhs: *const Self) Self {
-        return Self{ .Add = .{ .lhs = lhs, .rhs = rhs } };
+    pub fn add(comptime lhs: *const Self, comptime rhs: *const Self) Self {
+        switch (lhs.*) {
+            .Static => |a_v| switch (rhs.*) {
+                .Static => |b_v| return SizeExpr.static(a_v + b_v),
+                else => {},
+            },
+            else => {},
+        }
+
+        const boe = BinaryOpExpr{
+            .tag = .Add,
+            .lhs = lhs,
+            .rhs = rhs,
+        };
+        return Self{ .BinaryOpExpr = boe };
     }
 
-    pub fn mul(lhs: *const Self, rhs: *const Self) Self {
-        return Self{ .Mul = .{ .lhs = lhs, .rhs = rhs } };
+    pub fn sub(comptime lhs: *const Self, comptime rhs: *const Self) Self {
+        switch (lhs.*) {
+            .Static => |a_v| switch (rhs.*) {
+                .Static => |b_v| {
+                    if (a_v < b_v) {
+                        @compileError("Subtraction would result in a negative value");
+                    }
+                    return SizeExpr.static(a_v - b_v);
+                },
+                else => {},
+            },
+            else => {},
+        }
+
+        const boe = BinaryOpExpr{
+            .tag = .Sub,
+            .lhs = lhs,
+            .rhs = rhs,
+        };
+        return Self{ .BinaryOpExpr = boe };
     }
 
-    pub fn max(lhs: *const Self, rhs: *const Self) Self {
-        return Self{ .Max = .{ .lhs = lhs, .rhs = rhs } };
+    pub fn mul(comptime lhs: *const Self, comptime rhs: *const Self) Self {
+        switch (lhs.*) {
+            .Static => |a_v| switch (rhs.*) {
+                .Static => |b_v| {
+                    return SizeExpr.static(a_v * b_v);
+                },
+                else => {},
+            },
+            else => {},
+        }
+
+        const boe = BinaryOpExpr{
+            .tag = .Mul,
+            .lhs = lhs,
+            .rhs = rhs,
+        };
+        return Self{ .BinaryOpExpr = boe };
     }
 
-    pub fn min(lhs: *const Self, rhs: *const Self) Self {
-        return Self{ .Min = .{ .lhs = lhs, .rhs = rhs } };
+    pub fn div(comptime lhs: *const Self, comptime rhs: *const Self) Self {
+        switch (lhs.*) {
+            .Static => |a_v| switch (rhs.*) {
+                .Static => |b_v| {
+                    if (b_v == 0) {
+                        @compileError("Division by zero");
+                    }
+
+                    return SizeExpr.static(a_v / b_v);
+                },
+                else => {},
+            },
+            else => {},
+        }
+        const boe = BinaryOpExpr{
+            .tag = .Div,
+            .lhs = lhs,
+            .rhs = rhs,
+        };
+        return Self{ .BinaryOpExpr = boe };
+    }
+
+    pub fn mod(comptime lhs: *const Self, comptime rhs: *const Self) Self {
+        switch (lhs.*) {
+            .Static => |a_v| switch (rhs.*) {
+                .Static => |b_v| {
+                    if (b_v == 0) {
+                        @compileError("Division by zero");
+                    }
+                    return SizeExpr.static(a_v % b_v);
+                },
+                else => {},
+            },
+            else => {},
+        }
+        const boe = BinaryOpExpr{
+            .tag = .Mod,
+            .lhs = lhs,
+            .rhs = rhs,
+        };
+        return Self{ .BinaryOpExpr = boe };
+    }
+
+    pub fn max(comptime lhs: *const Self, comptime rhs: *const Self) Self {
+        switch (lhs.*) {
+            .Static => |a_v| switch (rhs.*) {
+                .Static => |b_v| {
+                    return SizeExpr.static(@max(a_v, b_v));
+                },
+                else => {},
+            },
+            else => {},
+        }
+        const boe = BinaryOpExpr{
+            .tag = .Max,
+            .lhs = lhs,
+            .rhs = rhs,
+        };
+        return Self{ .BinaryOpExpr = boe };
+    }
+
+    pub fn min(comptime lhs: *const Self, comptime rhs: *const Self) Self {
+        switch (lhs.*) {
+            .Static => |a_v| switch (rhs.*) {
+                .Static => |b_v| {
+                    return SizeExpr.static(@min(a_v, b_v));
+                },
+                else => {},
+            },
+            else => {},
+        }
+        const boe = BinaryOpExpr{
+            .tag = .Min,
+            .lhs = lhs,
+            .rhs = rhs,
+        };
+        return Self{ .BinaryOpExpr = boe };
     }
 
     pub fn eval(self: *const Self, env: *const ShapeEnv) !usize {
         return switch (self.*) {
             .Static => |v| v,
             .Sym => |s| env.lookup(&s),
-            .Add => |add_s| try add_s.lhs.eval(env) + try add_s.rhs.eval(env),
-            .Mul => |mul_s| try mul_s.lhs.eval(env) * try mul_s.rhs.eval(env),
-            .Max => |max_s| @max(try max_s.lhs.eval(env), try max_s.rhs.eval(env)),
-            .Min => |min_s| @min(try min_s.lhs.eval(env), try min_s.rhs.eval(env)),
+            .BinaryOpExpr => |boe| blk: {
+                const lhs = try boe.lhs.eval(env);
+                const rhs = try boe.rhs.eval(env);
+                break :blk switch (boe.tag) {
+                    .Add => lhs + rhs,
+                    .Sub => lhs - rhs,
+                    .Mul => lhs * rhs,
+                    .Div => lhs / rhs,
+                    .Mod => lhs % rhs,
+                    .Max => @max(lhs, rhs),
+                    .Min => @min(lhs, rhs),
+                };
+            },
         };
     }
 };
+
+test "SizeExpr" {
+    const s1 = comptime SizeExpr.static(2);
+
+    std.debug.print("s1: {f}\n", .{s1});
+    const s2 = comptime SizeExpr.static(5);
+
+    std.debug.print("s2: {f}\n", .{s2});
+    const s3 = comptime SizeExpr.sym(.{ .name = "s3" });
+
+    std.debug.print("s3: {f}\n", .{s3});
+    const s4 = SizeExpr.sym(.{ .name = "s4" });
+
+    std.debug.print("s4: {f}\n", .{s4});
+
+    const s21 = SizeExpr.sub(&s2, &s1);
+    std.debug.print("s21: {f}\n", .{s21});
+    const s13 = SizeExpr.add(&s1, &s3);
+    std.debug.print("s13: {f}\n", .{s13});
+}
 
 const SymbolHandleHash = struct {
     pub fn hash(_: @This(), key: *const SymbolHandle) u64 {
@@ -234,9 +405,11 @@ pub const ShapeEnv = struct {
     pub fn reset(self: *Self) void {
         self.sym_map.clearAndFree();
         self.globals.clearAndFree();
-        for (self.scopes) |scope| {
+
+        for (self.scopes.items) |*scope| {
             scope.clearAndFree();
         }
+
         self.scopes.clearAndFree(self.allocator);
     }
 
@@ -510,7 +683,7 @@ pub fn generateBroadcastStride(
                         if (comptime o_dim.equal(t_dim)) {
                             new_stride[BN - 1 - t_idx] = orig_stride[N - 1 - t_idx];
                         } else {
-                            @compileError("can't broadcast " ++ std.fmt.comptimePrint("{} != {}", .{ o_dim, t_dim }));
+                            @compileError("can't broadcast " ++ std.fmt.comptimePrint("{f} != {f}", .{ o_dim, t_dim }));
                         }
                     }
                 },
@@ -518,7 +691,7 @@ pub fn generateBroadcastStride(
                     if (comptime o_dim.equal(t_dim)) {
                         new_stride[BN - 1 - t_idx] = orig_stride[N - 1 - t_idx];
                     } else {
-                        @compileError("can't broadcast " ++ std.fmt.comptimePrint("{} != {}", .{ o_dim, t_dim }));
+                        @compileError("can't broadcast " ++ std.fmt.comptimePrint("{f} != {f}", .{ o_dim, t_dim }));
                     }
                 },
             }

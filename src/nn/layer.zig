@@ -295,6 +295,204 @@ pub fn SoftmaxWithLoss(comptime shape: []const SizeExpr, comptime T: type) type 
     };
 }
 
+pub fn Convolution(
+    comptime N: SizeExpr,
+    comptime C: SizeExpr,
+    comptime H: SizeExpr,
+    comptime W: SizeExpr,
+    comptime FN: SizeExpr,
+    comptime FH: SizeExpr,
+    comptime FW: SizeExpr,
+    comptime pads: [4]SizeExpr,
+    comptime stride: SizeExpr,
+    comptime T: type,
+) type {
+    const OH = H.add(&pads[2].add(&pads[3])).sub(&FH).div(&stride).add(&SizeExpr.static(1));
+    const OW = W.add(&pads[0].add(&pads[1])).sub(&FW).div(&stride).add(&SizeExpr.static(1));
+
+    const WT = tensor.Tensor(&.{ FN, C, FH, FW }, T);
+    const BT = tensor.Tensor(&.{ FN, SizeExpr.static(1), SizeExpr.static(1) }, T);
+    const IT = tensor.Tensor(&.{ N, C, H, W }, T);
+    const OT = tensor.Tensor(&.{ N, FN, OH, OW }, T);
+
+    return struct {
+        const Self = @This();
+
+        allocator: std.mem.Allocator,
+        w: WT,
+        b: BT,
+        shape_env: *const shape_expr.ShapeEnv,
+
+        pub fn deinit(self: *Self) void {
+            self.w.deinit();
+            self.b.deinit();
+        }
+
+        fn filterImpl(
+            self: *const Self,
+            data: *const tensor.Tensor(&.{ N, C, H, W }, T),
+            shape_env: *const shape_expr.ShapeEnv,
+        ) !tensor.Tensor(&.{ N, FN, OH, OW }, T) {
+            const padded_data = try data.pad(&pads, @as(T, 0.0));
+            defer padded_data.deinit();
+
+            const n_v = try N.eval(shape_env);
+            const fn_v = try FN.eval(shape_env);
+            const c_v = try C.eval(shape_env);
+            const fh_v = try FH.eval(shape_env);
+            const fw_v = try FW.eval(shape_env);
+            const oh_v = try OH.eval(shape_env);
+            const ow_v = try OW.eval(shape_env);
+
+            var result = try tensor.zeros(self.allocator, T, &.{ N, FN, OH, OW }, shape_env);
+
+            for (0..n_v) |n_i| {
+                for (0..fn_v) |fn_i| {
+                    for (0..c_v) |c_i| {
+                        for (0..oh_v) |oh_i| {
+                            for (0..ow_v) |ow_i| {
+                                const r_idx = [4]usize{ n_i, fn_i, oh_i, ow_i };
+
+                                for (0..fh_v) |fh_i| {
+                                    for (0..fw_v) |fw_i| {
+                                        const data_idx = [4]usize{ n_i, c_i, oh_i + fh_i, ow_i + fw_i };
+                                        const filter_idx = [4]usize{ fn_i, c_i, fh_i, fw_i };
+
+                                        const d_v = try padded_data.getData(data_idx);
+                                        const f_v = try self.w.getData(filter_idx);
+
+                                        const orig_v = try result.getData(r_idx);
+
+                                        try result.setData(r_idx, orig_v + d_v * f_v);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            return result;
+        }
+
+        pub fn init(allocator: std.mem.Allocator, shape_env: *const shape_expr.ShapeEnv, weight_init_std: T) !Self {
+            var w = try tensor.randNorm(allocator, &.{ FN, C, FH, FW }, shape_env, weight_init_std, 1.0);
+            w.mulScalar_(weight_init_std);
+
+            const b = try tensor.zeros(allocator, T, &.{ FN, SizeExpr.static(1), SizeExpr.static(1) }, shape_env);
+
+            return Self.initImpl(allocator, shape_env, w, b);
+        }
+
+        pub fn initImpl(
+            allocator: std.mem.Allocator,
+            shape_env: *const shape_expr.ShapeEnv,
+            w: tensor.Tensor(&.{ FN, C, FH, FW }, T),
+            b: tensor.Tensor(&.{ FN, SizeExpr.static(1), SizeExpr.static(1) }, T),
+        ) Self {
+            return Self{
+                .allocator = allocator,
+                .w = w,
+                .b = b,
+                .shape_env = shape_env,
+            };
+        }
+
+        pub fn forward(self: *Self, x: *const IT) !OT {
+            var result = try self.filterImpl(x, self.shape_env);
+
+            const b_b = self.b.broadcastTo(&.{ N, FN, OH, OW });
+            defer b_b.deinit();
+
+            result.add_(&b_b);
+
+            return result;
+        }
+
+        pub fn backward(self: *Self, dout: *const OT) !IT {
+            _ = self;
+            _ = dout;
+            return error.NoImpl;
+        }
+    };
+}
+
+test "Convolution" {
+    const allocator = std.testing.allocator;
+
+    {
+        const N = comptime SizeExpr.sym(.{ .name = "batch_size" });
+        const C = comptime SizeExpr.static(1);
+        const H = comptime SizeExpr.static(4);
+        const W = comptime SizeExpr.static(4);
+
+        const FN = comptime SizeExpr.sym(.{ .name = "filter_num" });
+        const FH = comptime SizeExpr.static(3);
+        const FW = comptime SizeExpr.static(3);
+
+        const PAD = comptime SizeExpr.static(1);
+        const STRIDE = comptime SizeExpr.static(1);
+
+        const Conv = Convolution(
+            N,
+            C,
+            H,
+            W,
+            FN,
+            FH,
+            FW,
+            [4]SizeExpr{ PAD, PAD, PAD, PAD },
+            STRIDE,
+            f32,
+        );
+
+        var shape_env = try shape_expr.ShapeEnv.init(allocator);
+        defer shape_env.deinit();
+
+        try shape_env.bind(&N.Sym, 1);
+        try shape_env.bind(&FN.Sym, 1);
+
+        var w = try tensor.fromArray(allocator, [4][4]f32{
+            [4]f32{ 1.0, 2.0, 3.0, 0.0 },
+            [4]f32{ 0.0, 1.0, 2.0, 3.0 },
+            [4]f32{ 3.0, 0.0, 1.0, 2.0 },
+            [4]f32{ 2.0, 3.0, 0.0, 1.0 },
+        }, &shape_env);
+        defer w.deinit();
+
+        var w_f = w.reshape(&.{ N, C, H, W });
+        defer w_f.deinit();
+
+        var filter = try tensor.fromArray(allocator, [3][3]f32{
+            [3]f32{ 2.0, 0.0, 1.0 },
+            [3]f32{ 0.0, 1.0, 2.0 },
+            [3]f32{ 1.0, 0.0, 2.0 },
+        }, &shape_env);
+        defer filter.deinit();
+
+        const filter_f = filter.reshape(&.{ FN, C, FH, FW });
+
+        const b = try tensor.full(allocator, &.{ FN, SizeExpr.static(1), SizeExpr.static(1) }, &shape_env, @as(f32, 3.0));
+
+        var conv_layer = Conv.initImpl(allocator, &shape_env, filter_f, b);
+        defer conv_layer.deinit();
+
+        var result = try conv_layer.forward(&w_f);
+        defer result.deinit();
+
+        try std.testing.expectEqual(10, try result.getData([4]usize{ 0, 0, 0, 0 }));
+        try std.testing.expectEqual(5, try result.getData([4]usize{ 0, 0, 0, 3 }));
+
+        try std.testing.expectEqual(7, try result.getData([4]usize{ 0, 0, 1, 0 }));
+        try std.testing.expectEqual(9, try result.getData([4]usize{ 0, 0, 2, 3 }));
+
+        try std.testing.expectEqual(7, try result.getData([4]usize{ 0, 0, 3, 2 }));
+        try std.testing.expectEqual(6, try result.getData([4]usize{ 0, 0, 3, 3 }));
+
+        std.debug.print("result: {f}\n", .{result});
+    }
+}
+
 test "affine_relu" {
     const allocator = std.testing.allocator;
 

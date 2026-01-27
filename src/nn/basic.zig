@@ -490,7 +490,7 @@ pub fn twoLayerNetTrain(allocator: std.mem.Allocator, iters_num: usize, batch_si
             var net = try MultiLayerNet(
                 batch_size_expr,
                 image_data_len_expr,
-                &.{ SizeExpr.static(50), SizeExpr.static(60), SizeExpr.static(70), SizeExpr.static(80), SizeExpr.static(90) },
+                &.{SizeExpr.static(50)},
                 num_classes_expr,
             ).init(allocator, .He, &shape_env, dropout_ratio);
             defer net.deinit();
