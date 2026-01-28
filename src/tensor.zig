@@ -26,6 +26,13 @@ pub fn TensorView(comptime T: type) type {
         stride: []const usize,
         data: []T,
 
+        pub fn equal(self: *const Self, other: *const Self) bool {
+            if (!std.mem.eql(usize, self.shape, other.shape)) return false;
+            if (!std.mem.eql(T, self.data, other.data)) return false;
+
+            return true;
+        }
+
         pub fn deinit(self: *Self) void {
             if (self.is_owned) {
                 self.allocator.free(self.data);
@@ -1743,6 +1750,8 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
         }
 
         pub fn equal(self: *const Self, other: *const Self) bool {
+            if (!std.mem.eql(usize, self.shape(), other.shape())) return false;
+
             var self_iter = self.shapeIter();
 
             while (self_iter.next()) |idx| {

@@ -332,6 +332,22 @@ pub fn Convolution(
         pub fn deinit(self: *Self) void {
             self.w.deinit();
             self.b.deinit();
+
+            if (self.dw) |dw| {
+                dw.deinit();
+            }
+
+            if (self.db) |db| {
+                db.deinit();
+            }
+
+            if (self.x_col) |x_col| {
+                x_col.deinit();
+            }
+
+            if (self.w_col) |w_col| {
+                w_col.deinit();
+            }
         }
 
         fn filterIm2ColImpl(
@@ -441,10 +457,10 @@ pub fn Convolution(
             // @compileLog(@TypeOf(cols).S[0]);
             // @compileLog(IM2COL_M);
 
-            std.debug.print("{f} {f}\n", .{ @TypeOf(cols).S[0], IM2COL_M });
+            // comptime {
+            // @setEvalBranchQuota(20000);
             // @compileLog("0 dim: " ++ std.fmt.comptimePrint("{f} {f}\n", .{ @TypeOf(cols).S[0], IM2COL_M }));
-            // @compileLog("type equal: " ++ std.fmt.comptimePrint("{}\n", .{type_equal}));
-            // @compileLog("cols shape: " ++ std.fmt.comptimePrint("{any} {any}\n", .{ @TypeOf(cols).S, [2]SizeExpr{ IM2COL_M, IM2COL_K } }));
+            // }
             self.x_col = cols;
             self.w_col = filters_w;
 
@@ -581,16 +597,23 @@ test "Convolution" {
         var result = try conv_layer.forward(&w_f);
         defer result.deinit();
 
-        try std.testing.expectEqual(10, try result.getData([4]usize{ 0, 0, 0, 0 }));
-        try std.testing.expectEqual(5, try result.getData([4]usize{ 0, 0, 0, 3 }));
-
-        try std.testing.expectEqual(7, try result.getData([4]usize{ 0, 0, 1, 0 }));
-        try std.testing.expectEqual(9, try result.getData([4]usize{ 0, 0, 2, 3 }));
-
-        try std.testing.expectEqual(7, try result.getData([4]usize{ 0, 0, 3, 2 }));
-        try std.testing.expectEqual(6, try result.getData([4]usize{ 0, 0, 3, 3 }));
-
         std.debug.print("result: {f}\n", .{result});
+
+        const result_view = result.view();
+
+        const expected = try tensor.fromArray(allocator, [1][1][4][4]f32{
+            [1][4][4]f32{[4][4]f32{
+                [4]f32{ 32, 51, 32, 7 },
+                [4]f32{ 15, 43, 47, 32 },
+                [4]f32{ 26, 17, 38, 17 },
+                [4]f32{ 27, 26, 13, 10 },
+            }},
+        }, &shape_env);
+        defer expected.deinit();
+        const expected_view = expected.view();
+
+        const equal_res = expected_view.equal(&result_view);
+        try std.testing.expect(equal_res);
     }
 }
 

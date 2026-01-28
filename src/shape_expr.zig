@@ -226,8 +226,8 @@ pub const SizeExpr = union(enum) {
     }
 
     pub fn mod(comptime lhs: Self, comptime rhs: Self) Self {
-        switch (lhs.*) {
-            .Static => |a_v| switch (rhs.*) {
+        switch (lhs) {
+            .Static => |a_v| switch (rhs) {
                 .Static => |b_v| {
                     if (b_v == 0) {
                         @compileError("Division by zero");
@@ -759,6 +759,28 @@ pub fn compatibleBroacastShapes(comptime lhs_shape: []const usize, comptime rhs_
     }
 
     return result;
+}
+
+test "comptime print" {
+    comptime {
+        const s1 = SizeExpr.static(1);
+        const s2 = SizeExpr.sym(.{ .name = "ddd" });
+        const s3 = SizeExpr.sym(.{ .name = "pad" });
+        const s4 = SizeExpr.sym(.{ .name = "H" });
+        const s5 = SizeExpr.sym(.{ .name = "W" });
+        const s6 = SizeExpr.sym(.{ .name = "FH" });
+        const s7 = SizeExpr.sym(.{ .name = "FW" });
+
+        const s10 = s4.add(s2).add(s3).sub(s4).div(s5).max(s6).add(s1);
+        const s11 = s3.add(s2).add(s4).sub(s5).div(s4).add(s1);
+
+        const s20 = s7.mul(s10).mul(s11);
+        // const s3 = s1.mul(s2);
+        // const s4 = s3.mod(s1);
+
+        @compileLog("info: " ++ std.fmt.comptimePrint("{f} {f} {f}\n", .{ s1, s2, s20 }));
+        // @compileLog("info: " ++ s1.compLog() ++ " " ++ s2.compLog() ++ " " ++ s3.compLog() ++ " " ++ s4.compLog());
+    }
 }
 
 test "anonymous_struct" {
