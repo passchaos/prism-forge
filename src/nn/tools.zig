@@ -34,7 +34,7 @@ fn computeColShape(
     return [2]SizeExpr{ N.mul(s[0]).mul(s[1]), C.mul(FH).mul(FW) };
 }
 
-fn im2col(
+pub fn im2col(
     comptime N: SizeExpr,
     comptime C: SizeExpr,
     comptime H: SizeExpr,
@@ -97,7 +97,7 @@ fn im2col(
     return result;
 }
 
-fn col2im(
+pub fn col2im(
     comptime N: SizeExpr,
     comptime C: SizeExpr,
     comptime H: SizeExpr,
@@ -163,7 +163,7 @@ test "im2col" {
     const allocator = std.testing.allocator;
 
     const N = comptime SizeExpr.static(1);
-    const C = comptime SizeExpr.static(1);
+    const C = comptime SizeExpr.static(2);
     const H = comptime SizeExpr.static(4);
     const W = comptime SizeExpr.static(4);
 
@@ -177,12 +177,17 @@ test "im2col" {
     var shape_env = try ShapeEnv.init(allocator);
     defer shape_env.deinit();
 
-    var raw_data = try tensor.fromArray(allocator, [4][4]f32{
+    var raw_data = try tensor.fromArray(allocator, [2][4][4]f32{ [4][4]f32{
         [4]f32{ 1.0, 2.0, 3.0, 0.0 },
         [4]f32{ 0.0, 1.0, 2.0, 3.0 },
         [4]f32{ 3.0, 0.0, 1.0, 2.0 },
         [4]f32{ 2.0, 3.0, 0.0, 1.0 },
-    }, &shape_env);
+    }, [4][4]f32{
+        [4]f32{ 1.0, 2.0, 3.0, 0.0 },
+        [4]f32{ 0.0, 1.0, 2.0, 3.0 },
+        [4]f32{ 3.0, 0.0, 1.0, 2.0 },
+        [4]f32{ 2.0, 3.0, 0.0, 1.0 },
+    } }, &shape_env);
     defer raw_data.deinit();
 
     const input_data = try raw_data.reshape(&.{ N, C, H, W });
@@ -195,6 +200,7 @@ test "im2col" {
     defer orig_data.deinit();
 
     const equal_res = input_data.equal(&orig_data);
+    try std.testing.expect(equal_res);
 
     std.debug.print("data: \tinput= {f}\n\tcol= {f}\n\torig= {f}\n", .{ input_data, col_data, orig_data });
     std.debug.print("equal result: {}\n", .{equal_res});

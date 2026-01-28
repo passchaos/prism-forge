@@ -76,13 +76,13 @@ pub const BinaryOpExpr = struct {
 
     pub fn format(self: @This(), writer: *std.Io.Writer) !void {
         switch (self.tag) {
-            .Add => try writer.print("({f} + {f})", .{ self.lhs, self.rhs }),
-            .Sub => try writer.print("({f} - {f})", .{ self.lhs, self.rhs }),
-            .Mul => try writer.print("({f} * {f})", .{ self.lhs, self.rhs }),
-            .Div => try writer.print("({f} / {f})", .{ self.lhs, self.rhs }),
-            .Mod => try writer.print("({f} % {f})", .{ self.lhs, self.rhs }),
-            .Max => try writer.print("max({f}, {f})", .{ self.lhs, self.rhs }),
-            .Min => try writer.print("min({f}, {f})", .{ self.lhs, self.rhs }),
+            .Add => try writer.print("({f} + {f})", .{ self.lhs.*, self.rhs.* }),
+            .Sub => try writer.print("({f} - {f})", .{ self.lhs.*, self.rhs.* }),
+            .Mul => try writer.print("({f} * {f})", .{ self.lhs.*, self.rhs.* }),
+            .Div => try writer.print("({f} / {f})", .{ self.lhs.*, self.rhs.* }),
+            .Mod => try writer.print("({f} % {f})", .{ self.lhs.*, self.rhs.* }),
+            .Max => try writer.print("max({f}, {f})", .{ self.lhs.*, self.rhs.* }),
+            .Min => try writer.print("min({f}, {f})", .{ self.lhs.*, self.rhs.* }),
         }
     }
 };
