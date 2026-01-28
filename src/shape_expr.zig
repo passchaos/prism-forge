@@ -153,9 +153,9 @@ pub const SizeExpr = union(enum) {
         return Self{ .BinaryOpExpr = boe };
     }
 
-    pub fn sub(comptime lhs: *const Self, comptime rhs: *const Self) Self {
-        switch (lhs.*) {
-            .Static => |a_v| switch (rhs.*) {
+    pub fn sub(comptime lhs: Self, comptime rhs: Self) Self {
+        switch (lhs) {
+            .Static => |a_v| switch (rhs) {
                 .Static => |b_v| {
                     if (a_v < b_v) {
                         @compileError("Subtraction would result in a negative value");
@@ -169,8 +169,8 @@ pub const SizeExpr = union(enum) {
 
         const boe = BinaryOpExpr{
             .tag = .Sub,
-            .lhs = lhs,
-            .rhs = rhs,
+            .lhs = &lhs,
+            .rhs = &rhs,
         };
         return Self{ .BinaryOpExpr = boe };
     }
@@ -195,9 +195,9 @@ pub const SizeExpr = union(enum) {
         return Self{ .BinaryOpExpr = boe };
     }
 
-    pub fn div(comptime lhs: *const Self, comptime rhs: *const Self) Self {
-        switch (lhs.*) {
-            .Static => |a_v| switch (rhs.*) {
+    pub fn div(comptime lhs: Self, comptime rhs: Self) Self {
+        switch (lhs) {
+            .Static => |a_v| switch (rhs) {
                 .Static => |b_v| {
                     if (b_v == 0) {
                         @compileError("Division by zero");
@@ -207,24 +207,25 @@ pub const SizeExpr = union(enum) {
                 },
                 else => {},
             },
-            else => |a_v| switch (rhs.*) {
-                .Static => |b_v| {
-                    if (b_v == 1) {
-                        return a_v;
-                    }
-                },
-                else => {},
-            },
+            else => {},
+            // else => |a_v| switch (rhs.*) {
+            //     .Static => |b_v| {
+            //         if (b_v == 1) {
+            //             return a_v;
+            //         }
+            //     },
+            //     else => {},
+            // },
         }
         const boe = BinaryOpExpr{
             .tag = .Div,
-            .lhs = lhs,
-            .rhs = rhs,
+            .lhs = &lhs,
+            .rhs = &rhs,
         };
         return Self{ .BinaryOpExpr = boe };
     }
 
-    pub fn mod(comptime lhs: *const Self, comptime rhs: *const Self) Self {
+    pub fn mod(comptime lhs: Self, comptime rhs: Self) Self {
         switch (lhs.*) {
             .Static => |a_v| switch (rhs.*) {
                 .Static => |b_v| {
@@ -239,15 +240,15 @@ pub const SizeExpr = union(enum) {
         }
         const boe = BinaryOpExpr{
             .tag = .Mod,
-            .lhs = lhs,
-            .rhs = rhs,
+            .lhs = &lhs,
+            .rhs = &rhs,
         };
         return Self{ .BinaryOpExpr = boe };
     }
 
-    pub fn max(comptime lhs: *const Self, comptime rhs: *const Self) Self {
-        switch (lhs.*) {
-            .Static => |a_v| switch (rhs.*) {
+    pub fn max(comptime lhs: Self, comptime rhs: Self) Self {
+        switch (lhs) {
+            .Static => |a_v| switch (rhs) {
                 .Static => |b_v| {
                     return SizeExpr.static(@max(a_v, b_v));
                 },
@@ -257,15 +258,15 @@ pub const SizeExpr = union(enum) {
         }
         const boe = BinaryOpExpr{
             .tag = .Max,
-            .lhs = lhs,
-            .rhs = rhs,
+            .lhs = &lhs,
+            .rhs = &rhs,
         };
         return Self{ .BinaryOpExpr = boe };
     }
 
-    pub fn min(comptime lhs: *const Self, comptime rhs: *const Self) Self {
-        switch (lhs.*) {
-            .Static => |a_v| switch (rhs.*) {
+    pub fn min(comptime lhs: Self, comptime rhs: Self) Self {
+        switch (lhs) {
+            .Static => |a_v| switch (rhs) {
                 .Static => |b_v| {
                     return SizeExpr.static(@min(a_v, b_v));
                 },
@@ -275,8 +276,8 @@ pub const SizeExpr = union(enum) {
         }
         const boe = BinaryOpExpr{
             .tag = .Min,
-            .lhs = lhs,
-            .rhs = rhs,
+            .lhs = &lhs,
+            .rhs = &rhs,
         };
         return Self{ .BinaryOpExpr = boe };
     }

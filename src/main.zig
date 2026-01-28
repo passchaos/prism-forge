@@ -6,6 +6,7 @@ const plot = @import("plot.zig");
 const basic = @import("nn/basic.zig");
 const layer = @import("nn/layer.zig");
 const log = @import("log.zig");
+const tools = @import("nn/tools.zig");
 
 pub fn logFn(
     comptime level: std.log.Level,
@@ -83,4 +84,5 @@ test {
     std.testing.refAllDeclsRecursive(@This());
     std.testing.refAllDeclsRecursive(basic);
     std.testing.refAllDeclsRecursive(demo);
+    std.testing.refAllDecls(tools);
 }

@@ -319,7 +319,9 @@ pub fn Convolution(
         const BT = tensor.Tensor(&.{ FN, SizeExpr.static(1), SizeExpr.static(1) }, T);
         const IT = tensor.Tensor(&.{ N, C, H, W }, T);
         const OT = tensor.Tensor(&.{ N, FN, OH, OW }, T);
-        const PaddedT = tensor.Tensor(&utils.tensor.computePaddedShape(&.{ N, C, H, W }, &pads), T);
+
+        const ImSE = utils.tensor.computePaddedShape(&.{ N, C, H, W }, &pads);
+        const ImT = tensor.Tensor(&ImSE, T);
 
         const Self = @This();
 
@@ -333,12 +335,52 @@ pub fn Convolution(
             self.b.deinit();
         }
 
+        fn col2im(
+            self: *const Self,
+            col_data: *const tensor.Tensor(&.{ IM2COL_M, IM2COL_K }, T),
+        ) !ImT {
+            var result = try tensor.zeros(
+                self.allocator,
+                T,
+                &ImSE,
+                self.shape_env,
+            );
+
+            const n_v = try N.eval(self.shape_env);
+            const c_v = try C.eval(self.shape_env);
+            const oh_v = try OH.eval(self.shape_env);
+            const ow_v = try OW.eval(self.shape_env);
+            const fh_v = try FH.eval(self.shape_env);
+            const fw_v = try FW.eval(self.shape_env);
+
+            for (0..n_v) |n_i| {
+                for (0..c_v) |c_i| {
+                    for (0..oh_v) |oh_i| {
+                        for (0..ow_v) |ow_i| {
+                            const col_r_idx = n_i * oh_v * ow_v + oh_i * ow_v + ow_i;
+
+                            for (0..fh_v) |fh_i| {
+                                for (0..fw_v) |fw_i| {
+                                    const col_c_idx = c_i * fh_v * fw_v + fh_i * fw_v + fw_i;
+
+                                    const val = try col_data.getData(&.{ col_r_idx, col_c_idx });
+                                    try result.setData(&.{ n_i, c_i, oh_i + fh_i, ow_i + fw_i }, val);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            return result;
+        }
+
         fn im2col(
             self: *const Self,
-            padded_data: *const PaddedT,
+            im_data: *const ImT,
             shape_env: *const shape_expr.ShapeEnv,
         ) !tensor.Tensor(&.{ IM2COL_M, IM2COL_K }, T) {
-            const shape = padded_data.shape();
+            const shape = im_data.shape();
 
             const n_v = shape[0];
             const c_v = shape[1];
@@ -361,7 +403,7 @@ pub fn Convolution(
                                 for (0..fw_v) |fw_i| {
                                     const data_idx = [4]usize{ n_i, c_i, oh_i + fh_i, ow_i + fw_i };
 
-                                    const d_v = try padded_data.getData(data_idx);
+                                    const d_v = try im_data.getData(data_idx);
 
                                     const c_idx = c_i * fh_v * fw_v + fh_i * fw_v + fw_i;
 
@@ -376,7 +418,7 @@ pub fn Convolution(
             return result;
         }
 
-        fn filterImpl(
+        fn filterIm2ColImpl(
             self: *const Self,
             data: *const tensor.Tensor(&.{ N, C, H, W }, T),
             shape_env: *const shape_expr.ShapeEnv,
@@ -390,12 +432,24 @@ pub fn Convolution(
 
             const filters = try self.w.reshape(&.{ FN, IM2COL_K });
             defer filters.deinit();
-            // const filters_w = filters.transpose();
-            // defer filters_w.deinit();
+            const filters_w = filters.transpose();
+            defer filters_w.deinit();
 
-            // const res1 = try cols.matmul(filters_w);
-            // defer res1.deinit();
-            // std.debug.print("res: {f}\n", .{res1});
+            const res1 = try cols.matmul(&filters_w);
+            defer res1.deinit();
+            const res2 = try res1.reshape(&.{ N, FN, OH, OW });
+            std.debug.print("res: {f}\n", .{res2});
+
+            return res2;
+        }
+
+        fn filterImpl(
+            self: *const Self,
+            data: *const tensor.Tensor(&.{ N, C, H, W }, T),
+            shape_env: *const shape_expr.ShapeEnv,
+        ) !tensor.Tensor(&.{ N, FN, OH, OW }, T) {
+            const padded_data = try data.pad(&pads, @as(T, 0.0));
+            defer padded_data.deinit();
 
             const n_v = try N.eval(shape_env);
             const fn_v = try FN.eval(shape_env);
@@ -460,7 +514,8 @@ pub fn Convolution(
         }
 
         pub fn forward(self: *Self, x: *const IT) !OT {
-            var result = try self.filterImpl(x, self.shape_env);
+            var result = try self.filterIm2ColImpl(x, self.shape_env);
+            // var result = try self.filterImpl(x, self.shape_env);
 
             const b_b = self.b.broadcastTo(&.{ N, FN, OH, OW });
             defer b_b.deinit();
@@ -493,9 +548,10 @@ test "Convolution" {
         const FH = comptime SizeExpr.static(3);
         const FW = comptime SizeExpr.static(3);
 
-        // const PAD = comptime SizeExpr.sym(.{ .name = "pad" });
-        const PAD = comptime SizeExpr.static(1);
-        const STRIDE = comptime SizeExpr.static(1);
+        const PAD = comptime SizeExpr.sym(.{ .name = "pad" });
+        // const PAD = comptime SizeExpr.static(1);
+        // const STRIDE = comptime SizeExpr.static(1);
+        const STRIDE = comptime SizeExpr.sym(.{ .name = "stride" });
 
         std.debug.print(
             "N= {f} C= {f} H= {f} W= {f} FN= {f} FH= {f} FW= {f}\n",
@@ -521,7 +577,8 @@ test "Convolution" {
 
         try shape_env.bind(&N.Sym, 1);
         try shape_env.bind(&FN.Sym, 1);
-        // try shape_env.bind(&PAD.Sym, 1);
+        try shape_env.bind(&PAD.Sym, 1);
+        try shape_env.bind(&STRIDE.Sym, 1);
 
         var w = try tensor.fromArray(allocator, [4][4]f32{
             [4]f32{ 1.0, 2.0, 3.0, 0.0 },

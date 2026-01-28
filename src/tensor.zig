@@ -1424,7 +1424,7 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
 
         pub fn contiguous(self: *const Self) !Self {
             if (self.layout.isContiguous()) {
-                return self.sliceView(.{});
+                return self.sliceView(&.{});
             }
 
             // std.debug.print("run contiguous action\n", .{});
@@ -1484,33 +1484,18 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
         }
 
         // layout view method
-        fn computeSharedViewShapeErasedPrefixSize(comptime slice_views: anytype) usize {
-            switch (@typeInfo(@TypeOf(slice_views))) {
-                .@"struct" => |si| {
-                    comptime var erased_size: usize = 0;
+        fn computeSharedViewShapeErasedPrefixSize(comptime slice_exprs: []const SliceExpr) usize {
+            comptime var erased_size: usize = 0;
 
-                    inline for (si.fields) |field| {
-                        switch (@typeInfo(field.type)) {
-                            .int, .comptime_int => erased_size += 1,
-                            else => break,
-                        }
-                    }
-
-                    return erased_size;
-                },
-                else => @compileError("Unsupported type for computeSharedViewShapeLen"),
+            inline for (slice_exprs) |expr| {
+                switch (expr) {
+                    .Index => erased_size += 1,
+                    else => break,
+                }
             }
+
+            return erased_size;
         }
-
-        const ComputeRangeOffset = struct {
-            shape: [N]usize,
-            offset: usize,
-        };
-
-        const Range = struct {
-            start: usize,
-            end: usize,
-        };
 
         fn computeSliceViewRanges(comptime slice_views: anytype) [utils.stt.getFieldsLenComptime(@TypeOf(slice_views))]Range {
             switch (@typeInfo(@TypeOf(slice_views))) {
@@ -1567,49 +1552,86 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
             }
         }
 
-        fn computeSharedViewBaseOffset(self: *const Self, comptime slice_views: anytype) usize {
-            const ranges = computeSliceViewRanges(slice_views);
-
+        fn computeSharedViewBaseOffset(self: *const Self, comptime slice_exprs: []const SliceExpr, shape_env: *const ShapeEnv) !usize {
             var base_idx = [_]usize{0} ** N;
-            inline for (ranges, 0..) |range, i| {
-                base_idx[i] = range.start;
+
+            inline for (slice_exprs, 0..) |expr, i| {
+                switch (expr) {
+                    .All => {
+                        base_idx[i] = 0;
+                    },
+                    .Index => |se| {
+                        const idx = try se.eval(shape_env);
+
+                        if (idx >= self.shape()[i]) {
+                            return error.OutOfBounds;
+                        }
+
+                        base_idx[i] = idx;
+                    },
+                    .Range => |range| {
+                        const start_expr = range.start.max(SizeExpr.static(0));
+                        const end_expr = range.end.min(S[i]);
+
+                        const start = try start_expr.eval(shape_env);
+                        const end = try end_expr.eval(shape_env);
+
+                        std.debug.print("start: {} end: {}\n", .{ start, end });
+
+                        if (start >= self.shape()[i] or end > self.shape()[i]) {
+                            return error.RangeOutOfBounds;
+                        }
+
+                        base_idx[i] = start;
+                    },
+                }
             }
 
             const base_offset = utils.indexShapeToFlat(N, self.shape(), base_idx) catch unreachable;
             return base_offset;
         }
 
-        fn computeSharedViewShape(comptime slice_views: anytype) [N - computeSharedViewShapeErasedPrefixSize(slice_views)]SizeExpr {
-            const ranges = computeSliceViewRanges(slice_views);
-            comptime var base_shape = utils.array.comptimeSliceToArray(SizeExpr, SA);
-
-            inline for (ranges, 0..) |range, i| {
-                base_shape[i] = SizeExpr.static(range.end - range.start);
-            }
-
+        fn computeSharedViewShape(comptime slice_exprs: []const SliceExpr) [N - computeSharedViewShapeErasedPrefixSize(slice_exprs)]SizeExpr {
             // @compileLog("base shape: " ++ std.fmt.comptimePrint("{any}\n", .{base_shape}));
 
-            const erased_prefix = comptime computeSharedViewShapeErasedPrefixSize(slice_views);
+            if (slice_exprs.len == 0) {
+                return utils.array.comptimeSliceToArray(SizeExpr, S);
+            } else if (slice_exprs.len > N) {
+                @compileError("Too many slice expressions");
+            }
+
+            comptime var base_shape = utils.array.comptimeSliceToArray(SizeExpr, SA);
+
+            inline for (slice_exprs, 0..) |expr, i| {
+                switch (expr) {
+                    .All => {},
+                    .Index => |_| base_shape[i] = SizeExpr.static(1),
+                    .Range => |range| base_shape[i] = range.end.min(S[i]).sub(range.start),
+                }
+            }
+
+            const erased_prefix = comptime computeSharedViewShapeErasedPrefixSize(slice_exprs);
 
             comptime var shape_i = [_]SizeExpr{SizeExpr.static(0)} ** (N - erased_prefix);
+
+            // @compileLog("erased_prefix: " ++ std.fmt.comptimePrint("{} {}\n", .{ erased_prefix, N }));
 
             inline for (erased_prefix..N) |i| {
                 shape_i[i - erased_prefix] = base_shape[i];
             }
-
             // @compileLog("shape_i: " ++ std.fmt.comptimePrint("{any}\n", .{shape_i}));
 
             return shape_i;
         }
 
-        pub fn sliceView(self: *const Self, comptime slice_views: anytype) Tensor(
-            &computeSharedViewShape(slice_views),
+        pub fn sliceView(self: *const Self, comptime slice_exprs: []const SliceExpr) !Tensor(
+            &computeSharedViewShape(slice_exprs),
             T,
         ) {
-            const new_shape_expr = comptime computeSharedViewShape(slice_views);
-            const base_offset = computeSharedViewBaseOffset(self, slice_views);
+            const new_shape_expr = comptime computeSharedViewShape(slice_exprs);
+            const base_offset = try computeSharedViewBaseOffset(self, slice_exprs, self.layout.shape_env());
 
-            const erased_prefix = comptime computeSharedViewShapeErasedPrefixSize(slice_views);
+            const erased_prefix = comptime computeSharedViewShapeErasedPrefixSize(slice_exprs);
 
             var new_stride = [_]usize{0} ** new_shape_expr.len;
 
@@ -1720,9 +1742,7 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
             return self.layout.isContiguous();
         }
 
-        pub fn equal(self: Self, other: Self) bool {
-            if (!self.layout.equal(other.layout)) return false;
-
+        pub fn equal(self: *const Self, other: *const Self) bool {
             var self_iter = self.shapeIter();
 
             while (self_iter.next()) |idx| {
@@ -2193,6 +2213,25 @@ pub fn randNorm(allocator: std.mem.Allocator, comptime shape_expr_a: []const Siz
     const storage = try storage_t.Storage(T).randNorm(allocator, size, mean_a, stddev);
     return Tensor(shape_expr_a, T).fromDataImpl(layout, storage, 0);
 }
+
+pub const SliceExpr = union(enum) {
+    Index: SizeExpr,
+    Range: Range,
+    All,
+
+    pub fn index(se: SizeExpr) SliceExpr {
+        return SliceExpr{ .Index = se };
+    }
+
+    pub fn range(start: SizeExpr, end: SizeExpr) SliceExpr {
+        return SliceExpr{ .Range = Range{ .start = start, .end = end } };
+    }
+};
+
+pub const Range = struct {
+    start: SizeExpr,
+    end: SizeExpr,
+};
 
 // pub fn cat(allocator: std.mem.Allocator, tensors: anytype, comptime dim: usize) !Tensor(
 //     &utils.tensor.computeCattedTensorShape(@TypeOf(tensors), dim),
@@ -3111,22 +3150,39 @@ test "shared_view" {
     defer input.deinit();
     std.debug.print("input: {f}\n", .{input});
 
-    var iv1 = input.sliceView(.{});
+    var iv1 = try input.sliceView(&.{});
     defer iv1.deinit();
+    std.debug.print("iv1: {f}\n", .{iv1});
     try std.testing.expectEqual(iv1.shape(), [2]usize{ 3, 5 });
 
-    var iv2 = input.sliceView(.{1});
+    var iv11 = try input.sliceView(&.{ .All, .All });
+    defer iv11.deinit();
+    std.debug.print("iv11: {f}\n", .{iv11});
+    try std.testing.expectEqual(iv11.shape(), [2]usize{ 3, 5 });
+
+    var iv2 = try input.sliceView(&.{SliceExpr.index(SizeExpr.static(1))});
     defer iv2.deinit();
+    std.debug.print("iv2: {f}\n", .{iv2});
     try std.testing.expectEqual(iv2.shape(), [1]usize{5});
 
-    var iv3 = input.sliceView(.{ 2, 4 });
+    var iv3 = try input.sliceView(&.{ SliceExpr.index(SizeExpr.static(2)), SliceExpr.index(SizeExpr.static(4)) });
     defer iv3.deinit();
     try std.testing.expectEqual(iv3.shape(), [0]usize{});
     std.debug.print("iv3: {f}\n", .{iv3});
 
-    var iv4 = input.sliceView(.{ .{ 1, 3 }, .{ 1, 5 } });
+    var iv4 = try input.sliceView(&.{
+        SliceExpr.range(SizeExpr.static(1), SizeExpr.static(3)),
+        SliceExpr.range(SizeExpr.static(1), SizeExpr.static(8)),
+    });
     defer iv4.deinit();
     std.debug.print("iv4: {f}\n", .{iv4});
+
+    var iv5 = try input.sliceView(&.{
+        SliceExpr.range(SizeExpr.static(1), SizeExpr.static(3)),
+        SliceExpr.index(SizeExpr.static(3)),
+    });
+    defer iv5.deinit();
+    std.debug.print("iv5: {f}\n", .{iv5});
 
     // try std.testing.expectEqual(iv4.shape(), [2]usize{ 2, 2 });
     // try iv4.setData([2]usize{ 0, 1 }, @as(f32, 3.0));
