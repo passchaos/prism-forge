@@ -54,6 +54,8 @@ pub fn im2col(
     const padded_data = try input_data.pad(&pads, @as(T, 0));
     defer padded_data.deinit();
 
+    std.debug.print("input: {f}\n", .{padded_data});
+
     const shape = padded_data.shape();
 
     const FILTER_OUTPUT_S = comptime computeChannelFilteredShape(H, W, FH, FW, pads, stride);
@@ -73,11 +75,11 @@ pub fn im2col(
     var result = try tensor.zeros(allocator, T, &COL_S, shape_env);
 
     for (0..n_v) |n_i| {
-        for (0..c_v) |c_i| {
-            for (0..foh_v) |foh_i| {
-                for (0..fow_v) |fow_i| {
-                    const r_idx = n_i * foh_v * fow_v + foh_i * fow_v + fow_i;
+        for (0..foh_v) |foh_i| {
+            for (0..fow_v) |fow_i| {
+                const r_idx = n_i * foh_v * fow_v + foh_i * fow_v + fow_i;
 
+                for (0..c_v) |c_i| {
                     for (0..fh_v) |fh_i| {
                         for (0..fw_v) |fw_i| {
                             const data_idx = [4]usize{ n_i, c_i, foh_i + fh_i, fow_i + fw_i };

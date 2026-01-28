@@ -1200,6 +1200,8 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
             var shape_i_iter = ShapeIterator.init(shape_i);
 
             while (shape_i_iter.next()) |idx| {
+                // std.debug.print("idx: {any}\n", .{idx});
+
                 const acc = blk: {
                     if (self.shape()[dm] == 1) {
                         const v_ii = try self.getData(idx);
@@ -1225,10 +1227,14 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
                     }
                 };
 
+                // std.debug.print("acc: {}\n", .{acc});
+
                 const res = if (post_func) |pf|
                     pf(acc, self.shape()[dm])
                 else
                     @as(RT, acc.value);
+
+                // std.debug.print("res: {any}\n", .{res});
 
                 const flat_idx = try utils.indexShapeToFlat(N, shape_i, idx);
                 new_buf[flat_idx] = res;
@@ -1721,6 +1727,10 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
             return self.layout.size();
         }
 
+        pub fn sizeExpr() SizeExpr {
+            return comptime shape_expr.product(S);
+        }
+
         pub fn ndim(_: *const Self) usize {
             return N;
         }
@@ -1750,7 +1760,7 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
         }
 
         pub fn equal(self: *const Self, other: *const Self) bool {
-            if (!std.mem.eql(usize, self.shape(), other.shape())) return false;
+            if (!std.mem.eql(usize, &self.shape(), &other.shape())) return false;
 
             var self_iter = self.shapeIter();
 
@@ -2000,7 +2010,7 @@ pub fn fromScalar(allocator: std.mem.Allocator, value: anytype) !Tensor(
     );
 }
 
-pub fn fromArraySpecifyDimension(allocator: std.mem.Allocator, comptime D: usize, arr: anytype) !Tensor(
+pub fn fromArraySpecifyDimension(allocator: std.mem.Allocator, comptime D: usize, arr: anytype, shape_env: *const ShapeEnv) !Tensor(
     &shape_expr.staticShapeExpr(&utils.array.getArrayShapeCompWithDepth(@TypeOf(arr), D)),
     utils.array.getArrayItemTypeCompWithDepth(@TypeOf(arr), D),
 ) {
@@ -2022,7 +2032,7 @@ pub fn fromArraySpecifyDimension(allocator: std.mem.Allocator, comptime D: usize
     // array is in stack, must copy to heap
     @memcpy(new_buf, arr_s);
 
-    const layout = try layout_t.Layout(&shape_expr_i).init(&ShapeEnv.init(allocator));
+    const layout = try layout_t.Layout(&shape_expr_i).init(shape_env);
     const storage = try storage_t.Storage(T).initImpl(allocator, new_buf);
 
     return Tensor(&shape_expr_i, T).fromDataImpl(layout, storage, 0);
@@ -2557,7 +2567,7 @@ test "data type conversion" {
 test "reduce" {
     const allocator = std.testing.allocator;
 
-    var shape_env = ShapeEnv.init(allocator);
+    var shape_env = try ShapeEnv.init(allocator);
     defer shape_env.deinit();
 
     const t1 = try rand(allocator, &parseSpec(.{ 3, 5 }), &shape_env, 0.0, 1.0);
@@ -2605,10 +2615,13 @@ test "reduce" {
 test "reduce arg" {
     const allocator = std.testing.allocator;
 
+    var shape_env = try ShapeEnv.init(allocator);
+    defer shape_env.deinit();
+
     const t2 = try fromArray(allocator, [2][3]f32{
         .{ 0.7, 0.2, 0.3 },
         .{ 0.4, 0.5, 0.6 },
-    });
+    }, &shape_env);
     defer t2.deinit();
 
     {
@@ -2617,9 +2630,9 @@ test "reduce arg" {
 
         const r1_e = try fromArray(allocator, [_][3]f32{
             .{ 0.7, 0.5, 0.6 },
-        });
+        }, &shape_env);
         defer r1_e.deinit();
-        try std.testing.expect(r1.equal(r1_e));
+        try std.testing.expect(r1.equal(&r1_e));
 
         const r2 = try t2.argMax(0);
         defer r2.deinit();
@@ -2630,11 +2643,11 @@ test "reduce arg" {
                 .{ 1, 1 },
                 .{ 1, 2 },
             },
-        });
+        }, &shape_env);
         defer r2_e.deinit();
 
-        log.print(@src(), "r2: {f} r2_e: {f}\n", .{ r2, r2_e });
-        try std.testing.expect(r2.equal(r2_e));
+        std.debug.print("r2: {f} r2_e: {f}\n", .{ r2, r2_e });
+        try std.testing.expect(r2.equal(&r2_e));
 
         const r3 = try t2.maxAll();
         defer r3.deinit();
@@ -2642,7 +2655,7 @@ test "reduce arg" {
         defer r4.deinit();
 
         try std.testing.expectEqual(try r4.dataItem(), [2]usize{ 0, 0 });
-        log.print(@src(), "r1: {f} r2: {f} r3: {f} r4: {f}\n", .{ r1, r2, r3, r4 });
+        std.debug.print("r1: {f} r2: {f} r3: {f} r4: {f}\n", .{ r1, r2, r3, r4 });
     }
 }
 

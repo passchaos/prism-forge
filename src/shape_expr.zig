@@ -492,6 +492,15 @@ pub const ShapeEnv = struct {
     }
 };
 
+pub fn compLog(comptime size_exprs: []const SizeExpr) []const u8 {
+    comptime var log_str: []const u8 = "";
+    inline for (size_exprs) |se| {
+        log_str = log_str ++ std.fmt.comptimePrint(" {f}", .{se});
+    }
+
+    return log_str;
+}
+
 pub fn product(dim_exprs: []const SizeExpr) SizeExpr {
     var result = SizeExpr.static(1);
 
