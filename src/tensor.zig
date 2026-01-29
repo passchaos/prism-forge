@@ -1835,7 +1835,7 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
                 return;
             }
 
-            const pad_show_count = 4;
+            const pad_show_count = 10;
 
             const current_dim_size = self.shape()[depth];
             const dims = self.ndim();
@@ -1916,7 +1916,7 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
                 return;
             }
 
-            const pad_show_count = 5;
+            const pad_show_count = 10;
 
             const max_items: usize = if (base_indices.len == 0) 10 else 2 * pad_show_count;
             const current_dim_size = self.shape()[depth];

@@ -54,8 +54,7 @@ pub fn im2col(
     const padded_data = try input_data.pad(&pads, @as(T, 0));
     defer padded_data.deinit();
 
-    std.debug.print("input: {f}\n", .{padded_data});
-
+    std.debug.print("padded data: {f}\n", .{padded_data});
     const shape = padded_data.shape();
 
     const FILTER_OUTPUT_S = comptime computeChannelFilteredShape(H, W, FH, FW, pads, stride);
@@ -75,11 +74,11 @@ pub fn im2col(
     var result = try tensor.zeros(allocator, T, &COL_S, shape_env);
 
     for (0..n_v) |n_i| {
-        for (0..foh_v) |foh_i| {
-            for (0..fow_v) |fow_i| {
-                const r_idx = n_i * foh_v * fow_v + foh_i * fow_v + fow_i;
+        for (0..c_v) |c_i| {
+            for (0..foh_v) |foh_i| {
+                for (0..fow_v) |fow_i| {
+                    const r_idx = n_i * foh_v * fow_v + foh_i * fow_v + fow_i;
 
-                for (0..c_v) |c_i| {
                     for (0..fh_v) |fh_i| {
                         for (0..fw_v) |fw_i| {
                             const data_idx = [4]usize{ n_i, c_i, foh_i + fh_i, fow_i + fw_i };
@@ -185,10 +184,10 @@ test "im2col" {
         [4]f32{ 3.0, 0.0, 1.0, 2.0 },
         [4]f32{ 2.0, 3.0, 0.0, 1.0 },
     }, [4][4]f32{
-        [4]f32{ 1.0, 2.0, 3.0, 0.0 },
-        [4]f32{ 0.0, 1.0, 2.0, 3.0 },
-        [4]f32{ 3.0, 0.0, 1.0, 2.0 },
-        [4]f32{ 2.0, 3.0, 0.0, 1.0 },
+        [4]f32{ 3.0, 6.0, 9.0, 0.0 },
+        [4]f32{ 0.0, 3.0, 6.0, 3.0 },
+        [4]f32{ 6.0, 0.0, 3.0, 1.0 },
+        [4]f32{ 5.0, 9.0, 0.0, 2.0 },
     } }, &shape_env);
     defer raw_data.deinit();
 
@@ -197,6 +196,30 @@ test "im2col" {
 
     const col_data = try im2col(N, C, H, W, FH, FW, pads, STRIDE, f32, allocator, &input_data, &shape_env);
     defer col_data.deinit();
+
+    const expected_col_data: [16][18]f32 = .{
+        .{ 0, 0, 0, 0, 1, 2, 0, 0, 1, 0, 0, 0, 0, 3, 6, 0, 0, 3 },
+        .{ 0, 0, 0, 1, 2, 3, 0, 1, 2, 0, 0, 0, 3, 6, 9, 0, 3, 6 },
+        .{ 0, 0, 0, 2, 3, 0, 1, 2, 3, 0, 0, 0, 6, 9, 0, 3, 6, 3 },
+        .{ 0, 0, 0, 3, 0, 0, 2, 3, 0, 0, 0, 0, 9, 0, 0, 6, 3, 0 },
+        .{ 0, 1, 2, 0, 0, 1, 0, 3, 0, 0, 3, 6, 0, 0, 3, 0, 6, 0 },
+        .{ 1, 2, 3, 0, 1, 2, 3, 0, 1, 3, 6, 9, 0, 3, 6, 6, 0, 3 },
+        .{ 2, 3, 0, 1, 2, 3, 0, 1, 2, 6, 9, 0, 3, 6, 3, 0, 3, 1 },
+        .{ 3, 0, 0, 2, 3, 0, 1, 2, 0, 9, 0, 0, 6, 3, 0, 3, 1, 0 },
+        .{ 0, 0, 1, 0, 3, 0, 0, 2, 3, 0, 0, 3, 0, 6, 0, 0, 5, 9 },
+        .{ 0, 1, 2, 3, 0, 1, 2, 3, 0, 0, 3, 6, 6, 0, 3, 5, 9, 0 },
+        .{ 1, 2, 3, 0, 1, 2, 3, 0, 1, 3, 6, 3, 0, 3, 1, 9, 0, 2 },
+        .{ 2, 3, 0, 1, 2, 0, 0, 1, 0, 6, 3, 0, 3, 1, 0, 0, 2, 0 },
+        .{ 0, 3, 0, 0, 2, 3, 0, 0, 0, 0, 6, 0, 0, 5, 9, 0, 0, 0 },
+        .{ 3, 0, 1, 2, 3, 0, 0, 0, 0, 6, 0, 3, 5, 9, 0, 0, 0, 0 },
+        .{ 0, 1, 2, 3, 0, 1, 0, 0, 0, 0, 3, 1, 9, 0, 2, 0, 0, 0 },
+        .{ 1, 2, 0, 0, 1, 0, 0, 0, 0, 3, 1, 0, 0, 2, 0, 0, 0, 0 },
+    };
+    const expected_col_t = try tensor.fromArray(allocator, expected_col_data, &shape_env);
+    defer expected_col_t.deinit();
+
+    const expected_col_equal_res = col_data.equal(&expected_col_t);
+    try std.testing.expect(expected_col_equal_res);
 
     const orig_data = try col2im(N, C, H, W, FH, FW, pads, STRIDE, f32, allocator, &col_data, &shape_env);
     defer orig_data.deinit();
