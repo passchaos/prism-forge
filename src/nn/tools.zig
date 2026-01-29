@@ -171,7 +171,7 @@ test "im2col" {
     const FH = comptime SizeExpr.static(3);
     const FW = comptime SizeExpr.static(3);
     const PAD = comptime SizeExpr.static(1);
-    const STRIDE = comptime SizeExpr.static(1);
+    const stride = comptime SizeExpr.static(1);
 
     const pads = [4]SizeExpr{ PAD, PAD, PAD, PAD };
 
@@ -194,7 +194,7 @@ test "im2col" {
     const input_data = try raw_data.reshape(&.{ N, C, H, W });
     defer input_data.deinit();
 
-    const col_data = try im2col(N, C, H, W, FH, FW, pads, STRIDE, f32, allocator, &input_data, &shape_env);
+    const col_data = try im2col(N, C, H, W, FH, FW, pads, stride, f32, allocator, &input_data, &shape_env);
     defer col_data.deinit();
 
     const expected_col_data: [16][18]f32 = .{
@@ -218,10 +218,24 @@ test "im2col" {
     const expected_col_t = try tensor.fromArray(allocator, expected_col_data, &shape_env);
     defer expected_col_t.deinit();
 
+    const OH = comptime H.add(pads[2]).add(pads[3]).sub(FH).div(stride).add(SizeExpr.static(1));
+    const OW = comptime W.add(pads[0]).add(pads[1]).sub(FW).div(stride).add(SizeExpr.static(1));
+
+    const e1 = try expected_col_t.reshape(&.{ N.mul(OH).mul(OW), C, FH.mul(FW) });
+    defer e1.deinit();
+
+    const e2 = e1.permute([3]usize{ 0, 2, 1 });
+    defer e2.deinit();
+    std.debug.print("e2: {f}\n", .{e2});
+
+    const expected_reshaped_col_t = try e2.reshape(&.{ N.mul(OH).mul(OW), C.mul(FH).mul(FW) });
+    defer expected_reshaped_col_t.deinit();
+    std.debug.print("expected reshaped col: {f}\n", .{expected_reshaped_col_t});
+
     const expected_col_equal_res = col_data.equal(&expected_col_t);
     try std.testing.expect(expected_col_equal_res);
 
-    const orig_data = try col2im(N, C, H, W, FH, FW, pads, STRIDE, f32, allocator, &col_data, &shape_env);
+    const orig_data = try col2im(N, C, H, W, FH, FW, pads, stride, f32, allocator, &col_data, &shape_env);
     defer orig_data.deinit();
 
     const equal_res = input_data.equal(&orig_data);
