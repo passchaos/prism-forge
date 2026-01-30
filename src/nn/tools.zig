@@ -70,6 +70,8 @@ pub fn im2col(
     const fh_v = try FH.eval(shape_env);
     const fw_v = try FW.eval(shape_env);
 
+    const stride_v = try stride.eval(shape_env);
+
     const COL_S = comptime [2]SizeExpr{ N.mul(F_OH).mul(F_OW), C.mul(FH).mul(FW) };
     var result = try tensor.zeros(allocator, T, &COL_S, shape_env);
 
@@ -81,7 +83,7 @@ pub fn im2col(
 
                     for (0..fh_v) |fh_i| {
                         for (0..fw_v) |fw_i| {
-                            const data_idx = [4]usize{ n_i, c_i, foh_i + fh_i, fow_i + fw_i };
+                            const data_idx = [4]usize{ n_i, c_i, foh_i * stride_v + fh_i, fow_i * stride_v + fw_i };
 
                             const d_v = try padded_data.getData(data_idx);
 

@@ -351,18 +351,18 @@ pub fn MultiLayerNet(
 
                 var affine_layer: *Affine = @ptrCast(@alignCast(affine));
 
-                weights[i * 2] = affine_layer.w.view();
-                weights[i * 2 + 1] = affine_layer.b.view();
-                grads[i * 2] = affine_layer.dw.?.view();
-                grads[i * 2 + 1] = affine_layer.db.?.view();
+                weights[i * 2] = try affine_layer.w.view();
+                weights[i * 2 + 1] = try affine_layer.b.view();
+                grads[i * 2] = try affine_layer.dw.?.view();
+                grads[i * 2 + 1] = try affine_layer.db.?.view();
 
                 tmp_size = hidden_size;
             }
 
-            weights[(count - 1) * 2] = self.output_layer.w.view();
-            weights[(count - 1) * 2 + 1] = self.output_layer.b.view();
-            grads[(count - 1) * 2] = self.output_layer.dw.?.view();
-            grads[(count - 1) * 2 + 1] = self.output_layer.db.?.view();
+            weights[(count - 1) * 2] = try self.output_layer.w.view();
+            weights[(count - 1) * 2 + 1] = try self.output_layer.b.view();
+            grads[(count - 1) * 2] = try self.output_layer.dw.?.view();
+            grads[(count - 1) * 2 + 1] = try self.output_layer.db.?.view();
 
             return .{ weights, grads };
         }

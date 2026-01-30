@@ -799,6 +799,8 @@ pub fn Pooling(
             const out1 = try col_data.max(1);
             defer out1.deinit();
 
+            std.debug.print("out1: {f}\n", .{out1});
+
             const arg_out = try col_data.argMax(1);
 
             // comptime {
@@ -811,7 +813,11 @@ pub fn Pooling(
 
             const out2 = try out1.reshape(&.{ N, F_OH, F_OW, C });
             defer out2.deinit();
+
+            std.debug.print("out2: {f}\n", .{out2});
             const out3 = out2.permute([4]usize{ 0, 3, 1, 2 });
+
+            std.debug.print("out3: {f}\n", .{out3});
 
             return out3;
         }
@@ -899,7 +905,7 @@ test "Pooling" {
 
     var w = try tensor.fromArray(allocator, [3][4][4]f32{
         [4][4]f32{
-            [4]f32{ 1.0, 2.0, 3.0, 0.0 },
+            [4]f32{ 1.0, 2.0, 8.0, 0.0 },
             [4]f32{ 0.0, 1.0, 2.0, 4.0 },
             [4]f32{ 1.0, 0.0, 4.0, 2.0 },
             [4]f32{ 3.0, 2.0, 0.0, 1.0 },
@@ -908,10 +914,10 @@ test "Pooling" {
             [4]f32{ 3.0, 0.0, 6.0, 5.0 },
             [4]f32{ 4.0, 2.0, 4.0, 3.0 },
             [4]f32{ 3.0, 0.0, 1.0, 0.0 },
-            [4]f32{ 2.0, 3.0, 3.0, 1.0 },
+            [4]f32{ 2.0, 5.0, 3.0, 1.0 },
         },
         [4][4]f32{
-            [4]f32{ 4.0, 2.0, 6.0, 5.0 },
+            [4]f32{ 3.0, 2.0, 7.0, 5.0 },
             [4]f32{ 0.0, 1.0, 4.0, 3.0 },
             [4]f32{ 4.0, 2.0, 6.0, 2.0 },
             [4]f32{ 0.0, 1.0, 4.0, 5.0 },
@@ -931,19 +937,28 @@ test "Pooling" {
 
     std.debug.print("result: {f}\n", .{result});
 
-    const result_view = result.view();
+    const result_c = try result.contiguous();
+    defer result_c.deinit();
 
-    const expected = try tensor.fromArray(allocator, [1][1][4][4]f32{
-        [1][4][4]f32{[4][4]f32{
-            [4]f32{ 32, 51, 32, 7 },
-            [4]f32{ 15, 43, 47, 32 },
-            [4]f32{ 26, 17, 38, 17 },
-            [4]f32{ 27, 26, 13, 10 },
-        }},
+    const expected = try tensor.fromArray(allocator, [1][3][2][2]f32{
+        [3][2][2]f32{
+            [2][2]f32{
+                .{ 2.0, 8.0 },
+                .{ 3.0, 4.0 },
+            },
+            [2][2]f32{
+                .{ 4.0, 6.0 },
+                .{ 5.0, 3.0 },
+            },
+            [2][2]f32{
+                .{ 3.0, 7.0 },
+                .{ 4.0, 6.0 },
+            },
+        },
     }, &shape_env);
     defer expected.deinit();
-    const expected_view = expected.view();
+    std.debug.print("expected: {f}\n", .{expected});
 
-    const equal_res = expected_view.equal(&result_view);
+    const equal_res = expected.equal(&result_c);
     try std.testing.expect(equal_res);
 }

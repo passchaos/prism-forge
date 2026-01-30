@@ -19,7 +19,6 @@ const parseSpec = shape_expr.parseSpec;
 pub fn TensorView(comptime T: type) type {
     return struct {
         owner: *const anyopaque,
-        is_contiguous: bool,
         allocator: std.mem.Allocator,
         is_owned: bool,
         shape: []const usize,
@@ -51,7 +50,6 @@ pub fn TensorView(comptime T: type) type {
 
             return Self{
                 .owner = self.owner,
-                .is_contiguous = self.is_contiguous,
                 .allocator = self.allocator,
                 .is_owned = true,
                 .shape = self.shape,
@@ -64,10 +62,6 @@ pub fn TensorView(comptime T: type) type {
             if (self.data.len != other.data.len) {
                 std.debug.print("self data len: {} other data len: {}\n", .{ self.data.len, other.data.len });
                 return error.ShapeMismatch;
-            }
-
-            if (!self.is_contiguous or !other.is_contiguous) {
-                return error.NotContiguous;
             }
         }
 
@@ -1429,6 +1423,10 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
         }
 
         pub fn clone(self: *const Self) !Self {
+            if (!self.isContiguous()) {
+                return try self.contiguous();
+            }
+
             const layout = self.layout;
             const storage = try self.storage.deepCopy();
 
@@ -1470,10 +1468,13 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
             return Tensor(target_shape_expr, T).fromDataImpl(new_layout, storage, self._storage_offset);
         }
 
-        pub fn view(self: *const Self) TensorView(T) {
+        pub fn view(self: *const Self) !TensorView(T) {
+            if (!self.isContiguous()) {
+                return error.NotContiguous;
+            }
+
             return TensorView(T){
                 .owner = self,
-                .is_contiguous = self.isContiguous(),
                 .is_owned = false,
                 .allocator = self.s_allocator(),
                 .shape = self.shapeRef(),
@@ -1759,23 +1760,24 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
             return self.layout.isContiguous();
         }
 
-        pub fn equal(self: *const Self, other: *const Self) bool {
-            if (!std.mem.eql(usize, &self.shape(), &other.shape())) return false;
+        pub fn equal(self: *const Self, other: anytype) bool {
+            const self_c = self.contiguous() catch |err| {
+                std.log.err("Error while making lhs contiguous: {}", .{err});
+                return false;
+            };
 
-            var self_iter = self.shapeIter();
+            defer self_c.deinit();
 
-            while (self_iter.next()) |idx| {
-                const sv = self.getData(idx) catch unreachable;
-                const ov = other.getData(idx) catch unreachable;
+            const other_c = other.contiguous() catch |err| {
+                std.log.err("Error while making rhs contiguous: {}", .{err});
+                return false;
+            };
+            defer other_c.deinit();
 
-                switch (@typeInfo(T)) {
-                    .array => |ai| return std.mem.eql(ai.child, &sv, &ov),
-                    else => return sv == ov,
-                }
-                if (sv != ov) return false;
-            }
+            const self_v = self_c.view() catch unreachable;
+            const other_v = other_c.view() catch unreachable;
 
-            return true;
+            return self_v.equal(&other_v);
         }
 
         pub fn approxEqual(self: Self, other: Self, relEps: T, absEps: T) bool {
