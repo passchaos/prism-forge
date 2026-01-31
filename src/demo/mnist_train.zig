@@ -6,6 +6,7 @@ const log = @import("../log.zig");
 const plot = @import("../plot.zig");
 
 const conv_net = @import("conv_net.zig");
+const mlp = @import("mlp.zig");
 const mnist = @import("../mnist.zig");
 
 const SizeExpr = shape_expr.SizeExpr;
@@ -51,6 +52,15 @@ pub fn trainNet(
     const test_labels = datas.test_labels;
     defer test_labels.deinit();
 
+    const C = comptime SizeExpr.static(1);
+    const H = comptime SizeExpr.static(28);
+    const W = comptime SizeExpr.static(28);
+
+    const train_images_c = try train_images.reshape(&.{ train_data_count_expr, C, H, W });
+    defer train_images_c.deinit();
+    const test_images_c = try test_images.reshape(&.{ test_data_count_expr, C, H, W });
+    defer test_images_c.deinit();
+
     log.print(@src(), "train_images: {f} train_labels: {f}\n", .{ train_images.layout, train_labels.layout });
 
     // var train_loss_list = try std.ArrayList(DT).initCapacity(allocator, 100);
@@ -71,9 +81,65 @@ pub fn trainNet(
     const optimizer_t = optim.Optimizer(DT);
 
     {
-        const C = comptime SizeExpr.static(1);
-        const H = comptime SizeExpr.static(28);
-        const W = comptime SizeExpr.static(28);
+        var net = try mlp.MultiLayerNet(
+            batch_size_expr,
+            &.{ C, H, W },
+            &.{SizeExpr.static(100)},
+            num_classes_expr,
+            DT,
+        ).init(allocator, .He, &shape_env, null);
+        defer net.deinit();
+
+        for (0..iters_num) |idx| {
+            try shape_env.bindGlobal(&batch_size_expr.Sym, batch_size);
+
+            const batch_mask = try tensor.rand(
+                allocator,
+                &.{batch_size_expr},
+                &shape_env,
+                @as(usize, 0),
+                train_size,
+            );
+            defer batch_mask.deinit();
+
+            const batch_indices = batch_mask.dataSliceRaw();
+
+            const x_batch = try train_images_c.indexSelect(0, batch_size_expr, batch_indices);
+            defer x_batch.deinit();
+            const t_batch = try train_labels.indexSelect(0, batch_size_expr, batch_indices);
+            defer t_batch.deinit();
+
+            var adam = optimizer_t{ .ADAM = optim.Adam(DT).init(learning_rate / 10.0, 0.9, 0.999, allocator) };
+            defer adam.deinit();
+
+            const grads1 = try net.gradient(&x_batch, &t_batch);
+            defer grads1.deinit();
+            try adam.update(grads1.weights, grads1.grads);
+
+            try shape_env.bindGlobal(&batch_size_expr.Sym, test_images.shape()[0]);
+            const loss_idx = try tensor.arange(
+                allocator,
+                @as(usize, test_images.shape()[0]),
+                shape_expr.makeSymbol(.{ .name = "len" }),
+                &shape_env,
+                .{},
+            );
+            defer loss_idx.deinit();
+
+            const idx_loss = loss_idx.dataSliceRaw();
+
+            const loss_x = try test_images_c.indexSelect(0, batch_size_expr, idx_loss);
+            defer loss_x.deinit();
+            const loss_t = try test_labels.indexSelect(0, batch_size_expr, idx_loss);
+            defer loss_t.deinit();
+            const loss = try net.loss(&loss_x, &loss_t);
+
+            try plot.appendData("MLP", &.{@as(f64, @floatFromInt(idx))}, &.{loss});
+            log.print(@src(), "MLP: idx= {} loss= {}\n", .{ idx, loss });
+        }
+    }
+
+    {
         const FN = comptime SizeExpr.static(30);
         const FP = comptime [2]SizeExpr{ SizeExpr.static(5), SizeExpr.static(5) };
         const PADS = comptime [4]SizeExpr{
@@ -83,11 +149,6 @@ pub fn trainNet(
             SizeExpr.static(0),
         };
         const STRIDE = comptime SizeExpr.static(1);
-
-        const train_images_conv = try train_images.reshape(&.{ train_data_count_expr, C, H, W });
-        defer train_images_conv.deinit();
-        const test_images_conv = try test_images.reshape(&.{ test_data_count_expr, C, H, W });
-        defer test_images_conv.deinit();
 
         var conv_net1 = try conv_net.ConvNet(
             batch_size_expr,
@@ -108,6 +169,7 @@ pub fn trainNet(
         defer conv_net1.deinit();
 
         for (0..iters_num) |idx| {
+            try shape_env.bindGlobal(&batch_size_expr.Sym, batch_size);
             const batch_mask = try tensor.rand(
                 allocator,
                 &.{batch_size_expr},
@@ -119,7 +181,7 @@ pub fn trainNet(
 
             const batch_indices = batch_mask.dataSliceRaw();
 
-            const x_batch = try train_images_conv.indexSelect(0, batch_size_expr, batch_indices);
+            const x_batch = try train_images_c.indexSelect(0, batch_size_expr, batch_indices);
             defer x_batch.deinit();
             const t_batch = try train_labels.indexSelect(0, batch_size_expr, batch_indices);
             defer t_batch.deinit();
@@ -132,11 +194,12 @@ pub fn trainNet(
             try adam.update(weight_grad.weights, weight_grad.grads);
 
             {
+                try shape_env.bindGlobal(&batch_size_expr.Sym, test_images.shape()[0]);
                 const loss_idx = try tensor.arange(allocator, @as(usize, batch_size), shape_expr.makeSymbol(.{ .name = "len" }), &shape_env, .{});
                 defer loss_idx.deinit();
 
                 const idx_loss = loss_idx.dataSliceRaw();
-                const loss_x = try test_images_conv.indexSelect(0, batch_size_expr, idx_loss);
+                const loss_x = try test_images_c.indexSelect(0, batch_size_expr, idx_loss);
                 defer loss_x.deinit();
                 const loss_t = try test_labels.indexSelect(0, batch_size_expr, idx_loss);
                 defer loss_t.deinit();

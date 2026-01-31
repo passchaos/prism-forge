@@ -327,6 +327,12 @@ pub fn Dropout(comptime shape_expr_a: []const SizeExpr, comptime T: type) type {
         dropout_ratio: f32,
         mask: ?tensor.Tensor(shape_expr_a, T),
 
+        pub fn deinit(self: *const Self) void {
+            if (self.mask) |m_r| {
+                m_r.deinit();
+            }
+        }
+
         pub fn init(dropout_ratio: f32) Self {
             return Self{
                 .dropout_ratio = dropout_ratio,
