@@ -14,10 +14,11 @@ pub const Layer = enum {
 };
 
 pub fn Relu(comptime shape: []const SizeExpr, comptime T: type) type {
-    const Tensor = tensor.Tensor(shape, T);
-    const BoolTensor = tensor.Tensor(shape, bool);
-
     return struct {
+        pub const S = shape;
+        const Tensor = tensor.Tensor(S, T);
+        const BoolTensor = tensor.Tensor(S, bool);
+
         tag: Layer = Layer.Relu,
         mask: ?BoolTensor = null,
 
@@ -58,98 +59,39 @@ pub fn AffineWeight(comptime T: type) type {
     return union(enum) { Std: T, Xavier, He };
 }
 
-pub fn AffineWeightGradView(comptime T: type) type {
+pub fn Affine(
+    comptime B_S: SizeExpr,
+    comptime I_S: []const SizeExpr,
+    comptime O_S: SizeExpr,
+    comptime T: type,
+) type {
     return struct {
-        w_view: tensor.TensorView(T),
-        dw_view: tensor.TensorView(T),
-        b_view: tensor.TensorView(T),
-        db_view: tensor.TensorView(T),
-    };
-}
+        const I_S_FLAT = shape_expr.product(I_S);
 
-pub fn Affine(comptime batch_size: SizeExpr, comptime input_size: SizeExpr, comptime output_size: SizeExpr, comptime T: type) type {
-    const Tensor = tensor.Tensor(&.{ batch_size, input_size }, T);
-    const TensorW = tensor.Tensor(&.{ input_size, output_size }, T);
-    const TensorB = tensor.Tensor(&.{ SizeExpr.static(1), output_size }, T);
-    const TensorG = tensor.Tensor(&.{ batch_size, output_size }, T);
-
-    return struct {
         tag: Layer = Layer.Affine,
-        w: TensorW,
-        b: TensorB,
-        x: ?Tensor = null,
-        dw: ?TensorW = null,
-        db: ?TensorB = null,
+        w: tensor.Tensor(&.{ I_S_FLAT, O_S }, T),
+        b: tensor.Tensor(&.{ SizeExpr.static(1), O_S }, T),
+        x: ?tensor.Tensor(&.{ B_S, I_S_FLAT }, T) = null,
+        dw: ?tensor.Tensor(&.{ I_S_FLAT, O_S }, T) = null,
+        db: ?tensor.Tensor(&.{ SizeExpr.static(1), O_S }, T) = null,
 
         const Self = @This();
 
-        pub fn take_dinfo(self: *Self) struct { dw: ?TensorW, db: ?TensorB } {
-            const dw_r = self.dw;
-            const dw_b = self.db;
+        pub fn forward(
+            self: *Self,
+            x: *const tensor.Tensor(&[1]SizeExpr{B_S} ++ I_S, T),
+        ) !tensor.Tensor(&.{ B_S, O_S }, T) {
+            const x_c = try x.reshape(&.{ B_S, I_S_FLAT });
+            defer x_c.deinit();
 
-            self.dw = null;
-            self.db = null;
-
-            return .{
-                .dw = dw_r,
-                .db = dw_b,
-            };
-        }
-
-        pub fn deinit(self: *Self) void {
-            self.w.deinit();
-
-            self.b.deinit();
+            const x_c_r = try x_c.contiguous();
 
             if (self.x) |x_r| {
                 x_r.deinit();
             }
+            self.x = x_c_r;
 
-            if (self.dw) |dw_r| {
-                dw_r.deinit();
-            }
-
-            if (self.db) |db_r| {
-                db_r.deinit();
-            }
-        }
-
-        pub fn init(allocator: std.mem.Allocator, shape_env: *const shape_expr.ShapeEnv, weight_init: AffineWeight(T)) !Self {
-            var w = try tensor.randNorm(allocator, &.{ input_size, output_size }, shape_env, 0.0, 1.0);
-            const scale = switch (weight_init) {
-                .Std => |init_std| init_std,
-                .Xavier => blk: {
-                    const fan_in = try input_size.eval(shape_env);
-                    const scale = @sqrt(2.0 / @as(T, @floatFromInt(fan_in)));
-                    break :blk scale;
-                },
-                .He => blk: {
-                    const fan_in = try input_size.eval(shape_env);
-                    const scale = @sqrt(2.0 / @as(T, @floatFromInt(fan_in)));
-                    break :blk scale;
-                },
-            };
-            w.mulScalar_(scale);
-
-            const b = try tensor.zeros(allocator, T, &.{ shape_expr.SizeExpr.static(1), output_size }, shape_env);
-
-            // log.print(@src(), "init affine layout: w= {f} b= {f}\n", .{ w.layout, b.layout });
-
-            return Self{
-                .w = w,
-                .b = b,
-            };
-        }
-
-        pub fn forward(self: *Self, x: *const Tensor) !TensorG {
-            const x_c = try x.clone();
-
-            if (self.x) |x_r| {
-                x_r.deinit();
-            }
-            self.x = x_c;
-
-            var out = try x.matmul(&self.w);
+            var out = try x_c_r.matmul(&self.w);
             const broadcasted_b = self.b.broadcastTo(@TypeOf(out).S);
             defer broadcasted_b.deinit();
 
@@ -158,11 +100,15 @@ pub fn Affine(comptime batch_size: SizeExpr, comptime input_size: SizeExpr, comp
             return out;
         }
 
-        pub fn backward(self: *Self, dout: *const TensorG) !Tensor {
+        pub fn backward(
+            self: *Self,
+            dout: *const tensor.Tensor(&.{ B_S, O_S }, T),
+        ) !tensor.Tensor(&[1]SizeExpr{B_S} ++ I_S, T) {
             const w_t = self.w.transpose();
             defer w_t.deinit();
 
             const dx = try dout.matmul(&w_t);
+            defer dx.deinit();
 
             const x_t = self.x.?.transpose();
             defer x_t.deinit();
@@ -180,11 +126,196 @@ pub fn Affine(comptime batch_size: SizeExpr, comptime input_size: SizeExpr, comp
             self.dw = n_dw;
             self.db = n_db;
 
+            const dx1 = try dx.reshape(&[1]SizeExpr{B_S} ++ I_S);
+
             // std.debug.print("backward: dw layout= {f}\n", .{n_dw.layout});
 
-            return dx;
+            return dx1;
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.w.deinit();
+            self.b.deinit();
+
+            if (self.x) |x_r| {
+                x_r.deinit();
+            }
+
+            if (self.dw) |dw_r| {
+                dw_r.deinit();
+            }
+
+            if (self.db) |db_r| {
+                db_r.deinit();
+            }
+        }
+
+        pub fn init(
+            allocator: std.mem.Allocator,
+            shape_env: *const shape_expr.ShapeEnv,
+            weight_init: AffineWeight(T),
+        ) !Self {
+            const w = try tensor.randNorm(
+                allocator,
+                &.{ I_S_FLAT, O_S },
+                shape_env,
+                @as(T, 0.0),
+                1.0,
+            );
+
+            const b = try tensor.zeros(
+                allocator,
+                T,
+                &.{ SizeExpr.static(1), O_S },
+                shape_env,
+            );
+
+            return try Self.initImpl(shape_env, weight_init, w, b);
+        }
+
+        pub fn initImpl(
+            shape_env: *const shape_expr.ShapeEnv,
+            weight_init: AffineWeight(T),
+            w: tensor.Tensor(&.{ I_S_FLAT, O_S }, T),
+            b: tensor.Tensor(&.{ SizeExpr.static(1), O_S }, T),
+        ) !Self {
+            const scale = switch (weight_init) {
+                .Std => |init_std| init_std,
+                .Xavier => blk: {
+                    const fan_in = try I_S_FLAT.eval(shape_env);
+                    const scale = @sqrt(2.0 / @as(T, @floatFromInt(fan_in)));
+                    break :blk scale;
+                },
+                .He => blk: {
+                    const fan_in = try I_S_FLAT.eval(shape_env);
+                    const scale = @sqrt(2.0 / @as(T, @floatFromInt(fan_in)));
+                    break :blk scale;
+                },
+            };
+
+            var w_i = w;
+            w_i.mulScalar_(scale);
+
+            // log.print(@src(), "init affine layout: w= {f} b= {f}\n", .{ w.layout, b.layout });
+
+            return Self{
+                .w = w_i,
+                .b = b,
+            };
         }
     };
+}
+
+test "affine_relu_softmax_loss" {
+    const allocator = std.testing.allocator;
+
+    var shape_env = try shape_expr.ShapeEnv.init(allocator);
+    defer shape_env.deinit();
+
+    const B_S = comptime SizeExpr.sym(.{ .name = "batch_size" });
+    const I_SIZE = comptime SizeExpr.static(2);
+    const O_SIZE = comptime SizeExpr.static(5);
+
+    try shape_env.bind(&B_S.Sym, 3);
+
+    const AffineT = Affine(
+        B_S,
+        &.{I_SIZE},
+        O_SIZE,
+        f64,
+    );
+    const ReluT = Relu(&.{ B_S, O_SIZE }, f64);
+    const SoftWithLossT = SoftmaxWithLoss(
+        &.{ B_S, O_SIZE },
+        f64,
+    );
+
+    const w = try tensor.arange(
+        allocator,
+        10.0,
+        shape_expr.makeSymbol(.{ .name = "w_len" }),
+        &shape_env,
+        .{},
+    );
+    defer w.deinit();
+
+    const w1 = try w.reshape(&.{ I_SIZE, O_SIZE });
+    // defer w1.deinit();
+
+    const ab = try tensor.arange(
+        allocator,
+        5.0,
+        shape_expr.makeSymbol(.{ .name = "ab_len" }),
+        &shape_env,
+        .{},
+    );
+    defer ab.deinit();
+
+    const ab1 = try ab.reshape(&.{ SizeExpr.static(1), O_SIZE });
+    // defer ab1.deinit();
+
+    var affine = try AffineT.initImpl(
+        &shape_env,
+        AffineWeight(f64){ .Std = 0.01 },
+        w1,
+        ab1,
+    );
+    defer affine.deinit();
+
+    var relu = ReluT.init();
+    defer relu.deinit();
+
+    var swl = SoftWithLossT.init();
+    defer swl.deinit();
+
+    const x = try tensor.arange(
+        allocator,
+        6.0,
+        shape_expr.makeSymbol(.{ .name = "len" }),
+        &shape_env,
+        .{},
+    );
+    defer x.deinit();
+
+    const x1 = try x.reshape(&.{ B_S, I_SIZE });
+    defer x1.deinit();
+
+    std.debug.print("input: {f}\n", .{x1});
+    const f0 = try affine.forward(&x1);
+    defer f0.deinit();
+
+    const f1 = try relu.forward(&f0);
+    defer f1.deinit();
+
+    std.debug.print("f1: {f}\n", .{f1});
+
+    const t = try tensor.fromArray(allocator, [3][5]f64{
+        .{ 0, 0, 0, 0, 1 },
+        .{ 0, 0, 0, 1, 0 },
+        .{ 1, 0, 0, 0, 0 },
+    }, &shape_env);
+    defer t.deinit();
+
+    const t1 = try t.reshape(&.{ B_S, O_SIZE });
+    defer t1.deinit();
+
+    const f2 = try swl.forward(&f1, &t1);
+    std.debug.print("f2: {}\n", .{f2});
+
+    const b2 = try swl.backward();
+    defer b2.deinit();
+    std.debug.print("b2: {f}\n", .{b2});
+
+    const b1 = try relu.backward(&b2);
+    defer b1.deinit();
+
+    std.debug.print("b1: {f}\n", .{b1});
+
+    const b0 = try affine.backward(&b1);
+    defer b0.deinit();
+
+    std.debug.print("b0: {f}\n", .{b0});
+    // try std.testing.expectEqualSlices(usize, &.{ 2, 5 }, b0.shapes());
 }
 
 pub fn Dropout(comptime shape_expr_a: []const SizeExpr, comptime T: type) type {
@@ -292,18 +423,27 @@ pub fn SoftmaxWithLoss(comptime shape: []const SizeExpr, comptime T: type) type 
 pub fn Convolution(
     comptime N: SizeExpr,
     comptime C: SizeExpr,
-    comptime H: SizeExpr,
-    comptime W: SizeExpr,
+    comptime IP: [2]SizeExpr,
     comptime FN: SizeExpr,
-    comptime FH: SizeExpr,
-    comptime FW: SizeExpr,
-    comptime pads: [4]SizeExpr,
-    comptime stride: SizeExpr,
+    comptime FP: [2]SizeExpr,
+    comptime PADS: [4]SizeExpr,
+    comptime STRIDE: SizeExpr,
     comptime T: type,
 ) type {
     return struct {
-        const F_OH = H.add(pads[2]).add(pads[3]).sub(FH).div(stride).add(SizeExpr.static(1));
-        const F_OW = W.add(pads[0]).add(pads[1]).sub(FW).div(stride).add(SizeExpr.static(1));
+        const H = IP[0];
+        const W = IP[1];
+        const FH = FP[0];
+        const FW = FP[1];
+
+        const F_OP = dimsPadStrideResult(
+            &IP,
+            FP,
+            PADS,
+            STRIDE,
+        );
+        const F_OH = F_OP[0];
+        const F_OW = F_OP[1];
 
         const IM2COL_M = N.mul(F_OH).mul(F_OW);
         const IM2COL_K = FH.mul(FW).mul(C);
@@ -313,7 +453,7 @@ pub fn Convolution(
         const IT = tensor.Tensor(&.{ N, C, H, W }, T);
         const OT = tensor.Tensor(&.{ N, FN, F_OH, F_OW }, T);
 
-        const ImSE = utils.tensor.computePaddedShape(&.{ N, C, H, W }, &pads);
+        const ImSE = utils.tensor.computePaddedShape(&.{ N, C, H, W }, &PADS);
         const ImT = tensor.Tensor(&ImSE, T);
 
         const Self = @This();
@@ -362,8 +502,8 @@ pub fn Convolution(
                 W,
                 FH,
                 FW,
-                pads,
-                stride,
+                PADS,
+                STRIDE,
                 T,
                 self.allocator,
                 data,
@@ -390,7 +530,7 @@ pub fn Convolution(
             data: *const tensor.Tensor(&.{ N, C, H, W }, T),
             shape_env: *const shape_expr.ShapeEnv,
         ) !tensor.Tensor(&.{ N, FN, F_OH, F_OW }, T) {
-            const padded_data = try data.pad(&pads, @as(T, 0.0));
+            const padded_data = try data.pad(&PADS, @as(T, 0.0));
             defer padded_data.deinit();
 
             const n_v = try N.eval(shape_env);
@@ -401,7 +541,12 @@ pub fn Convolution(
             const oh_v = try F_OH.eval(shape_env);
             const ow_v = try F_OW.eval(shape_env);
 
-            var result = try tensor.zeros(self.allocator, T, &.{ N, FN, F_OH, F_OW }, shape_env);
+            var result = try tensor.zeros(
+                self.allocator,
+                T,
+                &.{ N, FN, F_OH, F_OW },
+                shape_env,
+            );
 
             for (0..n_v) |n_i| {
                 for (0..fn_v) |fn_i| {
@@ -469,8 +614,8 @@ pub fn Convolution(
                 W,
                 FH,
                 FW,
-                pads,
-                stride,
+                PADS,
+                STRIDE,
                 T,
                 self.allocator,
                 x,
@@ -493,6 +638,15 @@ pub fn Convolution(
             // @setEvalBranchQuota(20000);
             // @compileLog("0 dim: " ++ std.fmt.comptimePrint("{f} {f}\n", .{ @TypeOf(cols).S[0], IM2COL_M }));
             // }
+
+            if (self.x_col) |x_col_r| {
+                x_col_r.deinit();
+            }
+
+            if (self.w_col) |w_col_r| {
+                w_col_r.deinit();
+            }
+
             self.x_col = cols;
             self.w_col = filters_w;
 
@@ -525,11 +679,11 @@ pub fn Convolution(
             const dw_t = dw.transpose();
             defer dw_t.deinit();
 
-            self.dw = dw_t.reshape(&.{ FN, C, FH, FW });
+            self.dw = try dw_t.reshape(&.{ FN, C, FH, FW });
 
             const w_col_t = self.w_col.?.transpose();
             defer w_col_t.deinit();
-            const dcol = try dout2.matmul(w_col_t);
+            const dcol = try dout2.matmul(&w_col_t);
             defer dcol.deinit();
 
             const dx = try tools.col2im(
@@ -539,11 +693,11 @@ pub fn Convolution(
                 W,
                 FH,
                 FW,
-                pads,
-                stride,
+                PADS,
+                STRIDE,
                 T,
                 self.allocator,
-                dcol,
+                &dcol,
                 self.shape_env,
             );
 
@@ -580,11 +734,9 @@ test "Convolution" {
         const Conv = Convolution(
             N,
             C,
-            H,
-            W,
+            [2]SizeExpr{ H, W },
             FN,
-            FH,
-            FW,
+            [2]SizeExpr{ FH, FW },
             [4]SizeExpr{ PAD, PAD, PAD, PAD },
             STRIDE,
             f32,
@@ -634,9 +786,19 @@ test "Convolution" {
 
         const filter_f = try filter.reshape(&.{ FN, C, FH, FW });
 
-        const b = try tensor.full(allocator, &.{FN}, &shape_env, @as(f32, 3.0));
+        const b = try tensor.full(
+            allocator,
+            &.{FN},
+            &shape_env,
+            @as(f32, 3.0),
+        );
 
-        var conv_layer = Conv.initImpl(allocator, &shape_env, filter_f, b);
+        var conv_layer = Conv.initImpl(
+            allocator,
+            &shape_env,
+            filter_f,
+            b,
+        );
         defer conv_layer.deinit();
 
         var result = try conv_layer.forward(&w_f);
@@ -644,7 +806,9 @@ test "Convolution" {
 
         std.debug.print("result: {f}\n", .{result});
 
-        const result_view = result.view();
+        const result_c = try result.contiguous();
+        defer result_c.deinit();
+        const result_view = try result_c.view();
 
         const expected = try tensor.fromArray(allocator, [1][1][4][4]f32{
             [1][4][4]f32{[4][4]f32{
@@ -655,109 +819,73 @@ test "Convolution" {
             }},
         }, &shape_env);
         defer expected.deinit();
-        const expected_view = expected.view();
+        const expected_view = try expected.view();
 
         const equal_res = expected_view.equal(&result_view);
         try std.testing.expect(equal_res);
     }
 }
+pub fn dimPadStrideResult(
+    comptime L: SizeExpr,
+    comptime F_L: SizeExpr,
+    comptime L_PAD: SizeExpr,
+    comptime R_PAD: SizeExpr,
+    comptime STRIDE: SizeExpr,
+) SizeExpr {
+    return L.add(L_PAD).add(R_PAD).sub(F_L).div(STRIDE).add(SizeExpr.static(1));
+}
 
-test "affine_relu" {
-    const allocator = std.testing.allocator;
-
-    const AffineT = Affine(
-        SizeExpr.sym(.{ .name = "batch_size" }),
-        SizeExpr.static(20),
-        SizeExpr.static(50),
-        f64,
-    );
-    const ReluT = Relu(&.{ SizeExpr.sym(.{ .name = "batch_size" }), SizeExpr.static(50) }, f64);
-    const SoftWithLossT = SoftmaxWithLoss(&.{ SizeExpr.sym(.{ .name = "batch_size" }), SizeExpr.static(50) }, f64);
-
-    const w = try tensor.arange(allocator, 10.0, .{});
-    defer w.deinit();
-
-    const w1 = try w.reshape(&.{ SizeExpr.static(2), SizeExpr.static(5) });
-    // defer w1.deinit();
-
-    const ab = try tensor.arange(allocator, 5.0, .{});
-    defer ab.deinit();
-
-    const ab1 = try ab.reshape([2]usize{ 1, 5 });
-    // defer ab1.deinit();
-
-    var affine = AffineT.init(w1, ab1);
-    defer affine.deinit();
-
-    var relu = ReluT.init();
-    defer relu.deinit();
-
-    var swl = SoftWithLossT.init();
-    defer swl.deinit();
-
-    const x = try tensor.arange(allocator, f64, .{ .end = 6 });
-    defer x.deinit();
-
-    const x1 = try x.reshape([2]usize{ 3, 2 });
-    defer x1.deinit();
-
-    const t = try tensor.fromArray(allocator, [3][5]f64{
-        .{ 0, 0, 0, 0, 1 },
-        .{ 0, 0, 0, 1, 0 },
-        .{ 1, 0, 0, 0, 0 },
-    });
-    defer t.deinit();
-
-    std.debug.print("input: {f}\n", .{x1});
-    const f0 = try affine.forward(&x1);
-    defer f0.deinit();
-
-    const f1 = try relu.forward(&f0);
-    defer f1.deinit();
-
-    std.debug.print("f1: {f}\n", .{f1});
-
-    const f2 = try swl.forward(&f1, &t);
-    defer f2.deinit();
-
-    std.debug.print("f2: {f}\n", .{f2});
-
-    const b2 = try swl.backward();
-    defer b2.deinit();
-    std.debug.print("b2: {f}\n", .{b2});
-
-    const b1 = try relu.backward(&b2);
-    defer b1.deinit();
-
-    std.debug.print("b1: {f}\n", .{b1});
-
-    const b0 = try affine.backward(&b1);
-    defer b0.deinit();
-
-    std.debug.print("b0: {f}\n", .{b0});
-    // try std.testing.expectEqualSlices(usize, &.{ 2, 5 }, b0.shapes());
+pub fn dimsPadStrideResult(
+    comptime PLANE: []const SizeExpr,
+    comptime FILTER: [PLANE.len]SizeExpr,
+    comptime PADS: [2 * PLANE.len]SizeExpr,
+    comptime STRIDE: SizeExpr,
+) [PLANE.len]SizeExpr {
+    var dims: [PLANE.len]SizeExpr = undefined;
+    for (0..PLANE.len) |i| {
+        dims[i] = dimPadStrideResult(
+            PLANE[i],
+            FILTER[i],
+            PADS[i * 2],
+            PADS[i * 2 + 1],
+            STRIDE,
+        );
+    }
+    return dims;
 }
 
 pub fn Pooling(
     comptime N: SizeExpr,
     comptime C: SizeExpr,
-    comptime H: SizeExpr,
-    comptime W: SizeExpr,
-    comptime FH: SizeExpr,
-    comptime FW: SizeExpr,
-    comptime pads: [4]SizeExpr,
-    comptime stride: SizeExpr,
+    comptime IP: [2]SizeExpr,
+    comptime FP: [2]SizeExpr,
+    comptime PADS: [4]SizeExpr,
+    comptime STRIDE: SizeExpr,
     comptime T: type,
 ) type {
     return struct {
-        const F_OH = H.add(pads[2]).add(pads[3]).sub(FH).div(stride).add(SizeExpr.static(1));
-        const F_OW = W.add(pads[0]).add(pads[1]).sub(FW).div(stride).add(SizeExpr.static(1));
+        const H = IP[0];
+        const W = IP[1];
+        const FH = FP[0];
+        const FW = FP[1];
+
+        const F_OP = dimsPadStrideResult(
+            &IP,
+            FP,
+            PADS,
+            STRIDE,
+        );
+        const F_OH = F_OP[0];
+        const F_OW = F_OP[1];
 
         const Self = @This();
 
         allocator: std.mem.Allocator,
         shape_env: *const shape_expr.ShapeEnv,
-        arg_max: ?tensor.Tensor(&.{ N.mul(F_OH).mul(F_OW).mul(C), SizeExpr.static(1) }, [2]usize) = null,
+        arg_max: ?tensor.Tensor(
+            &.{ N.mul(F_OH).mul(F_OW).mul(C), SizeExpr.static(1) },
+            [2]usize,
+        ) = null,
 
         pub fn deinit(self: *Self) void {
             if (self.arg_max) |arg_max| {
@@ -772,7 +900,10 @@ pub fn Pooling(
             };
         }
 
-        pub fn forward(self: *Self, x: *const tensor.Tensor(&.{ N, C, H, W }, T)) !tensor.Tensor(&.{ N, C, F_OH, F_OW }, T) {
+        pub fn forward(
+            self: *Self,
+            x: *const tensor.Tensor(&.{ N, C, H, W }, T),
+        ) !tensor.Tensor(&.{ N, C, F_OH, F_OW }, T) {
             const col_raw = try tools.im2col(
                 N,
                 C,
@@ -780,8 +911,8 @@ pub fn Pooling(
                 W,
                 FH,
                 FW,
-                pads,
-                stride,
+                PADS,
+                STRIDE,
                 T,
                 self.allocator,
                 x,
@@ -789,17 +920,17 @@ pub fn Pooling(
             );
             defer col_raw.deinit();
 
-            std.debug.print("col raw: {f}\n", .{col_raw});
+            // std.debug.print("col raw: {f}\n", .{col_raw});
 
             const col_data = try col_raw.reshape(&.{ N.mul(F_OH).mul(F_OW).mul(C), FH.mul(FW) });
             defer col_data.deinit();
 
-            std.debug.print("col data: {f}\n", .{col_data});
+            // std.debug.print("col data: {f}\n", .{col_data});
 
             const out1 = try col_data.max(1);
             defer out1.deinit();
 
-            std.debug.print("out1: {f}\n", .{out1});
+            // std.debug.print("out1: {f}\n", .{out1});
 
             const arg_out = try col_data.argMax(1);
 
@@ -809,28 +940,40 @@ pub fn Pooling(
             //     @compileLog("shape info: " ++ "arg_out= " ++ shape_expr.compLog(@TypeOf(arg_out).S));
             // }
 
+            if (self.arg_max) |arg_max_r| {
+                arg_max_r.deinit();
+            }
+
             self.arg_max = arg_out;
 
             const out2 = try out1.reshape(&.{ N, F_OH, F_OW, C });
             defer out2.deinit();
 
-            std.debug.print("out2: {f}\n", .{out2});
+            // std.debug.print("out2: {f}\n", .{out2});
             const out3 = out2.permute([4]usize{ 0, 3, 1, 2 });
 
-            std.debug.print("out3: {f}\n", .{out3});
+            // std.debug.print("out3: {f}\n", .{out3});
 
             return out3;
         }
 
-        pub fn backward(self: *Self, dout: *const tensor.Tensor(&.{ N, C, F_OH, F_OW }, T)) !tensor.Tensor(&.{ N, C, H, W }, T) {
+        pub fn backward(
+            self: *Self,
+            dout: *const tensor.Tensor(&.{ N, C, F_OH, F_OW }, T),
+        ) !tensor.Tensor(&.{ N, C, H, W }, T) {
             const dout1 = dout.permute([4]usize{ 0, 2, 3, 1 });
             defer dout1.deinit();
 
-            var dmax1 = try tensor.zeros(self.allocator, T, &.{ @TypeOf(dout1).sizeExpr(), FH.mul(FW) }, self.shape_env);
+            var dmax1 = try tensor.zeros(
+                self.allocator,
+                T,
+                &.{ @TypeOf(dout1).sizeExpr(), FH.mul(FW) },
+                self.shape_env,
+            );
             defer dmax1.deinit();
 
             for (self.arg_max.?.dataSliceRaw(), dout1.dataSliceRaw()) |arg_max, dout_v| {
-                try dmax1.setData(&arg_max, dout_v);
+                try dmax1.setData(arg_max, dout_v);
             }
 
             var dmax2 = try dmax1.reshape(&.{ N, F_OH, F_OW, C, FH, FW });
@@ -846,8 +989,8 @@ pub fn Pooling(
                 W,
                 FH,
                 FW,
-                pads,
-                stride,
+                PADS,
+                STRIDE,
                 T,
                 self.allocator,
                 &dcol,
@@ -886,10 +1029,8 @@ test "Pooling" {
     const Pool = Pooling(
         N,
         C,
-        H,
-        W,
-        FH,
-        FW,
+        [2]SizeExpr{ H, W },
+        [2]SizeExpr{ FH, FW },
         [4]SizeExpr{ PAD, PAD, PAD, PAD },
         STRIDE,
         f32,

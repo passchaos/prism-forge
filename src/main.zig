@@ -8,6 +8,8 @@ const layer = @import("nn/layer.zig");
 const log = @import("log.zig");
 const tools = @import("nn/tools.zig");
 
+const mnist_train = @import("demo/mnist_train.zig");
+
 pub fn logFn(
     comptime level: std.log.Level,
     comptime scope: @TypeOf(.enum_literal),
@@ -57,8 +59,13 @@ pub fn main() !void {
 
     // // try matmulDemo(allocator);
 
-    const t1 = try std.Thread.spawn(.{}, basic.twoLayerNetTrain, .{ allocator, 1000, 100, 0.01 });
+    // const t1 = try std.Thread.spawn(.{}, basic.twoLayerNetTrain, .{ allocator, 1000, 100, 0.01 });
 
+    const t1 = try std.Thread.spawn(
+        .{},
+        mnist_train.trainNet,
+        .{ allocator, 1000, 100, 0.01 },
+    );
     try plot.beginPlotLoop(allocator);
     t1.join();
     log.print(@src(), "finish main logic\n", .{});

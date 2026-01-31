@@ -32,7 +32,7 @@ pub fn TensorView(comptime T: type) type {
             return true;
         }
 
-        pub fn deinit(self: *Self) void {
+        pub fn deinit(self: *const Self) void {
             if (self.is_owned) {
                 self.allocator.free(self.data);
             }
@@ -1590,7 +1590,7 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
                         const start = try start_expr.eval(shape_env);
                         const end = try end_expr.eval(shape_env);
 
-                        std.debug.print("start: {} end: {}\n", .{ start, end });
+                        // std.debug.print("start: {} end: {}\n", .{ start, end });
 
                         if (start >= self.shape()[i] or end > self.shape()[i]) {
                             return error.RangeOutOfBounds;

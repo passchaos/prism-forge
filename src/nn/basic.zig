@@ -164,7 +164,7 @@ pub fn MultiLayerNet(
         const TensorII = Tensor2([2]SizeExpr{ batch_size, input_size });
         const TensorTI = Tensor2([2]SizeExpr{ batch_size, output_size });
 
-        const OutputLayer = layer.Affine(batch_size, hidden_sizes[hidden_sizes.len - 1], output_size, DT);
+        const OutputLayer = layer.Affine(batch_size, &.{hidden_sizes[hidden_sizes.len - 1]}, output_size, DT);
         const SoftmaxWithLossLayer = layer.SoftmaxWithLoss(&.{ batch_size, output_size }, DT);
 
         allocator: std.mem.Allocator,
@@ -206,7 +206,7 @@ pub fn MultiLayerNet(
             comptime var tmp_size = input_size;
 
             inline for (hidden_sizes, 0..) |hidden_size, i| {
-                const Affine = layer.Affine(batch_size, tmp_size, hidden_size, DT);
+                const Affine = layer.Affine(batch_size, &.{tmp_size}, hidden_size, DT);
                 const affine = try allocator.create(Affine);
 
                 affine.* = try Affine.init(allocator, shape_env, weight_init_std);
@@ -247,7 +247,7 @@ pub fn MultiLayerNet(
 
             comptime var tmp_size = input_size;
             inline for (hidden_sizes, self.hidden_affine_layers, self.hidden_relu_layers, self.hidden_dropout_layers) |hidden_size, affine, relu, dropout| {
-                const Affine = layer.Affine(batch_size, tmp_size, hidden_size, DT);
+                const Affine = layer.Affine(batch_size, &.{tmp_size}, hidden_size, DT);
                 const Relu = layer.Relu(&.{ batch_size, hidden_size }, DT);
                 const Dropout = layer.Dropout(&.{ batch_size, hidden_size }, DT);
 
@@ -347,7 +347,7 @@ pub fn MultiLayerNet(
 
             comptime var tmp_size = input_size;
             inline for (self.hidden_affine_layers, hidden_sizes, 0..) |affine, hidden_size, i| {
-                const Affine = layer.Affine(batch_size, tmp_size, hidden_size, DT);
+                const Affine = layer.Affine(batch_size, &.{tmp_size}, hidden_size, DT);
 
                 var affine_layer: *Affine = @ptrCast(@alignCast(affine));
 
@@ -388,7 +388,7 @@ pub fn MultiLayerNet(
                 const input_size_i = if (i == hidden_sizes.len - 1) input_size else hidden_sizes[reverse_idx - 1];
                 const output_size_i = hidden_sizes[reverse_idx];
 
-                const Affine = layer.Affine(batch_size, input_size_i, output_size_i, DT);
+                const Affine = layer.Affine(batch_size, &.{input_size_i}, output_size_i, DT);
                 const Relu = layer.Relu(&.{ batch_size, output_size_i }, DT);
                 const Dropout = layer.Dropout(&.{ batch_size, output_size_i }, DT);
 

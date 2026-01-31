@@ -54,7 +54,7 @@ pub fn im2col(
     const padded_data = try input_data.pad(&pads, @as(T, 0));
     defer padded_data.deinit();
 
-    std.debug.print("padded data: {f}\n", .{padded_data});
+    // std.debug.print("padded data: {f}\n", .{padded_data});
     const shape = padded_data.shape();
 
     const FILTER_OUTPUT_S = comptime computeChannelFilteredShape(H, W, FH, FW, pads, stride);
@@ -154,12 +154,14 @@ pub fn col2im(
         }
     }
 
-    return try result.sliceView(&.{
+    const result_s = try result.sliceView(&.{
         .All,
         .All,
         tensor.SliceExpr.range(pads[2], H.add(pads[2])),
         tensor.SliceExpr.range(pads[0], W.add(pads[0])),
     });
+
+    return result_s;
 }
 
 test "im2col" {

@@ -1,6 +1,23 @@
 const std = @import("std");
 const tensor = @import("../tensor.zig");
 
+pub fn WeightGradView(comptime T: type) type {
+    return struct {
+        allocator: std.mem.Allocator,
+        weights: []tensor.TensorView(T),
+        grads: []tensor.TensorView(T),
+
+        const Self = @This();
+
+        pub fn deinit(self: *const Self) void {
+            for (self.weights) |weight| weight.deinit();
+            for (self.grads) |grad| grad.deinit();
+            self.allocator.free(self.weights);
+            self.allocator.free(self.grads);
+        }
+    };
+}
+
 pub const Param = struct {
     data: anyopaque,
     grad: anyopaque,

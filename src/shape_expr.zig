@@ -217,6 +217,7 @@ pub const SizeExpr = union(enum) {
             //     else => {},
             // },
         }
+
         const boe = BinaryOpExpr{
             .tag = .Div,
             .lhs = &lhs,
@@ -238,6 +239,7 @@ pub const SizeExpr = union(enum) {
             },
             else => {},
         }
+
         const boe = BinaryOpExpr{
             .tag = .Mod,
             .lhs = &lhs,
@@ -256,6 +258,7 @@ pub const SizeExpr = union(enum) {
             },
             else => {},
         }
+
         const boe = BinaryOpExpr{
             .tag = .Max,
             .lhs = &lhs,
@@ -274,6 +277,7 @@ pub const SizeExpr = union(enum) {
             },
             else => {},
         }
+
         const boe = BinaryOpExpr{
             .tag = .Min,
             .lhs = &lhs,
