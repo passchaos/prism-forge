@@ -80,64 +80,84 @@ pub fn trainNet(
 
     const optimizer_t = optim.Optimizer(DT);
 
-    {
-        var net = try mlp.MultiLayerNet(
-            batch_size_expr,
-            &.{ C, H, W },
-            &.{SizeExpr.static(100)},
-            num_classes_expr,
-            DT,
-        ).init(allocator, .He, &shape_env, null);
-        defer net.deinit();
+    // {
+    //     var net = try mlp.MultiLayerNet(
+    //         batch_size_expr,
+    //         &.{ C, H, W },
+    //         &.{SizeExpr.static(100)},
+    //         num_classes_expr,
+    //         DT,
+    //     ).init(allocator, .He, &shape_env, null);
+    //     defer net.deinit();
 
-        for (0..iters_num) |idx| {
-            try shape_env.bindGlobal(&batch_size_expr.Sym, batch_size);
+    //     for (0..iters_num) |idx| {
+    //         try shape_env.bindGlobal(&batch_size_expr.Sym, batch_size);
 
-            const batch_mask = try tensor.rand(
-                allocator,
-                &.{batch_size_expr},
-                &shape_env,
-                @as(usize, 0),
-                train_size,
-            );
-            defer batch_mask.deinit();
+    //         const batch_mask = try tensor.rand(
+    //             allocator,
+    //             &.{batch_size_expr},
+    //             &shape_env,
+    //             @as(usize, 0),
+    //             train_size,
+    //         );
+    //         defer batch_mask.deinit();
 
-            const batch_indices = batch_mask.dataSliceRaw();
+    //         const batch_indices = batch_mask.dataSliceRaw();
 
-            const x_batch = try train_images_c.indexSelect(0, batch_size_expr, batch_indices);
-            defer x_batch.deinit();
-            const t_batch = try train_labels.indexSelect(0, batch_size_expr, batch_indices);
-            defer t_batch.deinit();
+    //         const x_batch = try train_images_c.indexSelect(0, batch_size_expr, batch_indices);
+    //         defer x_batch.deinit();
+    //         const t_batch = try train_labels.indexSelect(0, batch_size_expr, batch_indices);
+    //         defer t_batch.deinit();
 
-            var adam = optimizer_t{ .ADAM = optim.Adam(DT).init(learning_rate / 10.0, 0.9, 0.999, allocator) };
-            defer adam.deinit();
+    //         const epoch_count = @min(idx / (train_size / batch_size) + 1, 5);
+    //         var lr = learning_rate;
+    //         for (0..epoch_count) |_| {
+    //             lr *= 0.5;
+    //         }
 
-            const grads1 = try net.gradient(&x_batch, &t_batch);
-            defer grads1.deinit();
-            try adam.update(grads1.weights, grads1.grads);
+    //         var adam = optimizer_t{ .ADAM = optim.Adam(DT).init(lr, 0.9, 0.999, allocator) };
+    //         defer adam.deinit();
 
-            try shape_env.bindGlobal(&batch_size_expr.Sym, test_images.shape()[0]);
-            const loss_idx = try tensor.arange(
-                allocator,
-                @as(usize, test_images.shape()[0]),
-                shape_expr.makeSymbol(.{ .name = "len" }),
-                &shape_env,
-                .{},
-            );
-            defer loss_idx.deinit();
+    //         log.print(@src(), "mlp, before train\n", .{});
+    //         const grads1 = try net.gradient(&x_batch, &t_batch);
+    //         defer grads1.deinit();
+    //         log.print(@src(), "before gradient update\n", .{});
 
-            const idx_loss = loss_idx.dataSliceRaw();
+    //         try adam.update(grads1.weights, grads1.grads);
 
-            const loss_x = try test_images_c.indexSelect(0, batch_size_expr, idx_loss);
-            defer loss_x.deinit();
-            const loss_t = try test_labels.indexSelect(0, batch_size_expr, idx_loss);
-            defer loss_t.deinit();
-            const loss = try net.loss(&loss_x, &loss_t);
+    //         try shape_env.bindGlobal(&batch_size_expr.Sym, test_images.shape()[0]);
+    //         const loss_x = try test_images_c.reshape(&.{ batch_size_expr, C, H, W });
+    //         defer loss_x.deinit();
+    //         const loss_t = try test_labels.reshape(&.{ batch_size_expr, num_classes_expr });
+    //         defer loss_t.deinit();
+    //         // const loss_idx = try tensor.arange(
+    //         //     allocator,
+    //         //     @as(usize, test_images.shape()[0]),
+    //         //     shape_expr.makeSymbol(.{ .name = "len" }),
+    //         //     &shape_env,
+    //         //     .{},
+    //         // );
+    //         // defer loss_idx.deinit();
 
-            try plot.appendData("MLP", &.{@as(f64, @floatFromInt(idx))}, &.{loss});
-            log.print(@src(), "MLP: idx= {} loss= {}\n", .{ idx, loss });
-        }
-    }
+    //         // const idx_loss = loss_idx.dataSliceRaw();
+
+    //         // const loss_x = try test_images_c.indexSelect(0, batch_size_expr, idx_loss);
+    //         // defer loss_x.deinit();
+    //         // const loss_t = try test_labels.indexSelect(0, batch_size_expr, idx_loss);
+    //         // defer loss_t.deinit();
+
+    //         // std.debug.print("loss: x= {f} t= {f}\n", .{ loss_x.layout, loss_t.layout });
+    //         log.print(@src(), "before loss get\n", .{});
+    //         const loss = try net.loss(&loss_x, &loss_t);
+    //         log.print(@src(), "after loss get\n", .{});
+    //         // const accuracy = try net.accuracy(&loss_x, &loss_t);
+
+    //         try plot.appendData("MLP Loss", &.{@as(f64, @floatFromInt(idx))}, &.{loss});
+    //         // try plot.appendData("MLP Accuracy", &.{@as(f64, @floatFromInt(idx))}, &.{accuracy});
+
+    //         log.print(@src(), "MLP: idx= {} loss= {} accuracy= {}\n", .{ idx, loss, loss });
+    //     }
+    // }
 
     {
         const FN = comptime SizeExpr.static(30);
@@ -186,7 +206,13 @@ pub fn trainNet(
             const t_batch = try train_labels.indexSelect(0, batch_size_expr, batch_indices);
             defer t_batch.deinit();
 
-            var adam = optimizer_t{ .ADAM = optim.Adam(DT).init(learning_rate / 10.0, 0.9, 0.999, allocator) };
+            const epoch_count = @min(idx / (train_size / batch_size), 5);
+            var lr = learning_rate;
+            for (0..epoch_count) |_| {
+                lr *= 0.5;
+            }
+
+            var adam = optimizer_t{ .ADAM = optim.Adam(DT).init(lr, 0.9, 0.999, allocator) };
             defer adam.deinit();
 
             const weight_grad = try conv_net1.gradient(&x_batch, &t_batch);
@@ -195,7 +221,7 @@ pub fn trainNet(
 
             {
                 try shape_env.bindGlobal(&batch_size_expr.Sym, test_images.shape()[0]);
-                const loss_idx = try tensor.arange(allocator, @as(usize, batch_size), shape_expr.makeSymbol(.{ .name = "len" }), &shape_env, .{});
+                const loss_idx = try tensor.arange(allocator, @as(usize, test_images.shape()[0]), shape_expr.makeSymbol(.{ .name = "len" }), &shape_env, .{});
                 defer loss_idx.deinit();
 
                 const idx_loss = loss_idx.dataSliceRaw();
@@ -205,9 +231,11 @@ pub fn trainNet(
                 defer loss_t.deinit();
 
                 const loss = try conv_net1.loss(&loss_x, &loss_t);
-                try plot.appendData("ConvNet", &.{@as(f64, @floatFromInt(idx))}, &.{loss});
+                const accuracy = try conv_net1.accuracy(&loss_x, &loss_t);
+                try plot.appendData("ConvNet Loss", &.{@as(f64, @floatFromInt(idx))}, &.{loss});
+                try plot.appendData("ConvNet Accuracy", &.{@as(f64, @floatFromInt(idx))}, &.{accuracy});
 
-                log.print(@src(), "ConvNet: idx= {} loss= {}\n", .{ idx, loss });
+                log.print(@src(), "ConvNet: idx= {} lr= {} loss= {} accuracy= {}\n", .{ idx, lr, loss, accuracy });
             }
         }
     }

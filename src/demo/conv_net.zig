@@ -168,6 +168,31 @@ pub fn ConvNet(
             return try self.softmax_with_loss.forward(&affine2_out, t);
         }
 
+        pub fn accuracy(
+            self: *Self,
+            x: *const tensor.Tensor(&.{ N, C, IP[0], IP[1] }, T),
+            t: *const tensor.Tensor(&.{ N, OUTPUT_SIZE }, T),
+        ) !T {
+            const y = try self.predict(x);
+            defer y.deinit();
+
+            const y1 = try y.argMax(1);
+            defer y1.deinit();
+            const t1 = try t.argMax(1);
+            defer t1.deinit();
+
+            const eql_t = try y1.eql(&t1);
+            defer eql_t.deinit();
+
+            var eql_sum = try eql_t.sumAll();
+            defer eql_sum.deinit();
+
+            var eql_sum_div = try eql_sum.divScalar(@as(T, @floatFromInt(x.shape()[0])));
+            defer eql_sum_div.deinit();
+
+            return try eql_sum_div.dataItem();
+        }
+
         fn predict(
             self: *Self,
             x: *const tensor.Tensor(&.{ N, C, IP[0], IP[1] }, T),
