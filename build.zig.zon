@@ -32,10 +32,6 @@
     // Once all dependencies are fetched, `zig build` no longer requires
     // internet connectivity.
     .dependencies = .{
-        .dvui = .{
-            .url = "git+https://github.com/david-vanderson/dvui?ref=main#21bdf887f6bb7980841c043fe7abc6903e56d727",
-            .hash = "dvui-0.4.0-dev-AQFJmQzr2QAmt7EtAowpUC_jlBxmoo-kB5bO8xnEgc8p",
-        },
         .zeit = .{
             .url = "git+https://github.com/rockorager/zeit?ref=main#7ac64d72dbfb1a4ad549102e7d4e232a687d32d8",
             .hash = "zeit-0.6.0-5I6bk36tAgATpSl9wjFmRPMqYN2Mn0JQHgIcRNcqDpJA",
@@ -43,6 +39,10 @@
         .zdt = .{
             .url = "https://codeberg.org/FObersteiner/zdt/archive/v0.8.2-zig_0.15.tar.gz",
             .hash = "zdt-0.8.2-xr0_vAxbDwCls8V4MLlamv4JHrDkziMYnySAc2bL2n3t",
+        },
+        .dvui = .{
+            .url = "git+https://github.com/passchaos/dvui#0a3777bb91b0361e26340357426d7f2a00c75e45",
+            .hash = "dvui-0.4.0-dev-AQFJmbVS2wD3VAF4qAzbZ7IPeU2sA9v5MiUu8jyjLdpn",
         },
     },
     .paths = .{

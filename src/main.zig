@@ -64,7 +64,7 @@ pub fn main() !void {
     const t1 = try std.Thread.spawn(
         .{},
         mnist_train.trainNet,
-        .{ allocator, 5000, 100, 0.001 },
+        .{ allocator, 10000, 100, 0.001 },
     );
     try plot.beginPlotLoop(allocator);
     t1.join();

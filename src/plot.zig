@@ -169,11 +169,12 @@ fn plotImpl() !void {
         .x_axis = &x_axis,
         .y_axis = &y_axis,
         .border_thick = 1.0,
+        .legend_enabled = true,
     }, .{ .expand = .both });
     defer plot.deinit();
 
     while (data_iter_n.next()) |entry| {
-        var s = plot.line();
+        var s = plot.line(entry.key_ptr.*);
         defer s.deinit();
 
         for (entry.value_ptr.x.items, entry.value_ptr.y.items) |x, y| {

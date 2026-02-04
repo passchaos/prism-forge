@@ -206,11 +206,13 @@ pub fn trainNet(
             const t_batch = try train_labels.indexSelect(0, batch_size_expr, batch_indices);
             defer t_batch.deinit();
 
-            const epoch_count = @min(idx / (train_size / batch_size), 5);
-            var lr = learning_rate;
+            const epoch_count = idx / (train_size / batch_size);
+            var lr_r = learning_rate;
             for (0..epoch_count) |_| {
-                lr *= 0.5;
+                lr_r *= 0.7;
             }
+
+            const lr = @max(lr_r, 1e-5);
 
             var adam = optimizer_t{ .ADAM = optim.Adam(DT).init(lr, 0.9, 0.999, allocator) };
             defer adam.deinit();
