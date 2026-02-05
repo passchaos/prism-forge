@@ -2291,6 +2291,9 @@ pub const Range = struct {
 test "from data directly" {
     const allocator = std.testing.allocator;
 
+    var shape_env = try ShapeEnv.init(allocator);
+    defer shape_env.deinit();
+
     const arr = [2][3][4]f32{
         [3][4]f32{
             [4]f32{ 1.0, 2.0, 3.0, 4.0 },
@@ -2304,7 +2307,7 @@ test "from data directly" {
         },
     };
 
-    const t1 = try fromArray(allocator, arr);
+    const t1 = try fromArray(allocator, arr, &shape_env);
     defer t1.deinit();
     try std.testing.expectEqual(t1.size(), 2 * 3 * 4);
     try std.testing.expect(if (@TypeOf(t1).T == f32) true else false);

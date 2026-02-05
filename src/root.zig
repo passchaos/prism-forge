@@ -29,3 +29,7 @@ pub const std_options: std.Options = .{
     .log_level = .debug,
     .logFn = logFn,
 };
+
+test {
+    std.testing.refAllDecls(@This());
+}
