@@ -1,10 +1,10 @@
 const std = @import("std");
-const tensor = @import("../tensor.zig");
-const shape_expr = @import("../shape_expr.zig");
-const layer = @import("../nn/layer.zig");
-const optim = @import("../nn/optim.zig");
+const tensor = @import("../../tensor.zig");
+const shape_expr = @import("../../shape_expr.zig");
+const layer = @import("../layer.zig");
+const optim = @import("../optim.zig");
 
-const log = @import("../log.zig");
+const log = @import("../../log.zig");
 
 const SizeExpr = shape_expr.SizeExpr;
 const ShapeEnv = shape_expr.ShapeEnv;
@@ -39,20 +39,20 @@ pub fn MultiLayerNet(
         pub fn gradient(self: *Self, x: *const InputT, t: *const LabelT) !optim.WeightGradView(T) {
             _ = try self.loss(x, t);
 
-            const begin = try std.time.Instant.now();
+            // const begin = try std.time.Instant.now();
             const dout = try self.softmax_with_loss.backward();
             defer dout.deinit();
 
             // log.print(@src(), "dout layout: {f}\n", .{dout.layout});
 
-            const after_softmax_with_loss = try std.time.Instant.now();
+            // const after_softmax_with_loss = try std.time.Instant.now();
             var dout1 = try self.output_layer.backward(&dout);
 
             // log.print(@src(), "dout1 layout: {f}\n", .{dout1.layout});
 
             var tmp_grad: *const anyopaque = &dout1;
 
-            const after_output_layer = try std.time.Instant.now();
+            // const after_output_layer = try std.time.Instant.now();
             inline for (0..hidden_sizes.len) |i| {
                 const reverse_idx = hidden_sizes.len - 1 - i;
 
@@ -97,13 +97,13 @@ pub fn MultiLayerNet(
                 }
             }
 
-            const after_forward = try std.time.Instant.now();
+            // const after_forward = try std.time.Instant.now();
 
-            log.print(@src(), "backward step cost: softmax= {}ns output_layer= {}ns hidden_layers= {}ns\n", .{
-                after_softmax_with_loss.since(begin),
-                after_output_layer.since(after_softmax_with_loss),
-                after_forward.since(after_output_layer),
-            });
+            // log.print(@src(), "backward step cost: softmax= {}ns output_layer= {}ns hidden_layers= {}ns\n", .{
+            //     after_softmax_with_loss.since(begin),
+            //     after_output_layer.since(after_softmax_with_loss),
+            //     after_forward.since(after_output_layer),
+            // });
 
             return self.weightGradView();
         }
@@ -112,7 +112,7 @@ pub fn MultiLayerNet(
             const y = try self.predict(x);
             defer y.deinit();
 
-            log.print(@src(), "begin get loss\n", .{});
+            // log.print(@src(), "begin get loss\n", .{});
             const loss_t = try self.softmax_with_loss.forward(&y, t);
 
             return loss_t;
@@ -293,7 +293,7 @@ pub fn MultiLayerNet(
 }
 
 test "two_layer_net" {
-    const mnist = @import("../mnist.zig");
+    const mnist = @import("../../mnist.zig");
 
     const allocator = std.testing.allocator;
 
