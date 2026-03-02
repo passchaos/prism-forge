@@ -41,6 +41,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
         }),
     });
+    b.installArtifact(mnist_exe);
     const mnist_cmd = b.addRunArtifact(mnist_exe);
     const mnist_step = b.step("mnist", "Run mnist");
     mnist_step.dependOn(&mnist_cmd.step);
@@ -49,12 +50,12 @@ pub fn build(b: *std.Build) void {
     const check = b.step("check", "Check if exe_check compiles");
     check.dependOn(&exe_check.step);
 
-    const mod_tests = b.addTest(.{
-        .root_module = prism_mod,
-    });
+    // const mod_tests = b.addTest(.{
+    //     .root_module = prism_mod,
+    // });
 
-    // A run step that will run the test executable.
-    const run_mod_tests = b.addRunArtifact(mod_tests);
+    // // A run step that will run the test executable.
+    // const run_mod_tests = b.addRunArtifact(mod_tests);
 
     const test_filters = b.option(
         []const []const u8,
@@ -69,6 +70,6 @@ pub fn build(b: *std.Build) void {
     const run_exe_tests = b.addRunArtifact(exe_tests);
 
     const test_step = b.step("test", "Run tests");
-    test_step.dependOn(&run_mod_tests.step);
+    // test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
 }

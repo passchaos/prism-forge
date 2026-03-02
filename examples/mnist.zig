@@ -1,5 +1,5 @@
 const std = @import("std");
-const prism = @import("prism_forge");
+const prism = @import("prism");
 
 const tensor = prism.tensor;
 const optim = prism.optim;

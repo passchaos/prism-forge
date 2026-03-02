@@ -3,9 +3,7 @@ const std = @import("std");
 
 pub const tensor = @import("tensor.zig");
 pub const shape_expr = @import("shape_expr.zig");
-pub const optim = @import("nn/optim.zig");
-pub const conv_net = @import("nn/model/conv_net.zig");
-pub const mlp = @import("nn/model/mlp.zig");
+pub const nn = @import("nn/mod.zig");
 pub const plot = @import("plot.zig");
 pub const log = @import("log.zig");
 pub const mnist = @import("mnist.zig");

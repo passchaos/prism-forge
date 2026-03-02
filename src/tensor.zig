@@ -706,6 +706,49 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
             }
         }
 
+        pub fn cosineSimilarity(self: *const Self, other: *const Self) !f64 {
+            if (S.len != 1) @compileError("only supported 1-d tensor");
+
+            var self_t = try self.to(f64);
+            defer self_t.deinit();
+            var other_t = try other.to(f64);
+            defer other_t.deinit();
+
+            var self_t_c = try self_t.powi(2);
+            defer self_t_c.deinit();
+            var self_t_sum = try self_t_c.sumAll();
+            defer self_t_sum.deinit();
+            self_t_sum.sqrt_();
+
+            const self_t_s_v = try self_t_sum.dataItem();
+
+            var other_t_c = try other_t.powi(2);
+            defer other_t_c.deinit();
+            var other_t_sum = try other_t_c.sumAll();
+            defer other_t_sum.deinit();
+            other_t_sum.sqrt_();
+
+            const other_t_s_v = try other_t_sum.dataItem();
+
+            self_t.divScalar_(self_t_s_v + 1e-8);
+            other_t.divScalar_(other_t_s_v + 1e-8);
+
+            return self_t.dot(&other_t);
+        }
+
+        pub fn dot(self: *const Self, other: *const Self) T {
+            if (S.len != 1) @compileError("only supported 1-d tensor");
+
+            var res = @as(T, 0);
+            var iter = self.shapeIter();
+
+            while (iter.next()) |idx| {
+                res += (self.getData(idx) catch unreachable) * (other.getData(idx) catch unreachable);
+            }
+
+            return res;
+        }
+
         pub fn matmul(self: *const Self, other: anytype) !Tensor(
             &.{ SA[0], @TypeOf(other.*).S[1] },
             T,
@@ -1020,6 +1063,13 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
                 }
             }.call;
             return self.map_(void{}, func);
+        }
+
+        pub fn powi(self: *const Self, value: T) !Self {
+            var self_c = try self.clone();
+            self_c.powi_(value);
+
+            return self_c;
         }
 
         pub fn powi_(self: *Self, value: T) void {
@@ -2163,7 +2213,12 @@ pub fn fullLike(allocator: std.mem.Allocator, tensor: anytype, value: anytype) !
     return try full(allocator, @TypeOf(tensor).S, tensor.layout.shape_env(), value);
 }
 
-pub fn zeros(allocator: std.mem.Allocator, comptime T: type, comptime shape_expr_a: []const SizeExpr, shape_env: *const ShapeEnv) !Tensor(
+pub fn zeros(
+    allocator: std.mem.Allocator,
+    comptime T: type,
+    comptime shape_expr_a: []const SizeExpr,
+    shape_env: *const ShapeEnv,
+) !Tensor(
     shape_expr_a,
     T,
 ) {
@@ -2507,7 +2562,10 @@ test "map basic" {
 test "map bool" {
     const allocator = std.testing.allocator;
 
-    const t1 = try randNorm(allocator, &.{ 3, 2, 4 }, 0.0, 1.0);
+    var shape_env = try ShapeEnv.init(allocator);
+    defer shape_env.deinit();
+
+    const t1 = try randNorm(allocator, &shape_expr.parseSpec(.{ 3, 2, 4 }), &shape_env, 0.0, 1.0);
     defer t1.deinit();
 
     const t2 = try t1.geScalar(0.0);
@@ -3219,4 +3277,37 @@ test "shared_view" {
     // try std.testing.expectEqual(@as(f32, 4.0), try input.getData([2]usize{ 2, 1 }));
 
     // std.debug.print("input: {f} iv1= {f} iv2= {f} iv3= {f} iv4= {f}\n", .{ input, iv1, iv2, iv3, iv4 });
+}
+
+test "cosine similarity" {
+    const allocator = std.testing.allocator;
+
+    var shape_env = try ShapeEnv.init(allocator);
+    defer shape_env.deinit();
+
+    {
+        var t1 = try fromArray(
+            allocator,
+            [3]i32{ 1, 2, 3 },
+            &shape_env,
+        );
+        defer t1.deinit();
+
+        const func = struct {
+            fn apply(x: i32, _: void) i32 {
+                return -x;
+            }
+        }.apply;
+        const t1_r = try t1.map(void{}, i32, func);
+        defer t1_r.deinit();
+
+        const cos_sim = try t1.cosineSimilarity(&t1);
+        const cos_r_sim = try t1.cosineSimilarity(&t1_r);
+
+        // try std.testing.expectEqual(cos_sim, cos_r_sim);
+        try std.testing.expectApproxEqAbs(1.0, cos_sim, 1e-5);
+        try std.testing.expectApproxEqAbs(-1.0, cos_r_sim, 1e-5);
+
+        std.debug.print("cos_sim: {} reverse= {}\n", .{ cos_sim, cos_r_sim });
+    }
 }

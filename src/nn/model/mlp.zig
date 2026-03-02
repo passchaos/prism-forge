@@ -2,9 +2,9 @@ const std = @import("std");
 const layer = @import("../layer.zig");
 const optim = @import("../optim.zig");
 
-const tensor = @import("root").tensor;
-const shape_expr = @import("root").shape_expr;
-const log = @import("root").log;
+const tensor = @import("../../tensor.zig");
+const shape_expr = @import("../../shape_expr.zig");
+const log = @import("../../log.zig");
 
 const SizeExpr = shape_expr.SizeExpr;
 const ShapeEnv = shape_expr.ShapeEnv;
