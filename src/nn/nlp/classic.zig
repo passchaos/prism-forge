@@ -130,6 +130,46 @@ pub fn mostSimilar(
     }
 }
 
+pub fn ppmi(
+    comptime vocab_size: SizeExpr,
+    co_matrix: *const tensor.Tensor(&.{ vocab_size, vocab_size }, usize),
+) !tensor.Tensor(&.{ vocab_size, vocab_size }, f64) {
+    var co_matrix_f64 = try co_matrix.to(f64);
+
+    const total_words_size = try co_matrix.sumAll();
+    defer total_words_size.deinit();
+    const t_w_s = try total_words_size.dataItem();
+
+    const total_v = @as(f64, @floatFromInt(t_w_s));
+
+    // co_matrix_f64.mulScalar_(2.0);
+    co_matrix_f64.mulScalar_(total_v);
+
+    const cols_words = try co_matrix.sum(0);
+
+    var cm_iter = co_matrix.shapeIter();
+    while (cm_iter.next()) |idx| {
+        const one_c = try cols_words.getData([2]usize{ 0, idx[0] });
+        const two_c = try cols_words.getData([2]usize{ 0, idx[1] });
+
+        const v = co_matrix_f64.getData(idx) catch unreachable;
+
+        std.debug.print("idx: {any} v= {} o= {} t= {}\n", .{ idx, v, one_c, two_c });
+
+        const res_v = @log2(
+            v /
+                @as(f64, @floatFromInt(one_c)) /
+                @as(f64, @floatFromInt(two_c)) + 1e-8,
+        );
+        try co_matrix_f64.setData(
+            idx,
+            @max(0.0, res_v),
+        );
+    }
+
+    return co_matrix_f64;
+}
+
 test "text preprocess" {
     const allocator = std.testing.allocator;
     const text = "You say goodbye and I say hello.";
@@ -203,6 +243,9 @@ test "text preprocess" {
         &word_to_id,
         5,
     );
+
+    const res = try ppmi(vocab_size, &co_m);
+    std.debug.print("res: {f}\n", .{res});
 }
 
 test {

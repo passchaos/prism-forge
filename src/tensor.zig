@@ -1045,6 +1045,19 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
             return self.map_(void{}, func);
         }
 
+        pub fn log2_(self: *Self) void {
+            const func = struct {
+                fn call(v: T, _: void) T {
+                    // const ce = 1e-7;
+                    // if (v < ce) {
+                    //     return @log(v + ce);
+                    // }
+                    return @log2(v);
+                }
+            }.call;
+            return self.map_(void{}, func);
+        }
+
         pub fn sigmoid_(self: *Self) void {
             if (@typeInfo(T) != .float) @compileError("only supported float tensor sin_ op");
 
