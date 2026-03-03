@@ -7,6 +7,11 @@ pub const nn = @import("nn/mod.zig");
 pub const plot = @import("plot.zig");
 pub const log = @import("log.zig");
 pub const mnist = @import("mnist.zig");
+pub const matrix = @import("matrix/mod.zig");
+
+pub const optim = nn.optim;
+pub const mlp = nn.model.mlp;
+pub const conv_net = nn.model.conv_net;
 
 pub fn logFn(
     comptime level: std.log.Level,

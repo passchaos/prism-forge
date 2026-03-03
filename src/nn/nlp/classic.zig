@@ -108,6 +108,9 @@ pub fn mostSimilar(
 
     var word_iter = word_to_id.iterator();
     while (word_iter.next()) |entry| {
+        try shape_env.pushScope();
+        defer shape_env.popScope();
+
         const word = entry.key_ptr.*;
         const word_id = entry.value_ptr.*;
 
