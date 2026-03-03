@@ -261,7 +261,12 @@ test "text preprocess" {
     // const a_t_r = try a_t.reshape(&.{ SizeExpr.static(2), SizeExpr.static(3) });
     // defer a_t_r.deinit();
 
-    const svd_res = try a_t.svd();
+    const svd_res = try res.svd();
+    defer {
+        svd_res.u.deinit();
+        svd_res.s.deinit();
+        svd_res.vt.deinit();
+    }
     std.debug.print("svd_res: u= {f} s= {f} vt= {f}\n", .{ svd_res.u, svd_res.s, svd_res.vt });
 
     // try @import("../../device/host.zig").svd(
