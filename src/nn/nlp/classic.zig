@@ -249,6 +249,28 @@ test "text preprocess" {
 
     const res = try ppmi(vocab_size, &co_m);
     std.debug.print("res: {f}\n", .{res});
+
+    var a = try allocator.alloc(f64, 6);
+    for (0..6) |i| {
+        a[i] = @as(f64, @floatFromInt(i));
+    }
+
+    const a_t = try tensor.fromData(f64, allocator, a, &.{ SizeExpr.static(2), SizeExpr.static(3) }, &shape_env);
+    defer a_t.deinit();
+
+    // const a_t_r = try a_t.reshape(&.{ SizeExpr.static(2), SizeExpr.static(3) });
+    // defer a_t_r.deinit();
+
+    const svd_res = try a_t.svd();
+    std.debug.print("svd_res: u= {f} s= {f} vt= {f}\n", .{ svd_res.u, svd_res.s, svd_res.vt });
+
+    // try @import("../../device/host.zig").svd(
+    //     allocator,
+    //     f64,
+    //     @as([*c]f64, @ptrCast(a)),
+    //     2,
+    //     3,
+    // );
 }
 
 test {

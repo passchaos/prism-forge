@@ -736,6 +736,54 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
             return self_t.dot(&other_t);
         }
 
+        pub fn svd(self: *const Self) !struct {
+            u: Tensor(&.{ SA[0], SA[0] }, T),
+            s: Tensor(&.{SA[0].min(SA[1])}, T),
+            vt: Tensor(&.{ SA[1], SA[1] }, T),
+        } {
+            if (T != f32 and T != f64) {
+                @compileError("only support f32 and f64 svd" ++ " T: " ++ @typeName(T));
+            }
+
+            var a = try self.contiguous();
+            defer a.deinit();
+
+            const m = self.shape()[0];
+            const n = self.shape()[1];
+
+            const a_d: [*c]T = @ptrCast(a.storage.dataSlice());
+
+            const allocator = self.s_allocator();
+
+            const res = try host.svd(allocator, T, a_d, m, n);
+
+            const u = try fromData(
+                T,
+                allocator,
+                res.u,
+                &.{ SA[0], SA[0] },
+                self.layout.shape_env(),
+            );
+
+            const s = try fromData(
+                T,
+                allocator,
+                res.s,
+                &.{SA[0].min(SA[1])},
+                self.layout.shape_env(),
+            );
+
+            const vt = try fromData(
+                T,
+                allocator,
+                res.vt,
+                &.{ SA[1], SA[1] },
+                self.layout.shape_env(),
+            );
+
+            return .{ .u = u, .s = s, .vt = vt };
+        }
+
         pub fn dot(self: *const Self, other: *const Self) T {
             if (S.len != 1) @compileError("only supported 1-d tensor");
 
