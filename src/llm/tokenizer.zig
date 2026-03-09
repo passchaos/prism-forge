@@ -152,6 +152,7 @@ const BPETokenizer = struct {
             try self.vocab.put(top_pair_indexes.pair, idx);
 
             var i = top_pair_indexes.indexes.items.len - 1;
+            // std.debug.print("indexes: {any}\n", .{top_pair_indexes.indexes.items.len});
 
             {
                 const last_idx = top_pair_indexes.indexes.items[i];
@@ -174,20 +175,35 @@ const BPETokenizer = struct {
                 i -= 1;
             }
 
+            // const begin = std.time.milliTimestamp();
+
+            var remove_indexes = try std.ArrayList(usize).initCapacity(allocator, i);
+
             while (i >= 0) {
                 const token_idx = top_pair_indexes.indexes.items[i];
 
+                try remove_indexes.append(allocator, token_idx + 1);
                 // std.debug.print("token_idx: {} i= {}\n", .{ token_idx, i });
-                _ = tokens.inner.orderedRemove(token_idx + 1);
+                // _ = tokens.inner.orderedRemove(token_idx + 1);
 
                 tokens.inner.items[token_idx] = top_pair_indexes.pair;
 
                 if (i == 0) {
+                    // const end = std.time.milliTimestamp();
+                    // std.debug.print("merge time: {}ms\n", .{(end - begin)});
                     break;
                 } else {
                     i -= 1;
                 }
             }
+
+            std.mem.sort(usize, remove_indexes.items, void{}, struct {
+                fn func(_: void, a: usize, b: usize) bool {
+                    return a < b;
+                }
+            }.func);
+
+            tokens.inner.orderedRemoveMany(remove_indexes.items);
         }
     }
 
@@ -295,6 +311,9 @@ test "bpe tokenizer" {
 }
 
 test "gutenberg" {
+    // var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    // var gpa_alloc = gpa.allocator();
+
     var arena_alloc = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_alloc.deinit();
 
