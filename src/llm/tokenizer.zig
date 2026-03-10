@@ -44,7 +44,7 @@ const BPETokenizer = struct {
     arena: *std.heap.ArenaAllocator,
     vocab: std.StringArrayHashMap(usize),
     merges: std.ArrayList(struct { []const u8, []const u8 }),
-    // pool: std.Thread.Pool,
+    pool: std.Thread.Pool = undefined,
 
     const Self = @This();
 
@@ -57,6 +57,10 @@ const BPETokenizer = struct {
         var vocab = std.StringArrayHashMap(usize)
             .init(allocator);
 
+        var pool_i: std.Thread.Pool = undefined;
+        try pool_i.init(.{
+            .allocator = allocator,
+        });
         // var gpa1 = std.heap.GeneralPurposeAllocator(.{}){};
 
         for (0..256) |i| {
@@ -69,7 +73,7 @@ const BPETokenizer = struct {
             .vocab = vocab,
             .merges = try std.ArrayList(struct { []const u8, []const u8 })
                 .initCapacity(allocator, 10),
-            // .pool = pool,
+            .pool = pool_i,
         };
     }
 
@@ -135,7 +139,7 @@ const BPETokenizer = struct {
                     part_maps[part_idx] = std.StringArrayHashMap(std.ArrayList(usize)).init(part_alloc);
 
                     // std.debug.print("begin spawn wg\n", .{});
-                    pool.spawnWg(&work_group, struct {
+                    self.pool.spawnWg(&work_group, struct {
                         fn funcImpl(s_alloc: std.mem.Allocator, map: *std.StringArrayHashMap(std.ArrayList(usize)), tokens_items: [][]const u8, range_start: usize, range_end: usize) !void {
                             for (range_start..range_end) |i| {
                                 if (i == tokens_items.len - 1) continue;
@@ -171,7 +175,7 @@ const BPETokenizer = struct {
                     // part_maps.append(part_map);
                 }
 
-                pool.waitAndWork(&work_group);
+                self.pool.waitAndWork(&work_group);
 
                 const par_part_ts = try std.time.Instant.now();
 
