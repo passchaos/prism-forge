@@ -56,12 +56,6 @@ const BPETokenizer = struct {
         var vocab = std.StringArrayHashMap(usize)
             .init(allocator);
 
-        // var pool_i: std.Thread.Pool = undefined;
-        // try pool_i.init(.{
-        //     .allocator = allocator,
-        // });
-        // var gpa1 = std.heap.GeneralPurposeAllocator(.{}){};
-
         for (0..256) |i| {
             const char = try std.fmt.allocPrint(allocator, "<{x:0>2}>", .{i});
             try vocab.put(char, i);
@@ -72,7 +66,6 @@ const BPETokenizer = struct {
             .vocab = vocab,
             .merges = try std.ArrayList(struct { []const u8, []const u8 })
                 .initCapacity(allocator, 10),
-            // .pool = pool_i,
         };
     }
 
@@ -161,17 +154,12 @@ const BPETokenizer = struct {
                                     entry.value_ptr.* = value;
                                 }
                             }
-
-                            // std.Thread.sleep(10000000000);
                         }
 
                         fn func(s_alloc: std.mem.Allocator, map: *std.StringArrayHashMap(std.ArrayList(usize)), tokens_items: [][]const u8, range_start: usize, range_end: usize) void {
                             funcImpl(s_alloc, map, tokens_items, range_start, range_end) catch unreachable;
                         }
                     }.func, .{ part_alloc, &part_maps[part_idx], tokens.inner.items, chunk_start, chunk_end });
-
-                    // const part_map = try std.StringArrayHashMap(std.ArrayList(usize)).initCapacity(allocator, chunk.len);
-                    // part_maps.append(part_map);
                 }
 
                 pool.waitAndWork(&work_group);
@@ -208,33 +196,11 @@ const BPETokenizer = struct {
                 );
             }
 
-            // pair_maps = std.StringArrayHashMap(usize)
-            //     .init(allocator);
-
-            // for (0..tokens.inner.items.len - 1) |i| {
-            //     const pair_key = try std.fmt.allocPrint(
-            //         allocator,
-            //         "{s}{s}",
-            //         .{ tokens.inner.items[i], tokens.inner.items[i + 1] },
-            //     );
-
-            //     // std.debug.print("pair_key: {s}\n", .{pair_key});
-            //     const entry = try pair_maps.getOrPut(pair_key);
-
-            //     if (entry.found_existing) {
-            //         entry.value_ptr.* += 1;
-            //     } else {
-            //         entry.value_ptr.* = 1;
-            //     }
-            // }
-
             const pair_construction_duration = try std.time.Instant.now();
-            // std.debug.print("  Pair construction: {any}\n", .{pair_construction_duration});
 
             const PairIndexes = struct {
                 pair: []const u8,
                 indexes: std.ArrayList(usize),
-                // count: usize,
 
                 fn lessThan(_: void, a: @This(), b: @This()) bool {
                     return a.indexes.items.len < b.indexes.items.len;
@@ -462,100 +428,32 @@ test "bpe tokenizer" {
 }
 
 test "gutenberg" {
-    std.debug.print("is single threaded: {}\n", .{@import("builtin").single_threaded});
-    // var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    // var gpa_alloc = gpa.allocator();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const alloc = gpa.allocator();
+    // const alloc = std.testing.allocator;
 
-    var arena_alloc = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_alloc = std.heap.ArenaAllocator.init(alloc);
     defer arena_alloc.deinit();
 
-    const allocator = arena_alloc.allocator();
-
-    var token = try BPETokenizer.new(&arena_alloc);
-    defer token.deinit();
-
-    const file = try std.fs.openFileAbsolute("/tmp/pg100.txt", .{ .mode = .read_only });
-    var file_buffer: [1024]u8 = undefined;
-    var file_reader = file.reader(&file_buffer);
-
-    const file_size = try file_reader.getSize();
-
-    const file_contents = try file_reader.interface.readAlloc(allocator, @intCast(file_size));
-
-    std.debug.print("file_size: {}\n", .{file_size});
-    try token.train(file_contents, 512);
-}
-
-fn threadPoolTest() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const gpa_alloc = gpa.allocator();
-
-    // var pool: std.Thread.Pool = undefined;
-    try pool.init(.{ .allocator = gpa_alloc });
+    try pool.init(.{ .allocator = alloc });
     defer pool.deinit();
 
-    var wg: std.Thread.WaitGroup = .{};
-
-    const func = struct {
-        fn run() void {
-            std.debug.print("thread id: {}\n", .{std.Thread.getCurrentId()});
-            std.Thread.sleep(1000000000000);
-            std.debug.print("thread finish: {}\n", .{std.Thread.getCurrentId()});
-        }
-    }.run;
-
-    for (0..5) |_| {
-        pool.spawnWg(&wg, func, .{});
-    }
-
-    pool.waitAndWork(&wg);
-}
-
-pub fn main() !void {
-    // try threadPoolTest();
-    std.debug.print("is single threaded: {}\n", .{@import("builtin").single_threaded});
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const gpa_alloc = gpa.allocator();
-
-    var arena_alloc = std.heap.ArenaAllocator.init(gpa_alloc);
-    defer arena_alloc.deinit();
-
-    // const allocator = arena_alloc.allocator();
-
-    try pool.init(.{ .allocator = gpa_alloc });
-    // defer pool.deinit();
-
     var token = try BPETokenizer.new(&arena_alloc);
     defer token.deinit();
 
-    // var pool = token.pool;
+    const real_path = try std.fs.realpathAlloc(alloc, "../../Temp/pg100.txt");
+    std.debug.print("real path: {s}\n", .{real_path});
 
-    // var pool: std.Thread.Pool = undefined;
-
-    // var wg: std.Thread.WaitGroup = .{};
-
-    // const func = struct {
-    //     fn run() void {
-    //         std.debug.print("thread id: {}\n", .{std.Thread.getCurrentId()});
-    //         std.Thread.sleep(1000000000000);
-    //         std.debug.print("thread finish: {}\n", .{std.Thread.getCurrentId()});
-    //     }
-    // }.run;
-
-    // for (0..5) |_| {
-    //     pool.spawnWg(&wg, func, .{});
-    // }
-
-    // pool.waitAndWork(&wg);
-
-    const file = try std.fs.openFileAbsolute("/tmp/pg100.txt", .{ .mode = .read_only });
+    const file = try std.fs.openFileAbsolute(real_path, .{ .mode = .read_only });
     var file_buffer: [1024]u8 = undefined;
     var file_reader = file.reader(&file_buffer);
-
     const file_size = try file_reader.getSize();
-
-    const file_contents = try file_reader.interface.readAlloc(gpa_alloc, @intCast(file_size));
+    const file_contents = try file_reader.interface.readAlloc(alloc, @intCast(file_size));
 
     std.debug.print("file_size: {}\n", .{file_size});
+
+    const begin_ts = try std.time.Instant.now();
     try token.train(file_contents, 512);
+    const end_ts = try std.time.Instant.now();
+    std.debug.print("elasped: {}ms\n", .{end_ts.since(begin_ts) / 1_000_000});
 }
