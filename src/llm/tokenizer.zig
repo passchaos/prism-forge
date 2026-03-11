@@ -10,15 +10,17 @@ const ByteCodedContent = struct {
     const Self = @This();
 
     fn deinit(self: *Self) void {
+        // _ = self.gpa.deinit();
         self.arena.deinit();
+        // _ = self.gpa.deinit();
     }
 
-    pub fn format(self: Self, writer: *std.Io.Writer) std.io.Writer.Error!void {
-        for (self.inner.items) |item| {
-            _ = try writer.write(" ");
-            _ = try writer.write(item);
-        }
-    }
+    // pub fn format(self: Self, writer: *std.Io.Writer) std.io.Writer.Error!void {
+    //     for (self.inner.items) |item| {
+    //         _ = try writer.write(" ");
+    //         _ = try writer.write(item);
+    //     }
+    // }
 };
 
 fn byteEncoded(text: []const u8) !ByteCodedContent {
@@ -26,19 +28,26 @@ fn byteEncoded(text: []const u8) !ByteCodedContent {
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
 
     const allocator = arena.allocator();
-    var tokens = try std.ArrayList([]const u8)
-        .initCapacity(allocator, text.len);
+    // _ = allocator;
+    var inner = try std.ArrayList([]const u8)
+        .initCapacity(allocator, 10);
 
     for (text) |byte| {
         const char = try std.fmt.allocPrint(allocator, "<{x:0>2}>", .{byte});
-        try tokens.append(allocator, char);
+        try inner.append(allocator, char);
     }
 
     return ByteCodedContent{
         .gpa = gpa,
         .arena = arena,
-        .inner = tokens,
+        .inner = inner,
     };
+}
+
+test "byte" {
+    const text = "hello";
+    var result = try byteEncoded(text);
+    result.deinit();
 }
 
 const BPETokenizer = struct {
@@ -442,11 +451,11 @@ test "bpe tokenizer" {
 
     try token.train("hello hello world world hello", 300);
 
-    const res = try token.encode("hello world");
-    std.debug.print("res: {any}\n", .{res});
+    // const res = try token.encode("hello world");
+    // std.debug.print("res: {any}\n", .{res});
 
-    const decoded = try token.decode(res.items);
-    std.debug.print("decoded: {s}\n", .{decoded});
+    // const decoded = try token.decode(res.items);
+    // std.debug.print("decoded: {s}\n", .{decoded});
 }
 
 test "gutenberg" {

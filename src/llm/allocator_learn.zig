@@ -1,5 +1,38 @@
 const std = @import("std");
 
+const Content = struct {
+    // gpa: std.heap.GeneralPurposeAllocator(.{}),
+    arena: std.heap.ArenaAllocator,
+    inner: std.ArrayList(u8),
+
+    const Self = @This();
+
+    fn new() !Self {
+        var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+        var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+        const allocator = arena.allocator();
+
+        var inner = try std.ArrayList(u8)
+            .initCapacity(allocator, 10);
+        try inner.append(allocator, 1);
+
+        return Self{
+            // .gpa = gpa,
+            .arena = arena,
+            .inner = inner,
+        };
+    }
+
+    fn deinit(self: *Self) void {
+        self.arena.deinit();
+    }
+};
+
+test "content" {
+    var content = try Content.new();
+    content.deinit();
+}
+
 test "div" {
     const a: isize = 10;
     const b: isize = 9;
