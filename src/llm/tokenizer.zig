@@ -3,17 +3,14 @@ const std = @import("std");
 var pool: std.Thread.Pool = undefined;
 
 const ByteCodedContent = struct {
-    allocator: std.mem.Allocator,
+    gpa: std.heap.GeneralPurposeAllocator(.{}),
+    arena: std.heap.ArenaAllocator,
     inner: std.ArrayList([]const u8),
 
     const Self = @This();
 
     fn deinit(self: *Self) void {
-        for (self.inner.items) |item| {
-            self.allocator.free(item);
-        }
-
-        self.inner.deinit(self.allocator);
+        self.arena.deinit();
     }
 
     pub fn format(self: Self, writer: *std.Io.Writer) std.io.Writer.Error!void {
@@ -24,18 +21,22 @@ const ByteCodedContent = struct {
     }
 };
 
-fn byteEncoded(allocator: std.mem.Allocator, text: []const u8) !ByteCodedContent {
+fn byteEncoded(text: []const u8) !ByteCodedContent {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+
+    const allocator = arena.allocator();
     var tokens = try std.ArrayList([]const u8)
         .initCapacity(allocator, text.len);
 
     for (text) |byte| {
         const char = try std.fmt.allocPrint(allocator, "<{x:0>2}>", .{byte});
-        // std.debug.print("char: {s}\n", .{char});
         try tokens.append(allocator, char);
     }
 
     return ByteCodedContent{
-        .allocator = allocator,
+        .gpa = gpa,
+        .arena = arena,
         .inner = tokens,
     };
 }
@@ -83,14 +84,19 @@ const BPETokenizer = struct {
         std.debug.print("Training BPE tokenizer...\n", .{});
         std.debug.print("  Starting.. {}\n", .{try std.Thread.getCpuCount()});
 
-        var tokens = try byteEncoded(allocator, text);
+        // 应该使用独立的allocator，BPE的allocator是arena，不会提前释放
+        var tokens = try byteEncoded(text);
         defer tokens.deinit();
+
+        if (10 > 5) {
+            return;
+        }
 
         // std.debug.print("{any}\n", .{tokens});
 
-        const part_count: usize = 10;
-        var part_arenas: [part_count]std.heap.ArenaAllocator = undefined;
-        for (0..part_count) |part_idx| {
+        const arena_count: usize = 10;
+        var part_arenas: [arena_count]std.heap.ArenaAllocator = undefined;
+        for (0..arena_count) |part_idx| {
             var gpa = std.heap.GeneralPurposeAllocator(.{}){};
             const gpa_alloc = gpa.allocator();
             const arena = std.heap.ArenaAllocator.init(gpa_alloc);
@@ -113,7 +119,13 @@ const BPETokenizer = struct {
 
             {
                 const par_start_ts = try std.time.Instant.now();
-                const part_size = (tokens.inner.items.len + part_count - 1) / part_count;
+
+                // const part_count = arena_count;
+                // const part_size = 10;
+
+                const part_size = (tokens.inner.items.len + arena_count - 1) / arena_count;
+                const part_count = (tokens.inner.items.len + part_size - 1) / part_size;
+                // const part_count = (tokens.inner.items.len + part_size - 1) / part_size;
 
                 var work_group = std.Thread.WaitGroup{};
 
@@ -125,6 +137,10 @@ const BPETokenizer = struct {
                 for (0..part_count) |part_idx| {
                     const chunk_start = part_size * part_idx;
                     const chunk_end = @min(part_size * (part_idx + 1), tokens.inner.items.len);
+                    // std.debug.print(
+                    //     "part: idx= {} size= {} chunk: start= {} end= {} tokens len= {}\n",
+                    //     .{ part_idx, part_size, chunk_start, chunk_end, tokens.inner.items.len },
+                    // );
 
                     const part_alloc = part_arenas[part_idx].allocator();
 
@@ -260,22 +276,25 @@ const BPETokenizer = struct {
             std.debug.print("indexes: {any}\n", .{top_pair_indexes.indexes.items.len});
 
             {
-                const last_idx = top_pair_indexes.indexes.items[i];
+                // const last_idx = top_pair_indexes.indexes.items[i];
 
-                const b_t = tokens.inner.orderedRemove(last_idx + 1);
+                // const b_t = tokens.inner.orderedRemove(last_idx + 1);
 
-                const a_t = tokens.inner.items[last_idx];
-                tokens.inner.items[last_idx] = top_pair_indexes.pair;
+                // const a_t = tokens.inner.items[last_idx];
 
-                const a_t_g = try allocator.alloc(u8, a_t.len);
-                @memcpy(a_t_g, a_t);
-                const b_t_g = try allocator.alloc(u8, b_t.len);
-                @memcpy(b_t_g, b_t);
-                // std.debug.print("merge: {s}{s}\n", .{ a_t, b_t });
-                try self.merges.append(
-                    allocator,
-                    .{ a_t_g, b_t_g },
-                );
+                // // const tokens_pair = try tokens.arena.allocator().alloc(u8, top_pair_indexes.pair.len);
+                // // @memcpy(tokens_pair, top_pair_indexes.pair);
+                // // tokens.inner.items[last_idx] = tokens_pair;
+
+                // const a_t_g = try allocator.alloc(u8, a_t.len);
+                // @memcpy(a_t_g, a_t);
+                // const b_t_g = try allocator.alloc(u8, b_t.len);
+                // @memcpy(b_t_g, b_t);
+                // // std.debug.print("merge: {s}{s}\n", .{ a_t, b_t });
+                // try self.merges.append(
+                //     allocator,
+                //     .{ a_t_g, b_t_g },
+                // );
 
                 if (i == 0) {
                     continue;
@@ -295,7 +314,7 @@ const BPETokenizer = struct {
                 // std.debug.print("token_idx: {} i= {}\n", .{ token_idx, i });
                 // _ = tokens.inner.orderedRemove(token_idx + 1);
 
-                tokens.inner.items[token_idx] = top_pair_indexes.pair;
+                // tokens.inner.items[token_idx] = top_pair_indexes.pair;
 
                 if (i == 0) {
                     // const end = std.time.milliTimestamp();
@@ -330,7 +349,7 @@ const BPETokenizer = struct {
         // }
         const allocator = self.arena.allocator();
 
-        var tokens = try byteEncoded(allocator, text);
+        var tokens = try byteEncoded(text);
         defer tokens.deinit();
         std.debug.print("tokens: {f}\n", .{tokens});
 
@@ -411,6 +430,9 @@ const BPETokenizer = struct {
 
 test "bpe tokenizer" {
     const allocator = std.testing.allocator;
+
+    try pool.init(.{ .allocator = allocator });
+    defer pool.deinit();
 
     var arena_alloc = std.heap.ArenaAllocator.init(allocator);
     defer arena_alloc.deinit();

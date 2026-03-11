@@ -1,5 +1,32 @@
 const std = @import("std");
 
+test "div" {
+    const a: isize = 10;
+    const b: isize = 9;
+    const d: isize = 3;
+    const c: isize = -10;
+
+    std.debug.print("int div\n", .{});
+
+    std.debug.print("div 0: {} {} {}\n", .{ a / d, b / d, c / d });
+    std.debug.print(
+        "div trunc: {} {} {}\n",
+        .{ @divTrunc(a, d), @divTrunc(b, d), @divTrunc(c, d) },
+    );
+    std.debug.print(
+        "div floor: {} {} {}\n",
+        .{ @divFloor(a, d), @divTrunc(b, d), @divFloor(c, d) },
+    );
+    std.debug.print(
+        "div ceil: {} {} {}\n",
+        .{
+            try std.math.divCeil(isize, a, d),
+            try std.math.divCeil(isize, b, d),
+            try std.math.divCeil(isize, c, d),
+        },
+    );
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
