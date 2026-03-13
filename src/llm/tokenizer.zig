@@ -95,24 +95,33 @@ const BPETokenizer = struct {
         var tokens = try byteEncoded(allocator, text);
         defer tokens.deinit();
 
-        // std.debug.print("{any}\n", .{tokens});
+        const arena_count = try std.Thread.getCpuCount();
+        var part_arenas = try allocator.alloc(std.heap.ArenaAllocator, arena_count);
+        defer allocator.free(part_arenas);
+
+        for (0..arena_count) |part_idx| {
+            var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+            const gpa_alloc = gpa.allocator();
+            const arena = std.heap.ArenaAllocator.init(gpa_alloc);
+            part_arenas[part_idx] = arena;
+        }
+        defer {
+            for (part_arenas) |part_arena| {
+                part_arena.deinit();
+            }
+        }
 
         for (256..vocab_size) |idx| {
             if (tokens.inner.items.len <= 1) {
                 break;
             }
 
-            const arena_count: usize = 10;
-            var part_arenas: [arena_count]std.heap.ArenaAllocator = undefined;
-            for (0..arena_count) |part_idx| {
-                var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-                const gpa_alloc = gpa.allocator();
-                const arena = std.heap.ArenaAllocator.init(gpa_alloc);
-                part_arenas[part_idx] = arena;
-            }
+            // 每次都释放下内存
             defer {
-                for (part_arenas) |part_arena| {
-                    part_arena.deinit();
+                for (part_arenas) |*part_arena| {
+                    if (!part_arena.reset(.retain_capacity)) {
+                        std.debug.print("reset meet failure", .{});
+                    }
                 }
             }
 
@@ -453,7 +462,7 @@ test "gutenberg" {
     var token = try BPETokenizer.new(alloc);
     defer token.deinit();
 
-    const real_path = try std.fs.realpathAlloc(alloc, "../../Temp/pg100.txt");
+    const real_path = try std.fs.realpathAlloc(alloc, "./assets/pg100.txt");
     defer alloc.free(real_path);
     std.debug.print("real path: {s}\n", .{real_path});
 
@@ -468,7 +477,7 @@ test "gutenberg" {
     std.debug.print("file_size: {}\n", .{file_size});
 
     const begin_ts = try std.time.Instant.now();
-    try token.train(file_contents, 512 * 40);
+    try token.train(file_contents, 512 * 4);
     const end_ts = try std.time.Instant.now();
     std.debug.print("elasped: {}ms\n", .{end_ts.since(begin_ts) / 1_000_000});
 }
