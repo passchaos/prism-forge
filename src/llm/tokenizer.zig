@@ -3,34 +3,29 @@ const std = @import("std");
 var pool: std.Thread.Pool = undefined;
 
 const ByteCodedContent = struct {
-    gpa: std.heap.GeneralPurposeAllocator(.{}),
-    arena: std.heap.ArenaAllocator,
+    allocator: std.mem.Allocator,
     inner: std.ArrayList([]const u8),
 
     const Self = @This();
 
     fn deinit(self: *Self) void {
-        // _ = self.gpa.deinit();
-        self.arena.deinit();
-        // _ = self.gpa.deinit();
+        for (self.inner.items) |item| {
+            self.allocator.free(item);
+        }
+        self.inner.deinit(self.allocator);
     }
 
-    // pub fn format(self: Self, writer: *std.Io.Writer) std.io.Writer.Error!void {
-    //     for (self.inner.items) |item| {
-    //         _ = try writer.write(" ");
-    //         _ = try writer.write(item);
-    //     }
-    // }
+    pub fn format(self: Self, writer: *std.Io.Writer) std.io.Writer.Error!void {
+        for (self.inner.items) |item| {
+            _ = try writer.write(" ");
+            _ = try writer.write(item);
+        }
+    }
 };
 
-fn byteEncoded(text: []const u8) !ByteCodedContent {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
-
-    const allocator = arena.allocator();
-    // _ = allocator;
+fn byteEncoded(allocator: std.mem.Allocator, text: []const u8) !ByteCodedContent {
     var inner = try std.ArrayList([]const u8)
-        .initCapacity(allocator, 10);
+        .initCapacity(allocator, text.len);
 
     for (text) |byte| {
         const char = try std.fmt.allocPrint(allocator, "<{x:0>2}>", .{byte});
@@ -38,53 +33,56 @@ fn byteEncoded(text: []const u8) !ByteCodedContent {
     }
 
     return ByteCodedContent{
-        .gpa = gpa,
-        .arena = arena,
+        .allocator = allocator,
         .inner = inner,
     };
 }
 
-test "byte" {
-    const text = "hello";
-    var result = try byteEncoded(text);
-    result.deinit();
-}
-
 const BPETokenizer = struct {
-    arena: *std.heap.ArenaAllocator,
+    arena: std.heap.ArenaAllocator,
+    // allocator: std.mem.Allocator,
     vocab: std.StringArrayHashMap(usize),
     merges: std.ArrayList(struct { []const u8, []const u8 }),
 
     const Self = @This();
 
     fn deinit(self: *Self) void {
-        _ = self.arena.reset(.free_all);
+        self.arena.deinit();
+        // for (self.merges.items) |merge| {
+        //     self.allocator.free(merge.@"0");
+        //     self.allocator.free(merge.@"1");
+        // }
+        // self.vocab.deinit();
     }
 
-    fn new(arena: *std.heap.ArenaAllocator) !Self {
-        const allocator = arena.allocator();
+    fn new(allocator: std.mem.Allocator) !Self {
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        const alloc = arena.allocator();
+
         var vocab = std.StringArrayHashMap(usize)
-            .init(allocator);
+            .init(alloc);
 
         for (0..256) |i| {
-            const char = try std.fmt.allocPrint(allocator, "<{x:0>2}>", .{i});
+            const char = try std.fmt.allocPrint(alloc, "<{x:0>2}>", .{i});
             try vocab.put(char, i);
         }
+
+        const merges = try std.ArrayList(struct { []const u8, []const u8 })
+            .initCapacity(alloc, 10);
 
         return Self{
             .arena = arena,
             .vocab = vocab,
-            .merges = try std.ArrayList(struct { []const u8, []const u8 })
-                .initCapacity(allocator, 10),
+            .merges = merges,
         };
     }
 
     fn train(self: *Self, text: []const u8, vocab_size: usize) !void {
-        const alloc = self.arena.allocator();
-        var thread_safe_wrapper = std.heap.ThreadSafeAllocator{
-            .child_allocator = alloc,
-        };
-        const allocator = thread_safe_wrapper.allocator();
+        // const alloc = self.arena.allocator();
+        // var thread_safe_wrapper = std.heap.ThreadSafeAllocator{
+        //     .child_allocator = alloc,
+        // };
+        const allocator = self.arena.allocator();
 
         if (vocab_size <= 256) {
             return;
@@ -94,37 +92,38 @@ const BPETokenizer = struct {
         std.debug.print("  Starting.. {}\n", .{try std.Thread.getCpuCount()});
 
         // 应该使用独立的allocator，BPE的allocator是arena，不会提前释放
-        var tokens = try byteEncoded(text);
+        var tokens = try byteEncoded(allocator, text);
         defer tokens.deinit();
 
-        if (10 > 5) {
-            return;
-        }
-
         // std.debug.print("{any}\n", .{tokens});
-
-        const arena_count: usize = 10;
-        var part_arenas: [arena_count]std.heap.ArenaAllocator = undefined;
-        for (0..arena_count) |part_idx| {
-            var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-            const gpa_alloc = gpa.allocator();
-            const arena = std.heap.ArenaAllocator.init(gpa_alloc);
-            part_arenas[part_idx] = arena;
-        }
-        defer {
-            for (part_arenas) |part_arena| {
-                part_arena.deinit();
-            }
-        }
 
         for (256..vocab_size) |idx| {
             if (tokens.inner.items.len <= 1) {
                 break;
             }
 
+            const arena_count: usize = 10;
+            var part_arenas: [arena_count]std.heap.ArenaAllocator = undefined;
+            for (0..arena_count) |part_idx| {
+                var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+                const gpa_alloc = gpa.allocator();
+                const arena = std.heap.ArenaAllocator.init(gpa_alloc);
+                part_arenas[part_idx] = arena;
+            }
+            defer {
+                for (part_arenas) |part_arena| {
+                    part_arena.deinit();
+                }
+            }
+
             const start_ts = try std.time.Instant.now();
 
             var pair_maps: std.StringArrayHashMap(std.ArrayList(usize)) = undefined;
+
+            var arena = std.heap.ArenaAllocator.init(allocator);
+            defer arena.deinit();
+
+            const loop_allocator = arena.allocator();
 
             {
                 const par_start_ts = try std.time.Instant.now();
@@ -134,11 +133,12 @@ const BPETokenizer = struct {
 
                 const part_size = (tokens.inner.items.len + arena_count - 1) / arena_count;
                 const part_count = (tokens.inner.items.len + part_size - 1) / part_size;
+                std.debug.print("part count: {}\n", .{part_count});
                 // const part_count = (tokens.inner.items.len + part_size - 1) / part_size;
 
                 var work_group = std.Thread.WaitGroup{};
 
-                var part_maps = try allocator.alloc(
+                var part_maps = try loop_allocator.alloc(
                     std.StringArrayHashMap(std.ArrayList(usize)),
                     part_count,
                 );
@@ -239,7 +239,7 @@ const BPETokenizer = struct {
             };
 
             var pair_maps_sorted_list = try std.ArrayList(PairIndexes)
-                .initCapacity(allocator, pair_maps.count());
+                .initCapacity(loop_allocator, pair_maps.count());
 
             var pm_iter = pair_maps.iterator();
             while (pm_iter.next()) |entry| {
@@ -248,7 +248,7 @@ const BPETokenizer = struct {
 
                 // std.debug.print("pair: {s} indexes: {any}\n", .{ pair, indexes });
                 try pair_maps_sorted_list.append(
-                    allocator,
+                    loop_allocator,
                     PairIndexes{ .pair = pair, .indexes = count },
                 );
             }
@@ -259,22 +259,14 @@ const BPETokenizer = struct {
                 PairIndexes.greatThan,
             );
             const pair_sorted_time = try std.time.Instant.now();
-            // std.debug.print("  Pair construction: {any}\n", .{pair_construction_duration});
-            // std.debug.print("  Pair sorted: {any}\n", .{pair_sorted_time});
-
-            // for (pair_maps_sorted_list.items) |pair_indexes| {
-            //     std.debug.print("pair: {s} indexes: {any}\n", .{ pair_indexes.pair, pair_indexes.indexes.items.len });
-            // }
 
             const top_pair_indexes = pair_maps_sorted_list.items[0];
-            // const top_pair = pair_maps_sorted_list.items[0];
+
+            // if (20 > 5) {
+            //     continue;
+            // }
 
             std.debug.print("add vocab: key= {s} idx= {}\n", .{ top_pair_indexes.pair, idx });
-
-            // var self_vocab_iter = self.vocab.iterator();
-            // while (self_vocab_iter.next()) |entry| {
-            //     std.debug.print("vocab: key= {s} idx= {}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
-            // }
 
             const top_pair_global_key = try allocator.alloc(u8, top_pair_indexes.pair.len);
             @memcpy(top_pair_global_key, top_pair_indexes.pair);
@@ -284,50 +276,42 @@ const BPETokenizer = struct {
             var i = top_pair_indexes.indexes.items.len - 1;
             std.debug.print("indexes: {any}\n", .{top_pair_indexes.indexes.items.len});
 
-            {
-                // const last_idx = top_pair_indexes.indexes.items[i];
+            const last_idx = top_pair_indexes.indexes.items[i];
 
-                // const b_t = tokens.inner.orderedRemove(last_idx + 1);
+            // allocator.free(tokens.inner.items[last_idx + 1]);
+            const b_t = tokens.inner.orderedRemove(last_idx + 1);
+            const a_t = tokens.inner.items[last_idx];
 
-                // const a_t = tokens.inner.items[last_idx];
+            const pair_new = try allocator.alloc(u8, top_pair_indexes.pair.len);
+            @memcpy(pair_new, top_pair_indexes.pair);
 
-                // // const tokens_pair = try tokens.arena.allocator().alloc(u8, top_pair_indexes.pair.len);
-                // // @memcpy(tokens_pair, top_pair_indexes.pair);
-                // // tokens.inner.items[last_idx] = tokens_pair;
+            allocator.free(tokens.inner.items[last_idx]);
+            tokens.inner.items[last_idx] = pair_new;
 
-                // const a_t_g = try allocator.alloc(u8, a_t.len);
-                // @memcpy(a_t_g, a_t);
-                // const b_t_g = try allocator.alloc(u8, b_t.len);
-                // @memcpy(b_t_g, b_t);
-                // // std.debug.print("merge: {s}{s}\n", .{ a_t, b_t });
-                // try self.merges.append(
-                //     allocator,
-                //     .{ a_t_g, b_t_g },
-                // );
+            try self.merges.append(
+                allocator,
+                .{ a_t, b_t },
+            );
 
-                if (i == 0) {
-                    continue;
-                }
-
-                i -= 1;
+            if (i == 0) {
+                continue;
             }
 
-            // // const begin = std.time.milliTimestamp();
+            i -= 1;
 
-            var remove_indexes = try std.ArrayList(usize).initCapacity(allocator, i);
+            var remove_indexes = try std.ArrayList(usize).initCapacity(loop_allocator, i);
 
             while (i >= 0) {
                 const token_idx = top_pair_indexes.indexes.items[i];
 
-                try remove_indexes.append(allocator, token_idx + 1);
-                // std.debug.print("token_idx: {} i= {}\n", .{ token_idx, i });
-                // _ = tokens.inner.orderedRemove(token_idx + 1);
+                try remove_indexes.append(loop_allocator, token_idx + 1);
 
-                // tokens.inner.items[token_idx] = top_pair_indexes.pair;
+                allocator.free(tokens.inner.items[token_idx]);
+                allocator.free(tokens.inner.items[token_idx + 1]);
+
+                tokens.inner.items[token_idx] = pair_new;
 
                 if (i == 0) {
-                    // const end = std.time.milliTimestamp();
-                    // std.debug.print("merge time: {}ms\n", .{(end - begin)});
                     break;
                 } else {
                     i -= 1;
@@ -358,7 +342,7 @@ const BPETokenizer = struct {
         // }
         const allocator = self.arena.allocator();
 
-        var tokens = try byteEncoded(text);
+        var tokens = try byteEncoded(allocator, text);
         defer tokens.deinit();
         std.debug.print("tokens: {f}\n", .{tokens});
 
@@ -451,40 +435,40 @@ test "bpe tokenizer" {
 
     try token.train("hello hello world world hello", 300);
 
-    // const res = try token.encode("hello world");
-    // std.debug.print("res: {any}\n", .{res});
+    const res = try token.encode("hello world");
+    std.debug.print("res: {any}\n", .{res});
 
-    // const decoded = try token.decode(res.items);
-    // std.debug.print("decoded: {s}\n", .{decoded});
+    const decoded = try token.decode(res.items);
+    std.debug.print("decoded: {s}\n", .{decoded});
 }
 
 test "gutenberg" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const alloc = gpa.allocator();
-    // const alloc = std.testing.allocator;
-
-    var arena_alloc = std.heap.ArenaAllocator.init(alloc);
-    defer arena_alloc.deinit();
+    // var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    // const alloc = gpa.allocator();
+    const alloc = std.testing.allocator;
 
     try pool.init(.{ .allocator = alloc });
     defer pool.deinit();
 
-    var token = try BPETokenizer.new(&arena_alloc);
+    var token = try BPETokenizer.new(alloc);
     defer token.deinit();
 
     const real_path = try std.fs.realpathAlloc(alloc, "../../Temp/pg100.txt");
+    defer alloc.free(real_path);
     std.debug.print("real path: {s}\n", .{real_path});
 
     const file = try std.fs.openFileAbsolute(real_path, .{ .mode = .read_only });
     var file_buffer: [1024]u8 = undefined;
     var file_reader = file.reader(&file_buffer);
     const file_size = try file_reader.getSize();
+
     const file_contents = try file_reader.interface.readAlloc(alloc, @intCast(file_size));
+    defer alloc.free(file_contents);
 
     std.debug.print("file_size: {}\n", .{file_size});
 
     const begin_ts = try std.time.Instant.now();
-    try token.train(file_contents, 512);
+    try token.train(file_contents, 512 * 40);
     const end_ts = try std.time.Instant.now();
     std.debug.print("elasped: {}ms\n", .{end_ts.since(begin_ts) / 1_000_000});
 }
