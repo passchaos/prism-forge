@@ -142,6 +142,7 @@ pub fn trainNet(
             try adam.update(grads1.weights, grads1.grads);
 
             try shape_env.bindGlobal(&batch_size_expr.Sym, test_images.shape()[0]);
+
             const loss_x = try test_images_c.reshape(&.{ batch_size_expr, C, H, W });
             defer loss_x.deinit();
             const loss_t = try test_labels.reshape(&.{ batch_size_expr, num_classes_expr });

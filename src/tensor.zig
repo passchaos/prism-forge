@@ -751,7 +751,8 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
             const m = self.shape()[0];
             const n = self.shape()[1];
 
-            const a_d: [*c]T = @ptrCast(a.storage.dataSlice());
+            const a_d = a.storage.dataSlice();
+            // const a_d: [*c]T = @ptrCast(a.storage.dataSlice());
 
             const allocator = self.s_allocator();
 

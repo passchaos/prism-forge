@@ -14,7 +14,20 @@ pub fn dbg(v: anytype) @TypeOf(v) {
     else
         .{ "", 0, 0 };
 
-    std.debug.print("[{s}:{s} {s}:{d}:{d}] -> {any}", .{ symbol_info.name, symbol_info.compile_unit_name, file_name, line, column, v });
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const cwd_path = std.fs.cwd().realpathAlloc(gpa.allocator(), ".") catch unreachable;
+
+    if (std.mem.startsWith(u8, file_name, cwd_path)) {
+        std.debug.print("begin with: {s}\n", .{cwd_path});
+    }
+
+    const relative_path = file_name[cwd_path.len..];
+    // const relative_path = std.mem.trimStart(u8, file_name, cwd_path);
+
+    const relative_file = std.mem.trimStart(u8, relative_path, "/");
+    std.debug.print("cwd path: {s} {s}\n", .{ cwd_path, relative_file });
+
+    std.debug.print("[{s}:{s} {s}:{d}:{d}] -> {any}", .{ symbol_info.name, symbol_info.compile_unit_name, relative_file, line, column, v });
 
     return v;
 }

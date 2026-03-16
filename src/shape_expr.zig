@@ -452,11 +452,11 @@ pub const ShapeEnv = struct {
     }
 
     fn bindInner(self: *Self, sym: *const SymbolHandle, value: usize) !void {
-        if (self.sym_map.get(sym)) |v| {
-            if (v != value) return error.CannotRebindSymbolOtherValue;
-        } else {
-            try self.sym_map.put(sym, value);
-        }
+        // if (self.sym_map.get(sym)) |v| {
+        //     if (v != value) return error.CannotRebindSymbolOtherValue;
+        // } else {
+        try self.sym_map.put(sym, value);
+        // }
     }
 
     pub fn bindGlobal(self: *Self, sym: *const SymbolHandle, value: usize) !void {

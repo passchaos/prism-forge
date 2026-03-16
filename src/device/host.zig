@@ -22,11 +22,13 @@ pub fn matmul(comptime T: type, a: [*c]const T, b: [*c]const T, c: [*c]T, m_i: u
     }
 }
 
-pub fn svd(allocator: std.mem.Allocator, comptime T: type, a: [*c]T, m: usize, n: usize) !struct {
+pub fn svd(allocator: std.mem.Allocator, comptime T: type, a_: []T, m: usize, n: usize) !struct {
     u: []T,
     s: []T,
     vt: []T,
 } {
+    const a = @as([*c]T, @ptrCast(a_));
+
     var fake_m = n;
     var fake_n = m;
 
@@ -41,91 +43,66 @@ pub fn svd(allocator: std.mem.Allocator, comptime T: type, a: [*c]T, m: usize, n
     var lwork: c_int = -1;
     var info: c_int = 0;
 
-    const res = switch (T) {
-        f32 => blasapi.dgesvd_(
-            job_i,
-            job_i,
-            @as([*c]c_int, @ptrCast(&fake_m)),
-            @as([*c]c_int, @ptrCast(&fake_n)),
-            a,
-            @as([*c]c_int, @ptrCast(&fake_m)),
-            @as([*c]T, @ptrCast(s_d)),
-            @as([*c]T, @ptrCast(fake_u_d)),
-            @as([*c]c_int, @ptrCast(&fake_m)),
-            @as([*c]T, @ptrCast(fake_vt_d)),
-            @as([*c]c_int, @ptrCast(&fake_n)),
-            @as([*c]T, @ptrCast(&work_query)),
-            &lwork,
-            &info,
-        ),
-        f64 => blasapi.dgesvd_(
-            job_i,
-            job_i,
-            @as([*c]c_int, @ptrCast(&fake_m)),
-            @as([*c]c_int, @ptrCast(&fake_n)),
-            a,
-            @as([*c]c_int, @ptrCast(&fake_m)),
-            @as([*c]T, @ptrCast(s_d)),
-            @as([*c]T, @ptrCast(fake_u_d)),
-            @as([*c]c_int, @ptrCast(&fake_m)),
-            @as([*c]T, @ptrCast(fake_vt_d)),
-            @as([*c]c_int, @ptrCast(&fake_n)),
-            @as([*c]T, @ptrCast(&work_query)),
-            &lwork,
-            &info,
-        ),
-        else => @compileError("unsupported data type: " ++ @typeName(T)),
+    const fake_m_c = @as([*c]c_int, @ptrCast(&fake_m));
+    const fake_n_c = @as([*c]c_int, @ptrCast(&fake_n));
+    const s_d_c = @as([*c]T, @ptrCast(s_d));
+    const fake_u_d_c = @as([*c]T, @ptrCast(fake_u_d));
+    const fake_vt_d_c = @as([*c]T, @ptrCast(fake_vt_d));
+
+    var work_query_c = @as([*c]T, @ptrCast(&work_query));
+
+    const svd_func = switch (T) {
+        f32 => blasapi.sgesvd_,
+        f64 => blasapi.dgesvd_,
+        else => unreachable,
     };
 
-    if (res != 0) return error.SvdQueryFailed;
+    var res = svd_func(
+        job_i,
+        job_i,
+        fake_m_c,
+        fake_n_c,
+        a,
+        fake_m_c,
+        s_d_c,
+        fake_u_d_c,
+        fake_m_c,
+        fake_vt_d_c,
+        fake_n_c,
+        work_query_c,
+        &lwork,
+        &info,
+    );
 
-    // std.debug.print("work_query: {any} info: {} res: {}\n", .{ work_query, info, res });
+    if (res != 0) return error.SvdQueryFailed;
 
     const work_size = @as(usize, @intFromFloat(work_query[0]));
     lwork = @as(c_int, @intCast(work_size));
 
-    var work = try allocator.alloc(T, work_size);
+    const buf = try allocator.alloc(T, work_size);
+    defer allocator.free(buf);
 
-    const res1 = switch (T) {
-        f32 => blasapi.sgesvd_(
-            job_i,
-            job_i,
-            @as([*c]c_int, @ptrCast(&fake_m)),
-            @as([*c]c_int, @ptrCast(&fake_n)),
-            a,
-            @as([*c]c_int, @ptrCast(&fake_m)),
-            @as([*c]T, @ptrCast(s_d)),
-            @as([*c]T, @ptrCast(fake_u_d)),
-            @as([*c]c_int, @ptrCast(&fake_m)),
-            @as([*c]T, @ptrCast(fake_vt_d)),
-            @as([*c]c_int, @ptrCast(&fake_n)),
-            @as([*c]T, @ptrCast(&work)),
-            &lwork,
-            &info,
-        ),
-        f64 => blasapi.dgesvd_(
-            job_i,
-            job_i,
-            @as([*c]c_int, @ptrCast(&fake_m)),
-            @as([*c]c_int, @ptrCast(&fake_n)),
-            a,
-            @as([*c]c_int, @ptrCast(&fake_m)),
-            @as([*c]T, @ptrCast(s_d)),
-            @as([*c]T, @ptrCast(fake_u_d)),
-            @as([*c]c_int, @ptrCast(&fake_m)),
-            @as([*c]T, @ptrCast(fake_vt_d)),
-            @as([*c]c_int, @ptrCast(&fake_n)),
-            @as([*c]T, @ptrCast(&work)),
-            &lwork,
-            &info,
-        ),
-        else => @compileError("unsupported data type: " ++ @typeName(T)),
-    };
+    work_query_c = @ptrCast(buf);
 
-    if (res1 != 0) return error.SvdComputeFailed;
+    res = svd_func(
+        job_i,
+        job_i,
+        fake_m_c,
+        fake_n_c,
+        a,
+        fake_m_c,
+        s_d_c,
+        fake_u_d_c,
+        fake_m_c,
+        fake_vt_d_c,
+        fake_n_c,
+        work_query_c,
+        &lwork,
+        &info,
+    );
 
-    // std.debug.print("work_query: info: {} res: {}\n", .{ info, res1 });
-    // std.debug.print("u: {any} s: {any} vt: {any}\n", .{ fake_vt_d, s_d, fake_u_d });
+    if (res != 0) return error.SvdComputeFailed;
+
     return .{
         .u = fake_vt_d,
         .s = s_d,
