@@ -151,17 +151,17 @@ pub fn MultiLayerNet(
 
                 var affine_layer: *Affine = @ptrCast(@alignCast(affine));
 
-                weights[i * 2] = try affine_layer.w.view();
+                weights[i * 2] = try affine_layer.matmul.w.view();
                 weights[i * 2 + 1] = try affine_layer.b.view();
-                grads[i * 2] = try affine_layer.dw.?.view();
+                grads[i * 2] = try affine_layer.matmul.dw.?.view();
                 grads[i * 2 + 1] = try affine_layer.db.?.view();
 
                 tmp_size = &.{hidden_size};
             }
 
-            weights[(count - 1) * 2] = try self.output_layer.w.view();
+            weights[(count - 1) * 2] = try self.output_layer.matmul.w.view();
             weights[(count - 1) * 2 + 1] = try self.output_layer.b.view();
-            grads[(count - 1) * 2] = try self.output_layer.dw.?.view();
+            grads[(count - 1) * 2] = try self.output_layer.matmul.dw.?.view();
             grads[(count - 1) * 2 + 1] = try self.output_layer.db.?.view();
 
             return .{ .allocator = self.allocator, .weights = weights, .grads = grads };
@@ -202,7 +202,7 @@ pub fn MultiLayerNet(
 
         pub fn init(
             allocator: std.mem.Allocator,
-            weight_init_std: layer.AffineWeight(T),
+            weight_init_std: layer.WeightInit(T),
             shape_env: *const ShapeEnv,
             dropout_ratio: ?f32,
         ) !Self {

@@ -29,8 +29,9 @@ const Logger = struct {
         };
     }
 
-    fn print(self: *const Self, comptime src: std.builtin.SourceLocation, comptime format: []const u8, args: anytype) !void {
-        const local = try zdt.Datetime.now(zdt.Datetime.tz_options{ .tz = &self.tz });
+    fn print(_: *const Self, comptime src: std.builtin.SourceLocation, comptime format: []const u8, args: anytype) !void {
+        const local = zdt.Datetime.nowUTC();
+        // const local = try zdt.Datetime.now(zdt.Datetime.tz_options{ .tz = &self.tz });
         // const utc = try zeit.instant(.{});
         // const local = utc.in(&self.tz);
 

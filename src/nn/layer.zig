@@ -9,6 +9,7 @@ const SizeExpr = shape_expr.SizeExpr;
 
 pub const Layer = enum {
     Relu,
+    Matmul,
     Affine,
     SoftmaxWithLoss,
 };
@@ -55,11 +56,11 @@ pub fn Relu(comptime shape: []const SizeExpr, comptime T: type) type {
     };
 }
 
-pub fn AffineWeight(comptime T: type) type {
+pub fn WeightInit(comptime T: type) type {
     return union(enum) { Std: T, Xavier, He };
 }
 
-pub fn Affine(
+pub fn Matmul(
     comptime B_S: SizeExpr,
     comptime I_S: []const SizeExpr,
     comptime O_S: SizeExpr,
@@ -68,12 +69,10 @@ pub fn Affine(
     return struct {
         const I_S_FLAT = shape_expr.product(I_S);
 
-        tag: Layer = Layer.Affine,
+        tag: Layer = Layer.Matmul,
         w: tensor.Tensor(&.{ I_S_FLAT, O_S }, T),
-        b: tensor.Tensor(&.{ SizeExpr.static(1), O_S }, T),
         x: ?tensor.Tensor(&.{ B_S, I_S_FLAT }, T) = null,
         dw: ?tensor.Tensor(&.{ I_S_FLAT, O_S }, T) = null,
-        db: ?tensor.Tensor(&.{ SizeExpr.static(1), O_S }, T) = null,
 
         const Self = @This();
 
@@ -91,11 +90,7 @@ pub fn Affine(
             }
             self.x = x_c_r;
 
-            var out = try x_c_r.matmul(&self.w);
-            const broadcasted_b = self.b.broadcastTo(@TypeOf(out).S);
-            defer broadcasted_b.deinit();
-
-            out.add_(&broadcasted_b);
+            const out = try x_c_r.matmul(&self.w);
 
             return out;
         }
@@ -114,28 +109,20 @@ pub fn Affine(
             defer x_t.deinit();
 
             const n_dw = try x_t.matmul(dout);
-            const n_db = try dout.sum(0);
 
             if (self.dw) |dwr| {
                 dwr.deinit();
             }
-            if (self.db) |dbr| {
-                dbr.deinit();
-            }
 
             self.dw = n_dw;
-            self.db = n_db;
 
             const dx1 = try dx.reshape(&[1]SizeExpr{B_S} ++ I_S);
-
-            // std.debug.print("backward: dw layout= {f}\n", .{n_dw.layout});
 
             return dx1;
         }
 
         pub fn deinit(self: *Self) void {
             self.w.deinit();
-            self.b.deinit();
 
             if (self.x) |x_r| {
                 x_r.deinit();
@@ -144,16 +131,12 @@ pub fn Affine(
             if (self.dw) |dw_r| {
                 dw_r.deinit();
             }
-
-            if (self.db) |db_r| {
-                db_r.deinit();
-            }
         }
 
         pub fn init(
             allocator: std.mem.Allocator,
             shape_env: *const shape_expr.ShapeEnv,
-            weight_init: AffineWeight(T),
+            weight_init: WeightInit(T),
         ) !Self {
             const w = try tensor.randNorm(
                 allocator,
@@ -163,21 +146,13 @@ pub fn Affine(
                 1.0,
             );
 
-            const b = try tensor.zeros(
-                allocator,
-                T,
-                &.{ SizeExpr.static(1), O_S },
-                shape_env,
-            );
-
-            return try Self.initImpl(shape_env, weight_init, w, b);
+            return try Self.initImpl(shape_env, weight_init, w);
         }
 
         pub fn initImpl(
             shape_env: *const shape_expr.ShapeEnv,
-            weight_init: AffineWeight(T),
+            weight_init: WeightInit(T),
             w: tensor.Tensor(&.{ I_S_FLAT, O_S }, T),
-            b: tensor.Tensor(&.{ SizeExpr.static(1), O_S }, T),
         ) !Self {
             const scale = switch (weight_init) {
                 .Std => |init_std| init_std,
@@ -200,6 +175,88 @@ pub fn Affine(
 
             return Self{
                 .w = w_i,
+            };
+        }
+    };
+}
+
+pub fn Affine(
+    comptime B_S: SizeExpr,
+    comptime I_S: []const SizeExpr,
+    comptime O_S: SizeExpr,
+    comptime T: type,
+) type {
+    return struct {
+        const I_S_FLAT = shape_expr.product(I_S);
+        const MM = Matmul(B_S, I_S, O_S, T);
+
+        tag: Layer = Layer.Affine,
+        matmul: MM,
+        b: tensor.Tensor(&.{ SizeExpr.static(1), O_S }, T),
+        db: ?tensor.Tensor(&.{ SizeExpr.static(1), O_S }, T) = null,
+
+        const Self = @This();
+
+        pub fn forward(
+            self: *Self,
+            x: *const tensor.Tensor(&[1]SizeExpr{B_S} ++ I_S, T),
+        ) !tensor.Tensor(&.{ B_S, O_S }, T) {
+            var out = try self.matmul.forward(x);
+            const broadcasted_b = self.b.broadcastTo(@TypeOf(out).S);
+            defer broadcasted_b.deinit();
+
+            out.add_(&broadcasted_b);
+
+            return out;
+        }
+
+        pub fn backward(
+            self: *Self,
+            dout: *const tensor.Tensor(&.{ B_S, O_S }, T),
+        ) !tensor.Tensor(&[1]SizeExpr{B_S} ++ I_S, T) {
+            const dx = try self.matmul.backward(dout);
+            defer dx.deinit();
+
+            const n_db = try dout.sum(0);
+
+            if (self.db) |dbr| {
+                dbr.deinit();
+            }
+
+            self.db = n_db;
+
+            const dx1 = try dx.reshape(&[1]SizeExpr{B_S} ++ I_S);
+
+            // std.debug.print("backward: dw layout= {f}\n", .{n_dw.layout});
+
+            return dx1;
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.matmul.deinit();
+            self.b.deinit();
+
+            if (self.db) |db_r| {
+                db_r.deinit();
+            }
+        }
+
+        pub fn init(
+            allocator: std.mem.Allocator,
+            shape_env: *const shape_expr.ShapeEnv,
+            weight_init: WeightInit(T),
+        ) !Self {
+            const matmul = try MM.init(allocator, shape_env, weight_init);
+
+            const b = try tensor.zeros(
+                allocator,
+                T,
+                &.{ SizeExpr.static(1), O_S },
+                shape_env,
+            );
+
+            return Self{
+                .matmul = matmul,
                 .b = b,
             };
         }
@@ -218,6 +275,7 @@ test "affine_relu_softmax_loss" {
 
     try shape_env.bind(&B_S.Sym, 3);
 
+    const MatmulT = Matmul(B_S, &.{I_SIZE}, O_SIZE, f64);
     const AffineT = Affine(
         B_S,
         &.{I_SIZE},
@@ -254,12 +312,16 @@ test "affine_relu_softmax_loss" {
     const ab1 = try ab.reshape(&.{ SizeExpr.static(1), O_SIZE });
     // defer ab1.deinit();
 
-    var affine = try AffineT.initImpl(
+    const mm = try MatmulT.initImpl(
         &shape_env,
-        AffineWeight(f64){ .Std = 0.01 },
+        WeightInit(f64){ .Std = 0.01 },
         w1,
-        ab1,
     );
+
+    var affine = AffineT{
+        .matmul = mm,
+        .b = ab1,
+    };
     defer affine.deinit();
 
     var relu = ReluT.init();

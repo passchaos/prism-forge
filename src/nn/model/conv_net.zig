@@ -142,12 +142,12 @@ pub fn ConvNet(
             grads[0] = try self.conv1.dw.?.view();
             weights[1] = try self.conv1.b.view();
             grads[1] = try self.conv1.db.?.view();
-            weights[2] = try self.affine1.w.view();
-            grads[2] = try self.affine1.dw.?.view();
+            weights[2] = try self.affine1.matmul.w.view();
+            grads[2] = try self.affine1.matmul.dw.?.view();
             weights[3] = try self.affine1.b.view();
             grads[3] = try self.affine1.db.?.view();
-            weights[4] = try self.affine2.w.view();
-            grads[4] = try self.affine2.dw.?.view();
+            weights[4] = try self.affine2.matmul.w.view();
+            grads[4] = try self.affine2.matmul.dw.?.view();
             weights[5] = try self.affine2.b.view();
             grads[5] = try self.affine2.db.?.view();
 
@@ -239,13 +239,13 @@ pub fn ConvNet(
             const affine1 = try Affine1.init(
                 allocator,
                 shape_env,
-                layer.AffineWeight(T){ .Std = weight_init_std },
+                layer.WeightInit(T){ .Std = weight_init_std },
             );
             const relu2 = Relu2.init();
             const affine2 = try Affine2.init(
                 allocator,
                 shape_env,
-                layer.AffineWeight(T){ .Std = weight_init_std },
+                layer.WeightInit(T){ .Std = weight_init_std },
             );
             const softmax_with_loss = SoftmaxWithLoss.init();
 
