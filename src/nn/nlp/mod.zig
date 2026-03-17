@@ -1,4 +1,6 @@
 pub const classic = @import("classic.zig");
+pub const word2vec = @import("word2vec.zig");
+
 const std = @import("std");
 
 pub fn dbg(v: anytype) @TypeOf(v) {

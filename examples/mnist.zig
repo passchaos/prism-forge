@@ -21,7 +21,7 @@ pub fn main() !void {
     const t1 = try std.Thread.spawn(
         .{},
         trainNet,
-        .{ allocator, 10000, 100, 0.001 },
+        .{ allocator, 1000, 100, 0.001 },
     );
     try prism.plot.beginPlotLoop(allocator);
     t1.join();

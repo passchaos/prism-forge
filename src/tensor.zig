@@ -2105,6 +2105,29 @@ pub fn fromData(
     );
 }
 
+pub fn fromDataRef(
+    comptime T: type,
+    allocator: std.mem.Allocator,
+    arr: []T,
+    comptime shape_expr_a: []const SizeExpr,
+    shape_env: *const ShapeEnv,
+) !Tensor(shape_expr_a, T) {
+    const buf = try allocator.alloc(T, arr.len);
+    @memcpy(buf, arr);
+
+    const layout = try layout_t.Layout(shape_expr_a).init(shape_env);
+    const Storage = storage_t.Storage(T);
+
+    const storage = try Storage.initImpl(allocator, buf);
+
+    return Tensor(shape_expr_a, T)
+        .fromDataImpl(
+        layout,
+        storage,
+        0,
+    );
+}
+
 pub fn fromScalar(allocator: std.mem.Allocator, value: anytype) !Tensor(
     0,
     .{ .T = utils.comptimeNumberTypeEraseComp(@TypeOf(value)) },

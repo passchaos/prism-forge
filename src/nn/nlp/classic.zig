@@ -13,7 +13,7 @@ const Preprocessed = struct {
     id_to_word: std.AutoArrayHashMap(usize, []const u8),
 
     const Self = Preprocessed;
-    fn deinit(self: *Self) void {
+    pub fn deinit(self: *Self) void {
         self.allocator.free(self.text_buffer);
         self.corpus.deinit(self.allocator);
         self.word_to_id.deinit();
