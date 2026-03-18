@@ -178,11 +178,17 @@ pub const SizeExpr = union(enum) {
     // use comptime pointer may cause unexpected comptime behavior
     pub fn mul(comptime lhs: Self, comptime rhs: Self) Self {
         switch (lhs) {
-            .Static => |a_v| switch (rhs) {
-                .Static => |b_v| {
-                    return SizeExpr.static(a_v * b_v);
-                },
-                else => {},
+            .Static => |a_v| {
+                if (a_v == 1) {
+                    return rhs;
+                }
+
+                switch (rhs) {
+                    .Static => |b_v| {
+                        return SizeExpr.static(a_v * b_v);
+                    },
+                    else => {},
+                }
             },
             else => {},
         }

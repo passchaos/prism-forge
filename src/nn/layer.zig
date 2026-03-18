@@ -67,7 +67,7 @@ pub fn Matmul(
     comptime T: type,
 ) type {
     return struct {
-        const I_S_FLAT = shape_expr.product(I_S);
+        pub const I_S_FLAT = shape_expr.product(I_S);
 
         tag: Layer = Layer.Matmul,
         w: tensor.Tensor(&.{ I_S_FLAT, O_S }, T),

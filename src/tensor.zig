@@ -1610,13 +1610,13 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
         }
 
         // layout view method
-        fn computeSharedViewShapeErasedPrefixSize(comptime slice_exprs: []const SliceExpr) usize {
-            comptime var erased_size: usize = 0;
+        fn computeSliceViewIndexSize(comptime slice_exprs: []const SliceExpr) usize {
+            var erased_size: usize = 0;
 
-            inline for (slice_exprs) |expr| {
+            for (slice_exprs) |expr| {
                 switch (expr) {
                     .Index => erased_size += 1,
-                    else => break,
+                    else => {},
                 }
             }
 
@@ -1717,37 +1717,54 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
             return base_offset;
         }
 
-        fn computeSharedViewShape(comptime slice_exprs: []const SliceExpr) [N - computeSharedViewShapeErasedPrefixSize(slice_exprs)]SizeExpr {
-            // @compileLog("base shape: " ++ std.fmt.comptimePrint("{any}\n", .{base_shape}));
+        fn computeSharedViewShape(comptime slice_exprs: []const SliceExpr) [N - computeSliceViewIndexSize(slice_exprs)]SizeExpr {
+            var base_shape: [N - computeSliceViewIndexSize(slice_exprs)]SizeExpr = undefined;
 
-            if (slice_exprs.len == 0) {
-                return utils.array.comptimeSliceToArray(SizeExpr, S);
-            } else if (slice_exprs.len > N) {
-                @compileError("Too many slice expressions");
-            }
+            var j: usize = 0;
 
-            comptime var base_shape = utils.array.comptimeSliceToArray(SizeExpr, SA);
-
-            inline for (slice_exprs, 0..) |expr, i| {
-                switch (expr) {
-                    .All => {},
-                    .Index => |_| base_shape[i] = SizeExpr.static(1),
-                    .Range => |range| base_shape[i] = range.end.min(S[i]).sub(range.start),
+            for (0..N) |i| {
+                if (i >= slice_exprs.len) {
+                    base_shape[j] = S[i];
+                    j += 1;
+                } else {
+                    switch (slice_exprs[i]) {
+                        .Index => continue,
+                        .Range => |r| {
+                            base_shape[j] = r.end.min(S[i]).sub(r.start);
+                            j += 1;
+                        },
+                        .All => {
+                            base_shape[j] = S[i];
+                            j += 1;
+                        },
+                    }
                 }
             }
 
-            const erased_prefix = comptime computeSharedViewShapeErasedPrefixSize(slice_exprs);
+            return base_shape;
+        }
 
-            comptime var shape_i = [_]SizeExpr{SizeExpr.static(0)} ** (N - erased_prefix);
+        fn computeSharedViewStride(self: *const Self, comptime slice_exprs: []const SliceExpr) [N - computeSliceViewIndexSize(slice_exprs)]usize {
+            var base_stride: [N - computeSliceViewIndexSize(slice_exprs)]usize = undefined;
 
-            // @compileLog("erased_prefix: " ++ std.fmt.comptimePrint("{} {}\n", .{ erased_prefix, N }));
+            var j: usize = 0;
 
-            inline for (erased_prefix..N) |i| {
-                shape_i[i - erased_prefix] = base_shape[i];
+            for (0..N) |i| {
+                if (i >= slice_exprs.len) {
+                    base_stride[j] = self.stride()[i];
+                    j += 1;
+                } else {
+                    switch (slice_exprs[i]) {
+                        .Index => continue,
+                        else => {
+                            base_stride[j] = self.stride()[i];
+                            j += 1;
+                        },
+                    }
+                }
             }
-            // @compileLog("shape_i: " ++ std.fmt.comptimePrint("{any}\n", .{shape_i}));
 
-            return shape_i;
+            return base_stride;
         }
 
         pub fn sliceView(self: *const Self, comptime slice_exprs: []const SliceExpr) !Tensor(
@@ -1755,15 +1772,8 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
             T,
         ) {
             const new_shape_expr = comptime computeSharedViewShape(slice_exprs);
+            const new_stride = self.computeSharedViewStride(slice_exprs);
             const base_offset = try computeSharedViewBaseOffset(self, slice_exprs, self.layout.shape_env());
-
-            const erased_prefix = comptime computeSharedViewShapeErasedPrefixSize(slice_exprs);
-
-            var new_stride = [_]usize{0} ** new_shape_expr.len;
-
-            inline for (erased_prefix..N) |i| {
-                new_stride[i - erased_prefix] = self.stride()[i];
-            }
 
             return Tensor(&new_shape_expr, T){
                 ._base = self,
@@ -1801,26 +1811,117 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
             return Tensor(new_shape_expr, T).fromDataImpl(layout, storage, self._storage_offset);
         }
 
-        pub fn unsqueeze(self: *const Self, dim: usize) !Tensor(N + 1, .{ .T = T }) {
-            const layout = try self.layout.unsqueeze(dim);
-            const storage = self.storage.shared();
+        fn computeUnsqueezeShape(comptime dim: usize) [N + 1]SizeExpr {
+            var new_shape: [N + 1]SizeExpr = undefined;
 
-            return try Tensor(N + 1, .{ .T = T }).fromDataImpl(
-                layout,
-                storage,
-                self._storage_offset,
-            );
+            var j: usize = 0;
+            for (0..N) |i| {
+                if (i == dim) {
+                    new_shape[j] = SizeExpr.static(1);
+                    new_shape[j + 1] = S[i];
+
+                    j += 2;
+                } else {
+                    new_shape[j] = S[i];
+
+                    j += 1;
+                }
+            }
+
+            if (dim == N) {
+                new_shape[dim] = SizeExpr.static(1);
+            } else if (dim > N) {
+                @compileError("unsqueeze dimension out of bounds");
+            }
+
+            return new_shape;
         }
 
-        pub fn squeeze(self: *const Self, dim: usize) !Tensor(N - 1, .{ .T = T }) {
-            const layout = try self.layout.squeeze(dim);
-            const storage = self.storage.shared();
+        fn computeUnsqueezeStride(self: *const Self, comptime dim: usize) [N + 1]usize {
+            var new_stride: [N + 1]usize = undefined;
 
-            return try Tensor(N - 1, .{ .T = T }).fromDataImpl(
-                layout,
-                storage,
-                self._storage_offset,
-            );
+            var j: usize = 0;
+            for (0..N) |i| {
+                if (i == dim) {
+                    new_stride[j] = 0;
+                    new_stride[j + 1] = self.stride()[i];
+
+                    j += 2;
+                } else {
+                    new_stride[j] = self.stride()[i];
+
+                    j += 1;
+                }
+            }
+
+            if (dim == N) {
+                new_stride[dim] = 0;
+            }
+
+            return new_stride;
+        }
+
+        pub fn unsqueeze(self: *const Self, comptime dim: usize) !Tensor(&computeUnsqueezeShape(dim), T) {
+            const new_shape = comptime computeUnsqueezeShape(dim);
+            const new_stride = self.computeUnsqueezeStride(dim);
+
+            const new_layout = try layout_t.Layout(&new_shape).initRaw(self.layout.shape_env(), new_stride);
+
+            return Tensor(&new_shape, T){
+                ._base = self,
+                .storage = self.storage.shared(),
+                .layout = new_layout,
+                ._storage_offset = self._storage_offset,
+            };
+        }
+
+        fn computeSqueezeShape(comptime dims: []const usize) [N - dims.len]SizeExpr {
+            var new_shape: [N - dims.len]SizeExpr = undefined;
+
+            var j: usize = 0;
+            for (0..N) |i| {
+                if (std.mem.indexOfScalar(usize, dims, i)) |_| {
+                    switch (S[i]) {
+                        .Static => |v| {
+                            if (v != 1) {
+                                @compileError("Cannot squeeze dimension: " ++ std.fmt.comptimePrint("{} value: {}\n", .{ i, v }));
+                            }
+                        },
+                        else => {},
+                    }
+                } else {
+                    new_shape[j] = S[i];
+                    j += 1;
+                }
+            }
+            return new_shape;
+        }
+
+        fn computeSqueezeStride(self: *const Self, comptime dims: []const usize) [N - dims.len]usize {
+            var new_stride: [N - dims.len]usize = undefined;
+
+            var j: usize = 0;
+            for (0..N) |i| {
+                if (std.mem.indexOfScalar(usize, dims, i)) |_| {} else {
+                    new_stride[j] = self.stride()[i];
+                    j += 1;
+                }
+            }
+            return new_stride;
+        }
+
+        pub fn squeeze(self: *const Self, comptime dims: []const usize) !Tensor(&computeSqueezeShape(dims), T) {
+            const new_shape = comptime computeSqueezeShape(dims);
+            const new_stride = self.computeSqueezeStride(dims);
+
+            const new_layout = try layout_t.Layout(&new_shape).initRaw(self.layout.shape_env(), new_stride);
+
+            return Tensor(&new_shape, T){
+                ._base = self,
+                .storage = self.storage.shared(),
+                .layout = new_layout,
+                ._storage_offset = self._storage_offset,
+            };
         }
 
         // core method
@@ -3335,11 +3436,23 @@ test "shared_view" {
     std.debug.print("iv2: {f}\n", .{iv2});
     try std.testing.expectEqual(iv2.shape(), [1]usize{5});
 
-    var iv3 = try input.sliceView(&.{ SliceExpr.index(SizeExpr.static(2)), SliceExpr.index(SizeExpr.static(4)) });
+    var iv3 = try input.sliceView(&.{ .All, SliceExpr.index(SizeExpr.static(4)) });
     defer iv3.deinit();
-    try std.testing.expectEqual(iv3.shape(), [0]usize{});
     std.debug.print("iv3: {f}\n", .{iv3});
+    try std.testing.expectEqual(iv3.shape(), [1]usize{3});
 
+    {
+        // const iv3s = try iv3.squeeze(&.{1});
+        // defer iv3s.deinit();
+
+        const iv3su0 = try iv3.unsqueeze(0);
+        defer iv3su0.deinit();
+
+        const iv3su = try iv3.unsqueeze(1);
+        defer iv3su.deinit();
+
+        std.debug.print("iv3s: {f} iv3su0: {f} iv3su: {f}\n", .{ iv3, iv3su0, iv3su });
+    }
     var iv4 = try input.sliceView(&.{
         SliceExpr.range(SizeExpr.static(1), SizeExpr.static(3)),
         SliceExpr.range(SizeExpr.static(1), SizeExpr.static(8)),
