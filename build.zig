@@ -33,18 +33,38 @@ pub fn build(b: *std.Build) void {
     const zdt_mod = zdt_dep.module("zdt");
     prism_mod.addImport("zdt", zdt_mod);
 
-    const mnist_exe = b.addExecutable(.{
-        .name = "mnist",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("examples/mnist.zig"),
-            .imports = &.{.{ .name = "prism", .module = prism_mod }},
-            .target = target,
-        }),
-    });
-    b.installArtifact(mnist_exe);
-    const mnist_cmd = b.addRunArtifact(mnist_exe);
-    const mnist_step = b.step("mnist", "Run mnist");
-    mnist_step.dependOn(&mnist_cmd.step);
+    const exampels = &.{ "mnist", "cbow" };
+
+    inline for (exampels) |example| {
+        const exe = b.addExecutable(.{
+            .name = example,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("examples/" ++ example ++ ".zig"),
+                .imports = &.{.{ .name = "prism", .module = prism_mod }},
+                .target = target,
+            }),
+        });
+        b.installArtifact(exe);
+        const cmd = b.addRunArtifact(exe);
+        const step = b.step(
+            "run-example-" ++ example,
+            "Run " ++ example ++ " example",
+        );
+        step.dependOn(&cmd.step);
+    }
+
+    // const mnist_exe = b.addExecutable(.{
+    //     .name = "mnist",
+    //     .root_module = b.createModule(.{
+    //         .root_source_file = b.path("examples/mnist.zig"),
+    //         .imports = &.{.{ .name = "prism", .module = prism_mod }},
+    //         .target = target,
+    //     }),
+    // });
+    // b.installArtifact(mnist_exe);
+    // const mnist_cmd = b.addRunArtifact(mnist_exe);
+    // const mnist_step = b.step("mnist", "Run mnist");
+    // mnist_step.dependOn(&mnist_cmd.step);
 
     const exe_check = b.addExecutable(.{ .name = "exe_check", .root_module = prism_mod });
     const check = b.step("check", "Check if exe_check compiles");

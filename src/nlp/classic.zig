@@ -1,6 +1,6 @@
 const std = @import("std");
-const shape_expr = @import("../../shape_expr.zig");
-const tensor = @import("../../tensor.zig");
+const shape_expr = @import("../shape_expr.zig");
+const tensor = @import("../tensor.zig");
 
 const SizeExpr = shape_expr.SizeExpr;
 const ShapeEnv = shape_expr.ShapeEnv;

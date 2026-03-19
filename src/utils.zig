@@ -974,3 +974,34 @@ pub fn getReturnAddressSymbol() !std.debug.Symbol {
 
     // return v;
 }
+
+pub fn generateRandInRange(comptime T: type, allocator: std.mem.Allocator, count: usize, min: T, max: T) !std.ArrayList(T) {
+    var res = try std.ArrayList(T).initCapacity(allocator, count);
+
+    var chosen = std.AutoHashMap(T, void).init(allocator);
+    defer chosen.deinit();
+
+    const seed: u64 = @intCast(std.time.microTimestamp());
+    var rpng = std.Random.DefaultPrng.init(seed);
+    const rng = rpng.random();
+
+    while (chosen.count() < count) {
+        const n = rng.intRangeLessThan(T, min, max);
+        try chosen.put(n, void{});
+    }
+
+    var k_iter = chosen.keyIterator();
+    while (k_iter.next()) |k| {
+        try res.append(allocator, k.*);
+    }
+
+    return res;
+}
+
+test "generateRandInRange" {
+    const allocator = std.testing.allocator;
+
+    var res = try generateRandInRange(i32, allocator, 10, 0, 100);
+    defer res.deinit(allocator);
+    std.debug.print("res: {any}\n", .{res});
+}

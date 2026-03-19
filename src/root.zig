@@ -8,6 +8,8 @@ pub const plot = @import("plot.zig");
 pub const log = @import("log.zig");
 pub const mnist = @import("mnist.zig");
 pub const matrix = @import("matrix/mod.zig");
+pub const nlp = @import("nlp/mod.zig");
+pub const utils = @import("utils.zig");
 
 pub const optim = nn.optim;
 pub const mlp = nn.model.mlp;
