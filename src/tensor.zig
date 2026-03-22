@@ -526,15 +526,18 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
             return new_shape;
         }
 
-        pub fn indexSelect(self: *const Self, comptime dim: usize, comptime dim_expr: SizeExpr, indices: []const usize) !Tensor(
+        pub fn indexSelect(self: *const Self, comptime dim: usize, comptime dim_expr: SizeExpr, indices: Tensor(&.{dim_expr}, usize)) !Tensor(
             &computeIndexSelectShape(dim, dim_expr),
             T,
         ) {
             if (dim >= N) @compileError("Invalid dimension");
 
-            for (indices) |idx| {
-                if (idx >= self.shape()[dim]) {
-                    return error.IndexOutOfBounds;
+            {
+                var indices_iter = indices.shapeIter();
+                while (indices_iter.next()) |idx| {
+                    if (try indices.getData(idx) >= self.shape()[dim]) {
+                        return error.IndexOutOfBounds;
+                    }
                 }
             }
 
@@ -545,7 +548,7 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
 
             var index_iter = indices_t.shapeIter();
             while (index_iter.next()) |idx| {
-                try indices_t.setData(idx, indices[idx[dim]]);
+                try indices_t.setData(idx, try indices.getData([1]usize{idx[dim]}));
             }
 
             // log.print(@src(), "indices_t: {f}\n", .{indices_t});
@@ -583,7 +586,11 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
             const layout = try layout_t.Layout(shape_expr_a).init(shape_env);
             const storage = try Storage.initImpl(self.s_allocator(), new_buf);
 
-            return Tensor(shape_expr_a, T).fromDataImpl(layout, storage, 0);
+            return Tensor(shape_expr_a, T).fromDataImpl(
+                layout,
+                storage,
+                0,
+            );
         }
 
         pub fn scatter_(self: *Self, dim: usize, index_tensor: Tensor(N, .{ .T = usize }), value_src: anytype) !void {
@@ -3292,26 +3299,29 @@ test "loss func" {
 test "gather_scatter_indexed" {
     const allocator = std.testing.allocator;
 
+    var shape_env = try ShapeEnv.init(allocator);
+    defer shape_env.deinit();
+
     {
         const t1 = try fromArray(allocator, [2][2]i32{
             .{ 1, 2 },
             .{ 3, 4 },
-        });
+        }, &shape_env);
         defer t1.deinit();
 
         const index_t = try fromArray(allocator, [2][2]usize{
             .{ 0, 0 },
             .{ 1, 0 },
-        });
+        }, &shape_env);
         defer index_t.deinit();
 
-        const t2 = try t1.gather(1, index_t);
+        const t2 = try t1.gather(1, @TypeOf(index_t).S, &shape_env, index_t);
         defer t2.deinit();
 
         const t2_e = try fromArray(allocator, [2][2]i32{
             .{ 1, 1 },
             .{ 4, 3 },
-        });
+        }, &shape_env);
         defer t2_e.deinit();
 
         const compare_result = t2.equal(t2_e);
@@ -3323,19 +3333,20 @@ test "gather_scatter_indexed" {
             .{ 1.0, 2.0, 3.0, 4.0 },
             .{ 5.0, 6.0, 7.0, 8.0 },
             .{ 9.0, 10.0, 11.0, 12.0 },
-        });
+        }, &shape_env);
         defer t1.deinit();
-        log.print(@src(), "indexSelct: t1= {f}\n", .{t1});
+        std.debug.print("indexSelct: t1= {f}\n", .{t1});
 
         {
-            const t2 = try t1.indexSelect(1, &.{ 1, 2 });
+            const index_t = try fromArray(allocator, [2]usize{ 1, 2 }, &shape_env);
+            const t2 = try t1.indexSelect(1, @TypeOf(index_t).S[0], index_t);
             defer t2.deinit();
 
             const t2_e = try fromArray(allocator, [3][2]f32{
                 .{ 2.0, 3.0 },
                 .{ 6.0, 7.0 },
                 .{ 10.0, 11.0 },
-            });
+            }, &shape_env);
             defer t2_e.deinit();
 
             const compare_result = t2.equal(t2_e);
@@ -3345,13 +3356,15 @@ test "gather_scatter_indexed" {
         }
 
         {
-            const t2 = try t1.indexSelect(0, &.{ 1, 2 });
+            const index_t = try fromArray(allocator, [_]usize{ 1, 2 }, &shape_env);
+            defer index_t.deinit();
+            const t2 = try t1.indexSelect(0, @TypeOf(index_t).S[0], index_t);
             defer t2.deinit();
 
             const t2_e = try fromArray(allocator, [2][4]f32{
                 .{ 5.0, 6.0, 7.0, 8.0 },
                 .{ 9.0, 10.0, 11.0, 12.0 },
-            });
+            }, &shape_env);
             defer t2_e.deinit();
 
             const compare_result = t2.equal(t2_e);
@@ -3362,23 +3375,35 @@ test "gather_scatter_indexed" {
     }
 
     {
-        const t1 = try arange(allocator, i8, .{ .start = 1, .end = 11 });
+        const t1 = try arange(allocator, 11, shape_expr.makeSymbol(.{ .name = "len" }), &shape_env, .{});
         defer t1.deinit();
-        const t2 = try t1.reshape([2]usize{ 2, 5 });
+        const t2 = try t1.reshape(&.{ SizeExpr.static(2), SizeExpr.static(5) });
         defer t2.deinit();
 
         const index_t = try fromArray(allocator, [2][2]usize{
             .{ 0, 1 },
             .{ 2, 0 },
-        });
+        }, &shape_env);
         defer index_t.deinit();
 
-        var input = try zeros(allocator, i8, [2]usize{ 3, 5 });
+        var input = try zeros(
+            allocator,
+            i8,
+            &.{ SizeExpr.static(3), SizeExpr.static(5) },
+            &shape_env,
+        );
         defer input.deinit();
 
         try input.scatter_(0, index_t, t2);
 
-        const t3_e = try fromArray(allocator, [3][5]i8{ .{ 1, 0, 0, 4, 0 }, .{ 0, 2, 0, 0, 0 }, .{ 0, 0, 3, 0, 0 } });
+        const t3_e = try fromArray(
+            allocator,
+            [3][5]i8{
+                .{ 1, 0, 0, 4, 0 },
+                .{ 0, 2, 0, 0, 0 },
+                .{ 0, 0, 3, 0, 0 },
+            },
+        );
         defer t3_e.deinit();
 
         const compare_result = input.equal(t3_e);
@@ -3401,6 +3426,7 @@ test "gather_scatter_indexed" {
                 .{ 0.0, 2.0, 0.0, 0.0, 0.0 },
                 .{ 0.0, 0.0, 0.0, 0.0, 0.0 },
             },
+            &shape_env,
         );
         defer input_e.deinit();
 
