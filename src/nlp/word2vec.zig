@@ -42,7 +42,7 @@ pub fn SimpleCBOW(
         out_layer: Mat_OUT,
         swl: SWL,
 
-        pub fn graident(
+        pub fn gradient(
             self: *Self,
             contexts: *const tensor.Tensor(&.{ batch_size, SizeExpr.static(2), vocab_size }, T),
             target: *const tensor.Tensor(&.{ batch_size, vocab_size }, T),
@@ -130,7 +130,7 @@ pub fn SimpleCBOW(
             const out_layer = try Mat_OUT.init(
                 allocator,
                 shape_env,
-                .{ .Std = 0.01 },
+                .He,
             );
 
             const swl = layer.SoftmaxWithLoss(&.{ batch_size, vocab_size }, T).init();
@@ -242,7 +242,7 @@ test "cbow" {
             one_hoted_target.deinit();
         }
 
-        const grad = try sc.graident(&one_hoted_contexts, &one_hoted_target);
+        const grad = try sc.gradient(&one_hoted_contexts, &one_hoted_target);
         defer grad.deinit();
 
         var opt = optim.Sgd(f32).init(0.1);
