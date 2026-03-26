@@ -47,8 +47,8 @@ pub fn SimpleCBOW(
             contexts: *const tensor.Tensor(&.{ batch_size, SizeExpr.static(2), vocab_size }, T),
             target: *const tensor.Tensor(&.{ batch_size, vocab_size }, T),
         ) !optim.WeightGradView(T) {
-            const loss_v = try self.loss(contexts, target);
-            std.debug.print("loss: {}\n", .{loss_v});
+            _ = try self.loss(contexts, target);
+            // std.debug.print("loss: {}\n", .{loss_v});
 
             const dout = try self.swl.backward();
             defer dout.deinit();

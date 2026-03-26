@@ -83,7 +83,7 @@ fn cbowImpl(allocator: std.mem.Allocator, iters_num: usize) !void {
     defer sc.deinit();
 
     for (0..iters_num) |i| {
-        try shape_env.bind(&batch_size.Sym, 20);
+        try shape_env.bind(&batch_size.Sym, 100);
 
         const one_hoted_contexts, const full_targets = try get_contexts_target(
             batch_size,
@@ -100,6 +100,7 @@ fn cbowImpl(allocator: std.mem.Allocator, iters_num: usize) !void {
         const grad = try sc.gradient(&one_hoted_contexts, &full_targets);
         defer grad.deinit();
 
+        // var opt = nn.optim.Sgd(f32).init(1);
         var opt = nn.optim.Adam(f32).init(0.01, 0.9, 0.999, allocator);
         try opt.update(grad.weights, grad.grads);
 
@@ -126,6 +127,7 @@ fn cbowImpl(allocator: std.mem.Allocator, iters_num: usize) !void {
             defer full_target.deinit();
 
             const loss_v = try sc.loss(&full_contexts, &full_target);
+            std.debug.print("idx: {} loss: {}\n", .{ i, loss_v });
             try plot.appendData("word2vec", &.{@floatFromInt(i)}, &.{@floatCast(loss_v)});
         }
 
