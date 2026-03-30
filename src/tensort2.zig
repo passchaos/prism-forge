@@ -149,10 +149,17 @@ pub fn TypeTensor(comptime T: type) type {
         pub fn asTypeRankTensor(self: Self, comptime N: usize) !TypeRankTensor(T, N) {
             if (N != self.rank) return error.ShapeTooLarge;
 
+            var shape_i: [N]usize = .{0} ** N;
+            var stride_i: [N]usize = .{0} ** N;
+            for (0..N) |i| {
+                shape_i[i] = self.shape[i];
+                stride_i[i] = self.stride[i];
+            }
+
             return .{
                 .data = self.data,
-                .shape = self.shape[0..N],
-                .stride = self.stride[0..N],
+                .shape = shape_i,
+                .stride = stride_i,
                 .offset = self.offset,
                 .owned = false,
             };
@@ -226,9 +233,10 @@ test "tensor fromData" {
 
     const type_tensor = try fromOwnedData(f32, data[0..], &shape);
     const tensor = type_tensor.asTensor();
+    const rank_tensor = try type_tensor.asTypeRankTensor(3);
 
     const tt_tensor = try tensor.asTypeTensor(f32);
-    std.debug.print("tt_tensor: {}\n", .{tt_tensor.rank});
+    std.debug.print("tt_tensor: {} {}\n", .{ tt_tensor.rank, rank_tensor.owned });
 }
 
 // 核心设计：
