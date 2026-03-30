@@ -551,70 +551,97 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
                 try indices_t.setData(idx, try indices.getData([1]usize{idx[dim]}));
             }
 
-            // log.print(@src(), "indices_t: {f}\n", .{indices_t});
-
-            return try self.gather(dim, &new_shape_expr, self.layout.shape_env(), indices_t);
+            return try self.gather(dim, indices_t);
         }
 
         pub fn gather(
             self: *const Self,
-            comptime dim: usize,
+            dim: usize,
+            index_tensor: anytype,
+        ) !Tensor(@TypeOf(index_tensor).S, T) {
+            const IN = @TypeOf(index_tensor).N;
+
+            if (IN != N) @compileError("index tensor dimension need equal to src: " ++
+                std.fmt.comptimePrint("index= {} src= {}", .{ IN, N }));
+
+            const shape_expr_a = @TypeOf(index_tensor).S;
+            const index_tensor_t: Tensor(shape_expr_a, usize) = index_tensor;
+
+            return try self.gatherImpl(dim, shape_expr_a, index_tensor_t);
+        }
+
+        pub fn gatherImpl(
+            self: *const Self,
+            dim: usize,
             comptime shape_expr_a: []const SizeExpr,
-            shape_env: *const ShapeEnv,
             index_tensor: Tensor(shape_expr_a, usize),
         ) !Tensor(shape_expr_a, T) {
-            if (dim >= N) @compileError("Invalid dimension");
+            if (dim >= N) return error.InvalidDimension;
 
-            const new_buf = try self.s_allocator().alloc(T, index_tensor.size());
+            var new_tensor = try zeros(
+                self.s_allocator(),
+                T,
+                shape_expr_a,
+                index_tensor.layout.shape_env(),
+            );
 
-            var index_t_iter = index_tensor.shapeIter();
-            while (index_t_iter.next()) |idx| {
-                const index_d_v = try index_tensor.getData(idx);
-                if (index_d_v >= self.shape()[dim]) {
+            var nt_iter = new_tensor.shapeIter();
+            while (nt_iter.next()) |idx| {
+                var idx_input = idx;
+                const index_v = try index_tensor.getData(idx);
+                idx_input[dim] = index_v;
+
+                // std.debug.print("dim: {any}, idx: {any}, idx_input: {any}, index_v: {any}\n", .{ dim, idx, idx_input, index_v });
+                try new_tensor.setData(idx, try self.getData(idx_input));
+            }
+
+            return new_tensor;
+        }
+
+        pub fn scatter_(
+            self: *Self,
+            dim: usize,
+            comptime index_se: [N]SizeExpr,
+            index_tensor: Tensor(&index_se, usize),
+            comptime src_se: [N]SizeExpr,
+            value_src: Tensor(&src_se, T),
+        ) !void {
+            var index_iter = index_tensor.shapeIter();
+
+            while (index_iter.next()) |idx| {
+                const index_value = try index_tensor.getData(idx);
+                if (index_value >= self.shape()[dim]) {
                     return error.IndexOutOfBounds;
                 }
 
-                var idx_input = idx;
-                idx_input[dim] = try index_tensor.getData(idx);
+                var idx_self = idx;
+                idx_self[dim] = index_value;
 
-                const value_input = try self.getData(idx_input);
-                const flat_idx_out = try utils.indexShapeToFlat(N, self.shape(), idx);
+                const value = try value_src.getData(idx);
 
-                new_buf[flat_idx_out] = value_input;
+                try self.setData(idx_self, value);
             }
-
-            const layout = try layout_t.Layout(shape_expr_a).init(shape_env);
-            const storage = try Storage.initImpl(self.s_allocator(), new_buf);
-
-            return Tensor(shape_expr_a, T).fromDataImpl(
-                layout,
-                storage,
-                0,
-            );
         }
 
-        pub fn scatter_(self: *Self, dim: usize, index_tensor: Tensor(N, .{ .T = usize }), value_src: anytype) !void {
-            const VST = @TypeOf(value_src);
+        pub fn scatterScalar_(
+            self: *Self,
+            dim: usize,
+            comptime index_se: [N]SizeExpr,
+            index_tensor: Tensor(&index_se, usize),
+            value_src: T,
+        ) !void {
+            var index_iter = index_tensor.shapeIter();
 
-            switch (VST) {
-                Self, T => {
-                    var index_iter = index_tensor.shapeIter();
+            while (index_iter.next()) |idx| {
+                const index_value = try index_tensor.getData(idx);
+                if (index_value >= self.shape()[dim]) {
+                    return error.IndexOutOfBounds;
+                }
 
-                    while (index_iter.next()) |idx| {
-                        const index_value = try index_tensor.getData(idx);
-                        if (index_value >= self.shape()[dim]) {
-                            return error.IndexOutOfBounds;
-                        }
+                var idx_self = idx;
+                idx_self[dim] = index_value;
 
-                        var idx_self = idx;
-                        idx_self[dim] = index_value;
-
-                        const value = if (VST == Self) try value_src.getData(idx) else value_src;
-
-                        try self.setData(idx_self, value);
-                    }
-                },
-                else => @compileError("Unsupported type for scatter_ " ++ @typeName(VST)),
+                try self.setData(idx_self, value_src);
             }
         }
 
@@ -3296,37 +3323,11 @@ test "loss func" {
     }
 }
 
-test "gather_scatter_indexed" {
+test "index_select_op" {
     const allocator = std.testing.allocator;
 
     var shape_env = try ShapeEnv.init(allocator);
     defer shape_env.deinit();
-
-    {
-        const t1 = try fromArray(allocator, [2][2]i32{
-            .{ 1, 2 },
-            .{ 3, 4 },
-        }, &shape_env);
-        defer t1.deinit();
-
-        const index_t = try fromArray(allocator, [2][2]usize{
-            .{ 0, 0 },
-            .{ 1, 0 },
-        }, &shape_env);
-        defer index_t.deinit();
-
-        const t2 = try t1.gather(1, @TypeOf(index_t).S, &shape_env, index_t);
-        defer t2.deinit();
-
-        const t2_e = try fromArray(allocator, [2][2]i32{
-            .{ 1, 1 },
-            .{ 4, 3 },
-        }, &shape_env);
-        defer t2_e.deinit();
-
-        const compare_result = t2.equal(t2_e);
-        try std.testing.expect(compare_result);
-    }
 
     {
         const t1 = try fromArray(allocator, [3][4]f32{
@@ -3373,12 +3374,153 @@ test "gather_scatter_indexed" {
             std.debug.print("indexSelect: t2= {f}\n", .{t2});
         }
     }
+}
+
+test "gather_op" {
+    const allocator = std.testing.allocator;
+
+    var shape_env = try ShapeEnv.init(allocator);
+    defer shape_env.deinit();
 
     {
-        const t1 = try arange(allocator, 11, shape_expr.makeSymbol(.{ .name = "len" }), &shape_env, .{});
+        const t1 = try fromArray(allocator, [3][4]i32{
+            .{ 0, 1, 3, 2 },
+            .{ 4, 5, 6, 7 },
+            .{ 8, 9, 10, 11 },
+        }, &shape_env);
+        defer t1.deinit();
+
+        const index_t = try fromArray(allocator, [3][2]usize{
+            .{ 0, 2 },
+            .{ 3, 1 },
+            .{ 3, 1 },
+        }, &shape_env);
+        defer index_t.deinit();
+
+        const t2 = try t1.gather(1, index_t);
+        defer t2.deinit();
+        std.debug.print("t2: {f}\n", .{t2});
+
+        const index_t1 = try fromArray(allocator, [4][2]usize{
+            .{ 0, 2 },
+            .{ 2, 2 },
+            .{ 1, 1 },
+            .{ 1, 1 },
+        }, &shape_env);
+        defer index_t1.deinit();
+
+        const t3 = try t1.gather(0, index_t1);
+        defer t3.deinit();
+        std.debug.print("t3: {f}\n", .{t3});
+
+        const t2_e = try fromArray(allocator, [3][2]i32{
+            .{ 0, 3 },
+            .{ 7, 5 },
+            .{ 11, 9 },
+        }, &shape_env);
+        defer t2_e.deinit();
+
+        const compare_result = t2.equal(t2_e);
+        try std.testing.expect(compare_result);
+    }
+
+    {
+        const t1 = try fromArray(allocator, [5][3][4]i32{
+            .{
+                .{ 0, 1, 2, 3 },
+                .{ 4, 5, 6, 7 },
+                .{ 8, 9, 10, 11 },
+            },
+            .{
+                .{ 12, 13, 14, 15 },
+                .{ 16, 17, 18, 19 },
+                .{ 20, 21, 22, 23 },
+            },
+            .{
+                .{ 24, 25, 26, 27 },
+                .{ 28, 29, 30, 31 },
+                .{ 32, 33, 34, 35 },
+            },
+            .{
+                .{ 36, 37, 38, 39 },
+                .{ 40, 41, 42, 43 },
+                .{ 44, 45, 46, 47 },
+            },
+            .{
+                .{ 48, 49, 50, 51 },
+                .{ 52, 53, 54, 55 },
+                .{ 56, 57, 58, 59 },
+            },
+        }, &shape_env);
+        defer t1.deinit();
+
+        const index_t = try fromArray(allocator, [5][2][4]usize{
+            .{
+                .{ 0, 0, 0, 0 },
+                .{ 2, 2, 2, 2 },
+            },
+            .{
+                .{ 0, 0, 0, 0 },
+                .{ 2, 2, 2, 2 },
+            },
+            .{
+                .{ 0, 0, 0, 0 },
+                .{ 2, 2, 2, 2 },
+            },
+            .{
+                .{ 0, 0, 0, 0 },
+                .{ 2, 2, 2, 2 },
+            },
+            .{
+                .{ 0, 0, 0, 0 },
+                .{ 2, 2, 2, 2 },
+            },
+        }, &shape_env);
+        defer index_t.deinit();
+
+        const t2 = try t1.gather(1, index_t);
+        defer t2.deinit();
+        std.debug.print("t22: {f}\n", .{t2});
+
+        const indexes = try fromArray(
+            allocator,
+            [2]usize{ 0, 2 },
+            &shape_env,
+        );
+        defer indexes.deinit();
+
+        const t22 = try t1.indexSelect(
+            1,
+            SizeExpr.static(2),
+            indexes,
+        );
+        defer t22.deinit();
+        std.debug.print("t22: {f}\n", .{t22});
+
+        const c_r = t2.equal(t22);
+        try std.testing.expect(c_r);
+    }
+}
+
+test "scatter_op" {
+    const allocator = std.testing.allocator;
+
+    var shape_env = try ShapeEnv.init(allocator);
+    defer shape_env.deinit();
+
+    {
+        const t1 = try arange(
+            allocator,
+            @as(i8, 10),
+            shape_expr.makeSymbol(.{ .name = "len" }),
+            &shape_env,
+            .{},
+        );
         defer t1.deinit();
         const t2 = try t1.reshape(&.{ SizeExpr.static(2), SizeExpr.static(5) });
         defer t2.deinit();
+
+        std.debug.print("t2: {f}\n", .{t2});
 
         const index_t = try fromArray(allocator, [2][2]usize{
             .{ 0, 1 },
@@ -3394,15 +3536,23 @@ test "gather_scatter_indexed" {
         );
         defer input.deinit();
 
-        try input.scatter_(0, index_t, t2);
+        try input.scatter_(
+            0,
+            utils.array.comptimeSliceToArray(SizeExpr, @TypeOf(index_t).S),
+            index_t,
+            utils.array.comptimeSliceToArray(SizeExpr, @TypeOf(t2).S),
+            t2,
+        );
+        std.debug.print("input: {f}\n", .{input});
 
         const t3_e = try fromArray(
             allocator,
             [3][5]i8{
-                .{ 1, 0, 0, 4, 0 },
-                .{ 0, 2, 0, 0, 0 },
-                .{ 0, 0, 3, 0, 0 },
+                .{ 0, 6, 0, 0, 0 },
+                .{ 0, 1, 0, 0, 0 },
+                .{ 5, 0, 0, 0, 0 },
             },
+            &shape_env,
         );
         defer t3_e.deinit();
 
@@ -3411,13 +3561,23 @@ test "gather_scatter_indexed" {
     }
 
     {
-        var input = try zeros(allocator, f32, [2]usize{ 3, 5 });
+        var input = try zeros(
+            allocator,
+            f32,
+            &.{ SizeExpr.static(3), SizeExpr.static(5) },
+            &shape_env,
+        );
         defer input.deinit();
 
-        const index_t = try fromArray(allocator, [1][2]usize{.{ 0, 1 }});
+        const index_t = try fromArray(allocator, [1][2]usize{.{ 0, 1 }}, &shape_env);
         defer index_t.deinit();
 
-        try input.scatter_(0, index_t, @as(f32, 2.0));
+        try input.scatterScalar_(
+            0,
+            utils.array.comptimeSliceToArray(SizeExpr, @TypeOf(index_t).S),
+            index_t,
+            @as(f32, 2.0),
+        );
 
         const input_e = try fromArray(
             allocator,

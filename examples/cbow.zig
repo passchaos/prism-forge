@@ -97,11 +97,14 @@ fn cbowImpl(allocator: std.mem.Allocator, iters_num: usize) !void {
             full_targets.deinit();
         }
 
+        const gradient_begin = std.time.milliTimestamp();
         const grad = try sc.gradient(&one_hoted_contexts, &full_targets);
         defer grad.deinit();
+        const gradient_end = std.time.milliTimestamp();
+        std.debug.print("gradient time: {}\n", .{gradient_end - gradient_begin});
 
-        // var opt = nn.optim.Sgd(f32).init(1);
-        var opt = nn.optim.Adam(f32).init(0.01, 0.9, 0.999, allocator);
+        var opt = nn.optim.Sgd(f32).init(1);
+        // var opt = nn.optim.Adam(f32).init(0.01, 0.9, 0.999, allocator);
         try opt.update(grad.weights, grad.grads);
 
         // try shape_env.bind(&batch_size.Sym, preprocessed.corpus.items.len);
@@ -126,8 +129,11 @@ fn cbowImpl(allocator: std.mem.Allocator, iters_num: usize) !void {
             const full_target = try target_res.oneHot(f32, words_len_expr);
             defer full_target.deinit();
 
+            const begin = std.time.milliTimestamp();
             const loss_v = try sc.loss(&full_contexts, &full_target);
-            std.debug.print("idx: {} loss: {}\n", .{ i, loss_v });
+            const end = std.time.milliTimestamp();
+
+            std.debug.print("idx: {} loss: {} compute_time: {}\n", .{ i, loss_v, end - begin });
             try plot.appendData("word2vec", &.{@floatFromInt(i)}, &.{@floatCast(loss_v)});
         }
 

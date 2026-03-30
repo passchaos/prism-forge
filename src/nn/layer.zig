@@ -180,6 +180,55 @@ pub fn Matmul(
     };
 }
 
+pub fn Embedding(
+    comptime B_S: SizeExpr,
+    comptime I_S: SizeExpr,
+    comptime O_S: SizeExpr,
+    comptime T: type,
+) type {
+    return struct {
+        allocator: std.mem.Allocator,
+        w: tensor.Tensor(&.{ B_S, I_S }, T),
+        // grads: tensor.Tensor(&.{ B_S, I_S }, T),
+        indices: ?tensor.Tensor(&.{B_S}, usize),
+
+        const Self = @This();
+
+        pub fn forward(
+            self: *Self,
+            indices: tensor.Tensor(&.{B_S}, usize),
+        ) !tensor.Tensor(&.{ B_S, O_S }, T) {
+            const out = try self.w.indexSelect(0, B_S, indices);
+            self.indices = indices;
+
+            return out;
+        }
+
+        pub fn backward(self: *Self, dout: tensor.Tensor(&.{ B_S, I_S }, T)) !void {
+            var dw = try tensor.zerosLike(self.allocator, self.w);
+            if (self.indices) |indices| {
+                for (indices.data()) |idx| {
+                    dw.data()[idx] += dout.data()[idx];
+                }
+            }
+            self.grads = dw;
+        }
+
+        pub fn init(
+            allocator: std.mem.Allocator,
+            weight: tensor.Tensor(&.{ I_S, O_S }, T),
+        ) !Self {
+            const grads = try tensor.zerosLike(allocator, weight);
+
+            return Self{
+                .allocator = allocator,
+                .w = weight,
+                .grads = grads,
+            };
+        }
+    };
+}
+
 pub fn Affine(
     comptime B_S: SizeExpr,
     comptime I_S: []const SizeExpr,

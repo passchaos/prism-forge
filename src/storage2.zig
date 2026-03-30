@@ -4,6 +4,45 @@ const dtype = @import("dtype2.zig");
 
 const DType = dtype.DType;
 
+const Counter = struct {
+    id: i32 = 0,
+
+    pub fn next(self: *Counter) i32 {
+        const current = self.id;
+        self.id += 1;
+        return current;
+    }
+};
+
+const NextId = struct {
+    var id: i32 = 0;
+
+    /// adds one to the number given
+    // adds two
+    pub fn call() i32 {
+        const current = id;
+        id += 1;
+        return current;
+    }
+
+    test call {
+        const id1 = NextId.call();
+        const id2 = NextId.call();
+        try std.testing.expectEqual(id1, 0);
+        try std.testing.expectEqual(id2, 1);
+    }
+};
+
+test "counter_static" {
+    var counter = Counter{};
+    _ = counter.next();
+    _ = counter.next();
+    _ = counter.next();
+    try std.testing.expectEqual(counter.id, 3);
+
+    std.debug.print("next id: {} {}\n", .{ NextId.call(), NextId.call() });
+}
+
 const AllocRefCount = struct {
     allocator: std.mem.Allocator,
     count: std.atomic.Value(usize),
@@ -94,10 +133,10 @@ pub const RawBuffer = struct {
 
     pub fn full(allocator: std.mem.Allocator, element_count: usize, value: anytype) !Self {
         const dtype_i = comptime DType.fromAnyType(@TypeOf(value));
-        const T = comptime dtype_i.toType();
+        // const T = comptime dtype_i.toType();
 
         const buf = try allocator.alloc(u8, element_count);
-        for (buf) |*elem| elem.* = value;
+        // for (buf) |*elem| elem.* = value;
 
         const dst_buf: []u8 = @ptrCast(buf);
 
