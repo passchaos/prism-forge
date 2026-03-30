@@ -189,7 +189,7 @@ pub fn Embedding(
     return struct {
         allocator: std.mem.Allocator,
         w: tensor.Tensor(&.{ I_S, O_S }, T),
-        grads: tensor.Tensor(&.{ I_S, O_S }, T),
+        dw: tensor.Tensor(&.{ I_S, O_S }, T),
         indices: ?tensor.Tensor(&.{B_S}, usize),
 
         const Self = @This();
@@ -205,26 +205,42 @@ pub fn Embedding(
         }
 
         pub fn backward(self: *Self, dout: tensor.Tensor(&.{ B_S, I_S }, T)) !void {
-            // self.indices.?.repeatInterleave(1, comptime repeatDimSymbolHandle: SymbolHandle, repeats: Tensor(usize), shape_env: *ShapeEnv)
+            var shape_env = try shape_expr.ShapeEnv.init(self.allocator);
+            defer shape_env.deinit();
+
+            const repeat_dim = shape_expr.makeSymbol(.{ .name = "repeat_dim" });
+
+            const repeats = try tensor.full(
+                self.allocator,
+                &.{ B_S, I_S },
+                &shape_env,
+                dout.shape()[1],
+            );
+
+            const repeated_indices = try self.indices.?.repeatInterleave(0, repeat_dim, repeats, &shape_env);
+
+            @memcpy(self.dw.dataSliceRaw(), 0);
+
             var dw = try tensor.zerosLike(self.allocator, self.w);
-            if (self.indices) |indices| {
-                for (indices.data()) |idx| {
-                    dw.data()[idx] += dout.data()[idx];
-                }
-            }
-            self.grads = dw;
+            dw.scatter_(
+                0,
+                utils.array.comptimeSliceToArray(usize, @TypeOf(repeated_indices).S),
+                repeated_indices,
+                utils.array.comptimeSliceToArray(usize, @TypeOf(dout).S),
+                dout,
+            );
         }
 
         pub fn init(
             allocator: std.mem.Allocator,
             weight: tensor.Tensor(&.{ I_S, O_S }, T),
         ) !Self {
-            const grads = try tensor.zerosLike(allocator, weight);
+            const dw = try tensor.zerosLike(allocator, weight);
 
             return Self{
                 .allocator = allocator,
                 .w = weight,
-                .grads = grads,
+                .dw = dw,
             };
         }
     };

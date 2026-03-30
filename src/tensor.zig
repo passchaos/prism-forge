@@ -3663,7 +3663,7 @@ test "repeatInterleave op" {
 
     const dim_sh = comptime shape_expr.makeSymbol(.{ .name = "repeat_dim_len" });
 
-    const repeat_t = try fromArray(allocator, [3]usize{ 1, 2 }, &shape_env);
+    const repeat_t = try fromArray(allocator, [3]usize{ 3, 1, 2 }, &shape_env);
     defer repeat_t.deinit();
 
     const result = try input.repeatInterleave(
