@@ -188,8 +188,8 @@ pub fn Embedding(
 ) type {
     return struct {
         allocator: std.mem.Allocator,
-        w: tensor.Tensor(&.{ B_S, I_S }, T),
-        // grads: tensor.Tensor(&.{ B_S, I_S }, T),
+        w: tensor.Tensor(&.{ I_S, O_S }, T),
+        grads: tensor.Tensor(&.{ I_S, O_S }, T),
         indices: ?tensor.Tensor(&.{B_S}, usize),
 
         const Self = @This();
@@ -205,6 +205,7 @@ pub fn Embedding(
         }
 
         pub fn backward(self: *Self, dout: tensor.Tensor(&.{ B_S, I_S }, T)) !void {
+            // self.indices.?.repeatInterleave(1, comptime repeatDimSymbolHandle: SymbolHandle, repeats: Tensor(usize), shape_env: *ShapeEnv)
             var dw = try tensor.zerosLike(self.allocator, self.w);
             if (self.indices) |indices| {
                 for (indices.data()) |idx| {

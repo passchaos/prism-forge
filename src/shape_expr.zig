@@ -535,6 +535,30 @@ pub fn product(dim_exprs: []const SizeExpr) SizeExpr {
     return result;
 }
 
+pub fn sum(dim_exprs: []const SizeExpr) SizeExpr {
+    var result = SizeExpr.static(0);
+
+    // only compute static
+    for (dim_exprs) |dim| {
+        switch (dim) {
+            .Static => |ds| switch (result) {
+                .Static => |rs| result = SizeExpr.static(rs + ds),
+                else => {},
+            },
+            else => {},
+        }
+    }
+
+    for (dim_exprs) |dim| {
+        switch (dim) {
+            .Static => {},
+            else => |ds| result = SizeExpr.add(result, ds),
+        }
+    }
+
+    return result;
+}
+
 test "product" {
     const s1 = comptime SizeExpr.static(2);
     const s2 = comptime SizeExpr.static(3);

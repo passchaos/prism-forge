@@ -1505,6 +1505,60 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
             return try self.reduceAll(Item.sum, f64, Item.mean);
         }
 
+        fn computeRepeatedSizeExpr(comptime dim: usize, comptime repeatDimSymbolHandle: shape_expr.SymbolHandle) [N]SizeExpr {
+            var result_se: [N]SizeExpr = utils.array.comptimeSliceToArray(SizeExpr, S);
+            result_se[dim] = SizeExpr{
+                .Sym = repeatDimSymbolHandle,
+            };
+            return result_se;
+        }
+
+        pub fn repeatInterleave(
+            self: *const Self,
+            comptime dim: usize,
+            comptime repeatDimSymbolHandle: shape_expr.SymbolHandle,
+            repeats: Tensor(&.{S[dim]}, usize),
+            shape_env: *ShapeEnv,
+        ) !Tensor(&computeRepeatedSizeExpr(dim, repeatDimSymbolHandle), T) {
+            const sum_v = try repeats.sumAll();
+            defer sum_v.deinit();
+
+            const repeat_dim_size = try sum_v.dataItem();
+
+            var index_data = try self.s_allocator().alloc(usize, repeat_dim_size);
+
+            var repeat_idx: usize = 0;
+            var location: usize = 0;
+            var repeat_iter = repeats.shapeIter();
+            while (repeat_iter.next()) |idx| {
+                const v = try repeats.getData(idx);
+
+                @memset(index_data[location .. location + v], repeat_idx);
+                // for (0..v) |_| {
+                //     index_data[location] = repeat_idx;
+                //     location += 1;
+                // }
+
+                location += v;
+                repeat_idx += 1;
+            }
+
+            try shape_env.bind(&repeatDimSymbolHandle, repeat_dim_size);
+
+            const dim_expr = comptime SizeExpr{ .Sym = repeatDimSymbolHandle };
+
+            const index_t = try fromData(
+                usize,
+                self.s_allocator(),
+                index_data,
+                &.{dim_expr},
+                shape_env,
+            );
+            defer index_t.deinit();
+
+            return try self.indexSelect(dim, dim_expr, index_t);
+        }
+
         pub fn anyTrue(self: *const Self, comptime dim: usize) !Tensor(&computeReducedShapeExpr(dim), bool) {
             return try self.reduce(dim, Item.orOp, bool, null);
         }
@@ -3595,6 +3649,31 @@ test "scatter_op" {
 
         std.debug.print("input: {f}\n", .{input});
     }
+}
+
+test "repeatInterleave op" {
+    const allocator = std.testing.allocator;
+
+    var shape_env = try ShapeEnv.init(allocator);
+    defer shape_env.deinit();
+
+    var input = try rand(allocator, &.{ SizeExpr.static(3), SizeExpr.static(3) }, &shape_env, 2.0, 5.0);
+    defer input.deinit();
+    std.debug.print("input: {f}\n", .{input});
+
+    const dim_sh = comptime shape_expr.makeSymbol(.{ .name = "repeat_dim_len" });
+
+    const repeat_t = try fromArray(allocator, [3]usize{ 1, 2 }, &shape_env);
+    defer repeat_t.deinit();
+
+    const result = try input.repeatInterleave(
+        1,
+        dim_sh,
+        repeat_t,
+        &shape_env,
+    );
+    defer result.deinit();
+    std.debug.print("result: {f}\n", .{result});
 }
 
 test "shared_view" {
