@@ -123,6 +123,41 @@ pub const Tensor = struct {
     }
 };
 
+fn sliceProduct(comptime T: type, slice: []const T) T {
+    var v = @as(T, 1.0);
+    for (slice) |item| {
+        v *= item;
+    }
+    return v;
+}
+
+pub fn full(allocator: std.mem.Allocator, value: anytype, shape: []const usize) !TypeTensor(@TypeOf(value)) {
+    const T = @TypeOf(value);
+
+    const rank = shape.len;
+    if (rank >= MAX_RANK) return error.ShapeTooLarge;
+
+    var shape_i: [MAX_RANK]usize = .{0} ** MAX_RANK;
+    for (shape, 0..) |dim, i| {
+        shape_i[i] = dim;
+    }
+    const stride_i = try computeStride(shape_i, rank);
+
+    const data_count = sliceProduct(usize, shape);
+
+    const data = try allocator.alloc(T, data_count);
+    for (data) |*v| v.* = value;
+
+    return .{
+        .data = data,
+        .shape = shape_i,
+        .stride = stride_i,
+        .rank = rank,
+        .offset = 0,
+        .owned = true,
+    };
+}
+
 pub fn TypeTensor(comptime T: type) type {
     return struct {
         data: []T,
@@ -220,9 +255,53 @@ pub fn TypeRankTensor(comptime T: type, comptime N: usize) type {
             };
         }
 
-        pub fn asTensor(self: Self) Tensor {
-            const t_t = self.asTypeTensor();
-            return t_t.asTensor();
+        pub fn asStaticTensor(self: Self, comptime shape: [N]usize) !StaticTensor(T, shape) {
+            if (self.shape != shape) {
+                return error.ShapeMismatch;
+            }
+
+            return .{
+                .data = self.data,
+                .shape = shape,
+                .stride = self.stride,
+                .offset = self.offset,
+                .owned = false,
+            };
+        }
+    };
+}
+
+pub fn StaticTensor(comptime T: type, comptime shape: []const usize) type {
+    return struct {
+        const N = shape.len;
+        const S = shape;
+
+        data: []T,
+        shape: [N]usize,
+        stride: [N]usize,
+        offset: usize = 0,
+        owned: bool = false,
+
+        const Self = @This();
+
+        pub fn asTypeTensor(self: Self) TypeTensor(T) {
+            if (N > MAX_RANK) @compileError("StaticTensor rank exceeds MAX_RANK");
+
+            const shape_i = .{0} ** N;
+            const stride_i = .{0} ** N;
+            for (0..N) |i| {
+                shape_i[i] = S[i];
+                stride_i[i] = self.stride[i];
+            }
+
+            return .{
+                .data = self.data,
+                .shape = shape_i,
+                .stride = stride_i,
+                .rank = N,
+                .offset = self.offset,
+                .owned = false,
+            };
         }
     };
 }
