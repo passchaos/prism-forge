@@ -53,7 +53,7 @@ pub fn TensorView(comptime T: type) type {
                 .allocator = self.allocator,
                 .is_owned = true,
                 .shape = self.shape,
-                .stride = self.shape,
+                .stride = self.stride,
                 .data = new_data,
             };
         }
@@ -2042,7 +2042,7 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
         }
 
         pub fn shapeRef(self: *const Self) []const usize {
-            return &self.layout.shape();
+            return self.layout.shapeRef();
         }
 
         pub fn stride(self: *const Self) [N]usize {
@@ -2050,7 +2050,7 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
         }
 
         pub fn strideRef(self: *const Self) []const usize {
-            return &self.layout.stride();
+            return self.layout.strideRef();
         }
 
         pub fn s_allocator(self: *const Self) std.mem.Allocator {
