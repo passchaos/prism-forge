@@ -74,6 +74,16 @@ pub const array = struct {
         return result;
     }
 
+    pub fn sliceToArray(comptime T: type, comptime N: usize, S: []const T) [N]T {
+        if (N == 0) return [_]T{};
+
+        var result: [N]T = undefined;
+        for (S, 0..) |s, i| {
+            result[i] = s;
+        }
+        return result;
+    }
+
     pub fn getArrayNDimComp(comptime T: type) usize {
         switch (@typeInfo(T)) {
             .array => |arr| {

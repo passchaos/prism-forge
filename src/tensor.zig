@@ -689,15 +689,16 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
 
                     logits_sum.log_();
 
-                    const logits_sum_b = logits_sum.broadcastTo(SA);
+                    var logits_sum_b = logits_sum.broadcastTo(SA);
                     defer logits_sum_b.deinit();
 
-                    logits.sub_(&logits_sum_b);
+                    logits_sum_b.sub_(&logits);
+                    // logits.sub_(&logits_sum_b);
 
                     logits.mul_(other);
 
                     var loss = try logits.sumAll();
-                    loss.divScalar_(-1.0 * @as(T, @floatFromInt(batch_size)));
+                    loss.divScalar_(@as(T, @floatFromInt(batch_size)));
 
                     return loss;
                 },
@@ -1871,6 +1872,38 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
             };
         }
 
+        fn computePrefixSliceViewShape(comptime depth: usize) [N - depth]SizeExpr {
+            return utils.array.comptimeSliceToArray(SizeExpr, SA[depth..]);
+        }
+
+        pub fn prefixSliceView(
+            self: *const Self,
+            comptime depth: usize,
+            prefix: [depth]usize,
+        ) !Tensor(&computePrefixSliceViewShape(depth), T) {
+            const new_shape_expr = comptime computePrefixSliceViewShape(depth);
+
+            const new_stride = utils.array.sliceToArray(
+                usize,
+                N - depth,
+                self.strideRef()[depth..],
+            );
+
+            var base_index: [N]usize = .{0} ** N;
+            for (0..depth) |i| {
+                base_index[i] = prefix[i];
+            }
+            const base_offset = try utils.indexShapeToFlat(N, self.shape(), base_index);
+
+            return Tensor(&new_shape_expr, T){
+                ._base = self,
+                .storage = self.storage.shared(),
+                .layout = try layout_t.Layout(&new_shape_expr)
+                    .initRaw(self.layout.shape_env(), new_stride),
+                ._storage_offset = self._storage_offset + base_offset,
+            };
+        }
+
         pub fn transpose(self: *const Self) Tensor(&layout_t.computePermutedShapeExpr(SA, &.{ 1, 0 }), T) {
             return self.permute([_]usize{ 1, 0 });
         }
@@ -2059,6 +2092,20 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
 
         pub fn isContiguous(self: *const Self) bool {
             return self.layout.isContiguous();
+        }
+
+        pub fn dataEqual(self: *const Self, other: anytype) bool {
+            if (!std.mem.eql(usize, self.shapeRef(), other.shapeRef())) return false;
+
+            var s_iter = self.shapeIter();
+            while (s_iter.next()) |idx| {
+                const self_item = self.getData(idx) catch return false;
+                const other_item = other.getData(idx) catch return false;
+
+                if (self_item != other_item) return false;
+            }
+
+            return true;
         }
 
         pub fn equal(self: *const Self, other: anytype) bool {
@@ -3682,7 +3729,12 @@ test "shared_view" {
     var shape_env = try ShapeEnv.init(allocator);
     defer shape_env.deinit();
 
-    var input = try rand(allocator, &.{ SizeExpr.static(3), SizeExpr.static(5) }, &shape_env, 2.0, 5.0);
+    var input = try fromArray(allocator, [3][5]f64{
+        .{ 1.0, 2.0, 3.0, 4.0, 5.0 },
+        .{ 6.0, 7.0, 8.0, 9.0, 10.0 },
+        .{ 11.0, 12.0, 13.0, 14.0, 15.0 },
+    }, &shape_env);
+
     defer input.deinit();
     std.debug.print("input: {f}\n", .{input});
 
@@ -3690,21 +3742,49 @@ test "shared_view" {
     defer iv1.deinit();
     std.debug.print("iv1: {f}\n", .{iv1});
     try std.testing.expectEqual(iv1.shape(), [2]usize{ 3, 5 });
+    try std.testing.expect(iv1.equal(input));
 
     var iv11 = try input.sliceView(&.{ .All, .All });
     defer iv11.deinit();
     std.debug.print("iv11: {f}\n", .{iv11});
     try std.testing.expectEqual(iv11.shape(), [2]usize{ 3, 5 });
+    try std.testing.expect(iv11.equal(input));
 
     var iv2 = try input.sliceView(&.{SliceExpr.index(SizeExpr.static(1))});
     defer iv2.deinit();
     std.debug.print("iv2: {f}\n", .{iv2});
-    try std.testing.expectEqual(iv2.shape(), [1]usize{5});
+
+    {
+        try std.testing.expectEqual(iv2.shape(), [1]usize{5});
+
+        const data_slice = iv2.dataSliceRaw();
+        try std.testing.expectEqualSlices(
+            f64,
+            &[_]f64{ 6.0, 7.0, 8.0, 9.0, 10.0 },
+            data_slice,
+        );
+
+        const res = try fromArray(allocator, [5]f64{
+            6.0, 7.0, 8.0, 9.0, 10.0,
+        }, &shape_env);
+        defer res.deinit();
+        std.debug.print("res: {f}\n", .{res});
+
+        try std.testing.expect(res.dataEqual(iv2));
+    }
 
     var iv3 = try input.sliceView(&.{ .All, SliceExpr.index(SizeExpr.static(4)) });
     defer iv3.deinit();
     std.debug.print("iv3: {f}\n", .{iv3});
     try std.testing.expectEqual(iv3.shape(), [1]usize{3});
+
+    {
+        const res = try fromArray(allocator, [3]f64{ 5.0, 10.0, 15.0 }, &shape_env);
+        defer res.deinit();
+        std.debug.print("res: {f}\n", .{res});
+
+        try std.testing.expect(res.dataEqual(iv3));
+    }
 
     {
         // const iv3s = try iv3.squeeze(&.{1});
@@ -3725,12 +3805,31 @@ test "shared_view" {
     defer iv4.deinit();
     std.debug.print("iv4: {f}\n", .{iv4});
 
+    {
+        const res = try fromArray(allocator, [2][4]f64{
+            .{ 7.0, 8.0, 9.0, 10.0 },
+            .{ 12.0, 13.0, 14.0, 15.0 },
+        }, &shape_env);
+        defer res.deinit();
+        std.debug.print("res: {f}\n", .{res});
+
+        try std.testing.expect(res.dataEqual(iv4));
+    }
+
     var iv5 = try input.sliceView(&.{
         SliceExpr.range(SizeExpr.static(1), SizeExpr.static(3)),
         SliceExpr.index(SizeExpr.static(3)),
     });
     defer iv5.deinit();
     std.debug.print("iv5: {f}\n", .{iv5});
+
+    {
+        const res = try fromArray(allocator, [2]f64{ 9.0, 14.0 }, &shape_env);
+        defer res.deinit();
+        std.debug.print("res: {f}\n", .{res});
+
+        try std.testing.expect(res.dataEqual(iv5));
+    }
 
     // try std.testing.expectEqual(iv4.shape(), [2]usize{ 2, 2 });
     // try iv4.setData([2]usize{ 0, 1 }, @as(f32, 3.0));
@@ -3740,6 +3839,61 @@ test "shared_view" {
     // try std.testing.expectEqual(@as(f32, 4.0), try input.getData([2]usize{ 2, 1 }));
 
     // std.debug.print("input: {f} iv1= {f} iv2= {f} iv3= {f} iv4= {f}\n", .{ input, iv1, iv2, iv3, iv4 });
+}
+
+test "prefixSliceView" {
+    const allocator = std.testing.allocator;
+
+    var shape_env = try ShapeEnv.init(allocator);
+    defer shape_env.deinit();
+
+    const input = try fromArray(allocator, [2][3][4]f64{
+        .{
+            .{ 1.00, 1.01, 1.02, 1.03 },
+            .{ 1.10, 1.11, 1.12, 1.13 },
+            .{ 1.20, 1.21, 1.22, 1.23 },
+        },
+        .{
+            .{ 2.00, 2.01, 2.02, 2.03 },
+            .{ 2.10, 2.11, 2.12, 2.13 },
+            .{ 2.20, 2.21, 2.22, 2.23 },
+        },
+    }, &shape_env);
+    defer input.deinit();
+
+    const res1 = try input.prefixSliceView(1, [_]usize{1});
+    defer res1.deinit();
+
+    {
+        std.debug.print("res1: {f}\n", .{res1});
+        const res = try fromArray(allocator, [3][4]f64{
+            .{ 2.00, 2.01, 2.02, 2.03 },
+            .{ 2.10, 2.11, 2.12, 2.13 },
+            .{ 2.20, 2.21, 2.22, 2.23 },
+        }, &shape_env);
+        defer res.deinit();
+        try std.testing.expect(res.dataEqual(res1));
+    }
+
+    const res2 = try input.prefixSliceView(2, [_]usize{ 1, 2 });
+    defer res2.deinit();
+
+    {
+        std.debug.print("res2: {f}\n", .{res2});
+        const res = try fromArray(allocator, [4]f64{ 2.20, 2.21, 2.22, 2.23 }, &shape_env);
+        defer res.deinit();
+        try std.testing.expect(res.dataEqual(res2));
+    }
+
+    const res3 = try input.prefixSliceView(3, [_]usize{ 0, 2, 3 });
+    defer res3.deinit();
+
+    {
+        std.debug.print("res3: {f}\n", .{res3});
+
+        try std.testing.expectEqual(0, res3.ndim());
+        try std.testing.expectEqual(1.23, try res3.dataItem());
+    }
 }
 
 test "cosine similarity" {
