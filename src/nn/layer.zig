@@ -190,7 +190,7 @@ pub fn Embedding(
         allocator: std.mem.Allocator,
         w: tensor.Tensor(&.{ I_S, O_S }, T),
         dw: tensor.Tensor(&.{ I_S, O_S }, T),
-        indices: ?tensor.Tensor(&.{B_S}, usize),
+        indices: ?tensor.Tensor(&.{B_S}, usize) = null,
 
         const Self = @This();
 
@@ -198,37 +198,37 @@ pub fn Embedding(
             self: *Self,
             indices: tensor.Tensor(&.{B_S}, usize),
         ) !tensor.Tensor(&.{ B_S, O_S }, T) {
+            // std.debug.print("indices: {f}\n", .{indices});
             const out = try self.w.indexSelect(0, B_S, indices);
+
+            if (self.indices) |*prev_indices| {
+                prev_indices.deinit();
+            }
+
             self.indices = indices;
 
             return out;
         }
 
-        pub fn backward(self: *Self, dout: tensor.Tensor(&.{ B_S, I_S }, T)) !void {
-            var shape_env = try shape_expr.ShapeEnv.init(self.allocator);
-            defer shape_env.deinit();
+        pub fn backward(self: *Self, dout: *const tensor.Tensor(&.{ B_S, O_S }, T)) !void {
+            const index_len = self.indices.?.size();
 
-            const repeat_dim = shape_expr.makeSymbol(.{ .name = "repeat_dim" });
+            self.dw.map_(void{}, struct {
+                fn call(_: T, _: void) T {
+                    return @as(T, 0);
+                }
+            }.call);
 
-            const repeats = try tensor.full(
-                self.allocator,
-                &.{ B_S, I_S },
-                &shape_env,
-                dout.shape()[1],
-            );
+            for (0..index_len) |idx| {
+                const word_id = try self.indices.?.getData([_]usize{idx});
 
-            const repeated_indices = try self.indices.?.repeatInterleave(0, repeat_dim, repeats, &shape_env);
+                var dest_slice_tensor = try self.dw.prefixSliceView(1, [_]usize{word_id});
+                defer dest_slice_tensor.deinit();
+                const src_slice_tensor = try dout.prefixSliceView(1, [_]usize{idx});
+                defer src_slice_tensor.deinit();
 
-            @memcpy(self.dw.dataSliceRaw(), 0);
-
-            var dw = try tensor.zerosLike(self.allocator, self.w);
-            dw.scatter_(
-                0,
-                utils.array.comptimeSliceToArray(usize, @TypeOf(repeated_indices).S),
-                repeated_indices,
-                utils.array.comptimeSliceToArray(usize, @TypeOf(dout).S),
-                dout,
-            );
+                dest_slice_tensor.add_(&src_slice_tensor);
+            }
         }
 
         pub fn init(
@@ -242,6 +242,15 @@ pub fn Embedding(
                 .w = weight,
                 .dw = dw,
             };
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.w.deinit();
+            self.dw.deinit();
+
+            if (self.indices) |indices| {
+                indices.deinit();
+            }
         }
     };
 }

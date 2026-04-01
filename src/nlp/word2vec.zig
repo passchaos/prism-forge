@@ -17,12 +17,14 @@ pub fn SimpleCBOW(
     comptime T: type,
 ) type {
     return struct {
-        const Mat_IN = layer.Matmul(
-            batch_size,
-            &.{vocab_size},
-            hidden_size,
-            T,
-        );
+        const Embed_IN = layer.Embedding(batch_size, vocab_size, hidden_size, T);
+        // const Mat_IN = layer.Matmul(
+        //     batch_size,
+        //     &.{vocab_size},
+        //     hidden_size,
+        //     T,
+        // );
+
         const Mat_OUT = layer.Matmul(
             batch_size,
             &.{hidden_size},
@@ -37,14 +39,14 @@ pub fn SimpleCBOW(
         const Self = @This();
 
         allocator: std.mem.Allocator,
-        in_layer0: Mat_IN,
-        in_layer1: Mat_IN,
+        in_layer0: Embed_IN,
+        in_layer1: Embed_IN,
         out_layer: Mat_OUT,
         swl: SWL,
 
         pub fn gradient(
             self: *Self,
-            contexts: *const tensor.Tensor(&.{ batch_size, SizeExpr.static(2), vocab_size }, T),
+            contexts: *const tensor.Tensor(&.{ batch_size, SizeExpr.static(2) }, usize),
             target: *const tensor.Tensor(&.{ batch_size, vocab_size }, T),
         ) !optim.WeightGradView(T) {
             _ = try self.loss(contexts, target);
@@ -57,10 +59,8 @@ pub fn SimpleCBOW(
             defer dout1.deinit();
             dout1.divScalar_(2.0);
 
-            const in0_dx = try self.in_layer1.backward(&dout1);
-            defer in0_dx.deinit();
-            const in1_dx = try self.in_layer0.backward(&dout1);
-            defer in1_dx.deinit();
+            try self.in_layer1.backward(&dout1);
+            try self.in_layer0.backward(&dout1);
 
             var weights = try self.allocator.alloc(tensor.TensorView(T), 3);
             var grads = try self.allocator.alloc(tensor.TensorView(T), 3);
@@ -68,8 +68,8 @@ pub fn SimpleCBOW(
             weights[0] = try self.in_layer0.w.view();
             weights[1] = try self.in_layer1.w.view();
             weights[2] = try self.out_layer.w.view();
-            grads[0] = try self.in_layer0.dw.?.view();
-            grads[1] = try self.in_layer1.dw.?.view();
+            grads[0] = try self.in_layer0.dw.view();
+            grads[1] = try self.in_layer1.dw.view();
             grads[2] = try self.out_layer.dw.?.view();
 
             return .{
@@ -81,18 +81,20 @@ pub fn SimpleCBOW(
 
         pub fn loss(
             self: *Self,
-            contexts: *const tensor.Tensor(&.{ batch_size, SizeExpr.static(2), vocab_size }, T),
+            contexts: *const tensor.Tensor(&.{ batch_size, SizeExpr.static(2) }, usize),
             target: *const tensor.Tensor(&.{ batch_size, vocab_size }, T),
         ) !T {
-            const c0 = try contexts.sliceView(&.{ .All, .{ .Index = SizeExpr.static(0) }, .All });
-            defer c0.deinit();
-            const c1 = try contexts.sliceView(&.{ .All, .{ .Index = SizeExpr.static(1) }, .All });
-            defer c1.deinit();
+            const c0 = try contexts.sliceView(&.{ .All, .{ .Index = SizeExpr.static(0) } });
+            // defer c0.deinit();
+            const c1 = try contexts.sliceView(&.{ .All, .{ .Index = SizeExpr.static(1) } });
+            // defer c1.deinit();
 
-            var h0 = try self.in_layer0.forward(&c0);
+            // std.debug.print("contexts: {f} c0: {f}\n", .{ contexts, c0 });
+
+            var h0 = try self.in_layer0.forward(c0);
             defer h0.deinit();
 
-            const h1 = try self.in_layer1.forward(&c1);
+            const h1 = try self.in_layer1.forward(c1);
             defer h1.deinit();
 
             h0.add_(&h1);
@@ -107,25 +109,29 @@ pub fn SimpleCBOW(
 
         pub fn init(allocator: std.mem.Allocator, shape_env: *const ShapeEnv) !Self {
             // @compileLog("size: " ++ std.fmt.comptimePrint("{f}\n", .{Mat_IN.I_S_FLAT}));
-            const w_in = try tensor.randNorm(
+            var w_in = try tensor.randNorm(
                 allocator,
                 &.{ vocab_size, hidden_size },
                 shape_env,
                 @as(f32, 0.0),
                 1.0,
             );
+            w_in.mulScalar_(0.01);
 
-            const in_layer0 = try Mat_IN.initImpl(
-                shape_env,
-                .He,
-                try w_in.clone(),
-            );
+            const in_layer0 = try Embed_IN.init(allocator, try w_in.clone());
 
-            const in_layer1 = try Mat_IN.initImpl(
-                shape_env,
-                .He,
-                w_in,
-            );
+            // const in_layer0 = try Mat_IN.initImpl(
+            //     shape_env,
+            //     .He,
+            //     try w_in.clone(),
+            // );
+
+            const in_layer1 = try Embed_IN.init(allocator, w_in);
+            // const in_layer1 = try Mat_IN.initImpl(
+            //     shape_env,
+            //     .He,
+            //     w_in,
+            // );
 
             const out_layer = try Mat_OUT.init(
                 allocator,

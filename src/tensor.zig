@@ -689,16 +689,16 @@ pub fn Tensor(comptime SA: []const SizeExpr, comptime TA: type) type {
 
                     logits_sum.log_();
 
-                    var logits_sum_b = logits_sum.broadcastTo(SA);
+                    const logits_sum_b = logits_sum.broadcastTo(SA);
                     defer logits_sum_b.deinit();
 
-                    logits_sum_b.sub_(&logits);
-                    // logits.sub_(&logits_sum_b);
+                    // logits_sum_b.sub_(&logits);
+                    logits.sub_(&logits_sum_b);
 
                     logits.mul_(other);
 
                     var loss = try logits.sumAll();
-                    loss.divScalar_(@as(T, @floatFromInt(batch_size)));
+                    loss.divScalar_(-1.0 * @as(T, @floatFromInt(batch_size)));
 
                     return loss;
                 },
@@ -3885,7 +3885,7 @@ test "prefixSliceView" {
         try std.testing.expect(res.dataEqual(res2));
     }
 
-    const res3 = try input.prefixSliceView(3, [_]usize{ 0, 2, 3 });
+    var res3 = try input.prefixSliceView(3, [_]usize{ 0, 2, 3 });
     defer res3.deinit();
 
     {
@@ -3894,6 +3894,25 @@ test "prefixSliceView" {
         try std.testing.expectEqual(0, res3.ndim());
         try std.testing.expectEqual(1.23, try res3.dataItem());
     }
+
+    res3.mulScalar_(10.0);
+    std.debug.print("input: {f}\n", .{input});
+
+    const input1 = try fromArray(allocator, [2][3][4]f64{
+        .{
+            .{ 1.00, 1.01, 1.02, 1.03 },
+            .{ 1.10, 1.11, 1.12, 1.13 },
+            .{ 1.20, 1.21, 1.22, 12.3 },
+        },
+        .{
+            .{ 2.00, 2.01, 2.02, 2.03 },
+            .{ 2.10, 2.11, 2.12, 2.13 },
+            .{ 2.20, 2.21, 2.22, 2.23 },
+        },
+    }, &shape_env);
+    defer input1.deinit();
+
+    try std.testing.expect(input1.dataEqual(input));
 }
 
 test "cosine similarity" {

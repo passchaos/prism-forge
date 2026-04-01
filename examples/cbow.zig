@@ -45,7 +45,7 @@ fn cbowImpl(allocator: std.mem.Allocator, iters_num: usize) !void {
             shape_env_a: *const ShapeEnv,
             corpus_a: []const usize,
         ) !struct {
-            tensor.Tensor(&.{ batch_size_a, SizeExpr.static(2), words_len_expr_a }, f32),
+            tensor.Tensor(&.{ batch_size_a, SizeExpr.static(2) }, usize),
             tensor.Tensor(&.{ batch_size_a, words_len_expr_a }, f32),
         } {
             const count = try batch_size_a.eval(shape_env_a);
@@ -53,9 +53,10 @@ fn cbowImpl(allocator: std.mem.Allocator, iters_num: usize) !void {
             defer rand_indexes.deinit(allocator_a);
 
             var contexts_res = try tensor.zeros(allocator_a, usize, &.{ batch_size_a, SizeExpr.static(2) }, shape_env_a);
-            defer contexts_res.deinit();
+            // defer contexts_res.deinit();
             var target_res = try tensor.zeros(allocator_a, usize, &.{batch_size_a}, shape_env_a);
             defer target_res.deinit();
+
             for (rand_indexes.items, 0..) |rand_idx, i| {
                 try contexts_res.setData([_]usize{ i, 0 }, corpus_a[rand_idx - 1]);
                 try target_res.setData([_]usize{i}, corpus_a[rand_idx]);
@@ -63,7 +64,8 @@ fn cbowImpl(allocator: std.mem.Allocator, iters_num: usize) !void {
             }
 
             return .{
-                try contexts_res.oneHot(f32, words_len_expr_a),
+                contexts_res,
+                // try contexts_res.oneHot(f32, words_len_expr_a),
                 try target_res.oneHot(f32, words_len_expr_a),
             };
             // defer rand_idx
@@ -103,8 +105,8 @@ fn cbowImpl(allocator: std.mem.Allocator, iters_num: usize) !void {
         const gradient_end = std.time.milliTimestamp();
         std.debug.print("gradient time: {}\n", .{gradient_end - gradient_begin});
 
-        var opt = nn.optim.Sgd(f32).init(1);
-        // var opt = nn.optim.Adam(f32).init(0.01, 0.9, 0.999, allocator);
+        // var opt = nn.optim.Sgd(f32).init(1);
+        var opt = nn.optim.Adam(f32).init(0.01, 0.9, 0.999, allocator);
         try opt.update(grad.weights, grad.grads);
 
         // try shape_env.bind(&batch_size.Sym, preprocessed.corpus.items.len);
@@ -124,13 +126,11 @@ fn cbowImpl(allocator: std.mem.Allocator, iters_num: usize) !void {
                 try contexts_res.setData([_]usize{ idx, 1 }, corpus[idx + 1]);
             }
 
-            const full_contexts = try contexts_res.oneHot(f32, words_len_expr);
-            defer full_contexts.deinit();
             const full_target = try target_res.oneHot(f32, words_len_expr);
             defer full_target.deinit();
 
             const begin = std.time.milliTimestamp();
-            const loss_v = try sc.loss(&full_contexts, &full_target);
+            const loss_v = try sc.loss(&contexts_res, &full_target);
             const end = std.time.milliTimestamp();
 
             std.debug.print("idx: {} loss: {} compute_time: {}\n", .{ i, loss_v, end - begin });
