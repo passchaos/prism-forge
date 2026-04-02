@@ -41,12 +41,9 @@
             .hash = "zdt-0.8.2-xr0_vAxbDwCls8V4MLlamv4JHrDkziMYnySAc2bL2n3t",
         },
         .dvui = .{
-            .path = "../dvui",
+            .url = "git+https://github.com/passchaos/dvui#2447735891c4011fdc547e83af959edf2d09a290",
+            .hash = "dvui-0.4.0-dev-AQFJmfpS2wC9TU-qIqi4eZDVCQ8Uv5dEoJZ-vyXMWNzj",
         },
-        // .dvui = .{
-        //     .url = "git+https://github.com/passchaos/dvui#bb3fbd0deff80896cd63dbb14226855acfb60805",
-        //     .hash = "dvui-0.4.0-dev-AQFJmQpT2wB4XiwuxGe-9kNStzHue-hWFf1ZHSbnzqhk",
-        // },
     },
     .paths = .{
         "build.zig",
