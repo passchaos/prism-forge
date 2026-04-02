@@ -116,7 +116,7 @@ pub fn SimpleCBOW(
                 @as(f32, 0.0),
                 1.0,
             );
-            w_in.mulScalar_(0.01);
+            // w_in.mulScalar_(0.01);
 
             const in_layer0 = try Embed_IN.init(allocator, try w_in.clone());
 
